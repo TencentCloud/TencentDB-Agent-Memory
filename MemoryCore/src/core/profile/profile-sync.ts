@@ -61,6 +61,37 @@ async function statTimes(filePath: string): Promise<{ createdAtMs: number; updat
   }
 }
 
+/** Profile filenames can contain directories; a shallow snapshot would treat
+ * nested rows as deleted during sync-back. Keep enumeration shared with pull
+ * cleanup so both paths use the same complete set of relative filenames. */
+async function listSceneFilenames(dataDir: string, storage?: StorageAdapter): Promise<string[]> {
+  const filenames: string[] = [];
+  if (storage) {
+    let marker: string | undefined;
+    do {
+      const page = await storage.readdirPage(StoragePaths.sceneBlocksDir, {
+        recursive: true, suffix: ".md", maxKeys: 1000, marker,
+      });
+      for (const entry of page.entries) {
+        if (!entry.isDirectory) filenames.push(entry.key.slice(StoragePaths.sceneBlocksDir.length));
+      }
+      marker = page.nextMarker;
+    } while (marker);
+  } else {
+    const blocksDir = path.join(dataDir, StoragePaths.sceneBlocksDir);
+    async function walk(relativeDir: string): Promise<void> {
+      const entries = await fs.readdir(path.join(blocksDir, relativeDir), { withFileTypes: true });
+      for (const entry of entries) {
+        const relative = `${relativeDir}${entry.name}`;
+        if (entry.isDirectory()) await walk(`${relative}/`);
+        else if (entry.isFile() && entry.name.endsWith(".md")) filenames.push(relative);
+      }
+    }
+    await walk("");
+  }
+  return filenames.sort();
+}
+
 async function refreshPersonaNavigation(dataDir: string, storage?: StorageAdapter): Promise<void> {
   // Read persona body
   let body: string;
@@ -100,7 +131,7 @@ export async function listLocalProfiles(
   // ── List L2 scene blocks ──
   if (storage) {
     try {
-      const files = (await storage.readdirNames(StoragePaths.sceneBlocksDir, ".md")).sort();
+      const files = await listSceneFilenames(dataDir, storage);
       for (const filename of files) {
         const content = await storage.readFile(`${StoragePaths.sceneBlocksDir}${filename}`);
         if (content === null) continue;
@@ -129,7 +160,7 @@ export async function listLocalProfiles(
   } else {
     const blocksDir = path.join(dataDir, "scene_blocks");
     try {
-      const files = (await fs.readdir(blocksDir)).filter((file) => file.endsWith(".md")).sort();
+      const files = await listSceneFilenames(dataDir);
       for (const filename of files) {
         const filePath = path.join(blocksDir, filename);
         const content = await fs.readFile(filePath, "utf-8");
@@ -292,7 +323,7 @@ export async function pullProfilesToLocal(
 
     // Delete L2 files that no longer exist remotely
     try {
-      const localFiles = await storage.readdirNames(StoragePaths.sceneBlocksDir, ".md");
+      const localFiles = await listSceneFilenames(dataDir, storage);
       for (const filename of localFiles) {
         if (!remoteL2Files.has(filename)) {
           await storage.unlink(`${StoragePaths.sceneBlocksDir}${filename}`);
@@ -335,6 +366,7 @@ export async function pullProfilesToLocal(
 
       if (record.type === "l2") {
         const target = path.join(tempBlocksDir, record.filename);
+        await fs.mkdir(path.dirname(target), { recursive: true });
         if (md5(record.content) !== record.contentMd5) {
           logger.debug?.(`[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (skip write, keep local)`);
           // Carry forward the existing local copy so the upcoming rename

@@ -76,6 +76,13 @@ export class SerialQueue {
       entry.reject(new Error("Queue cleared"));
     }
     this.queue = [];
+    if (!this.running) this.resolveIdleWaiters();
+  }
+
+  private resolveIdleWaiters(): void {
+    const resolvers = this.idleResolvers;
+    this.idleResolvers = [];
+    for (const resolve of resolvers) resolve();
   }
 
   private drain(): void {
@@ -84,16 +91,21 @@ export class SerialQueue {
     const entry = this.queue.shift()!;
     this.running = true;
 
-    entry
-      .task()
+    // A task may throw before returning its promise. It must release the queue
+    // through the same completion path as an asynchronous rejection.
+    let result: Promise<unknown>;
+    try {
+      result = entry.task();
+    } catch (error) {
+      result = Promise.reject(error);
+    }
+    result
       .then((result) => entry.resolve(result))
       .catch((err) => entry.reject(err))
       .finally(() => {
         this.running = false;
         if (this.queue.length === 0) {
-          const resolvers = this.idleResolvers;
-          this.idleResolvers = [];
-          for (const resolve of resolvers) resolve();
+          this.resolveIdleWaiters();
         } else {
           this.drain();
         }

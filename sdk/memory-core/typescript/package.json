@@ -21,6 +21,7 @@
     "prepack": "npm run clean && npm run build",
     "prepublishOnly": "npm run clean && npm run build",
     "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "test:watch": "vitest"
   },
   "files": ["dist/", "src/", "README.md"],
