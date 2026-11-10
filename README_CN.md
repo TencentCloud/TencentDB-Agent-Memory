@@ -296,8 +296,6 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
   - [Memory Panel API](./MemoryPanel/panel-api-doc.md)
 - [贡献指南](./CONTRIBUTING_CN.md)
 
-Agent Memory 还没有标准答案。Bug、文档、Benchmark、新框架适配，或者一个你觉得更好玩的 Memory Hub 用法，都欢迎。
-
 ---
 ## Roadmap
 
