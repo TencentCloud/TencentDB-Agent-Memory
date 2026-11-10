@@ -224,6 +224,8 @@ export class TdaiCore {
    * of currently-running background tasks.
    */
   private readonly bgTasks = new Set<Promise<void>>();
+  /** Epoch ms when this core was constructed — the actual cold-start time. */
+  private readonly processStartedAt = Date.now();
 
   constructor(opts: TdaiCoreOptions) {
     this.hostAdapter = opts.hostAdapter;
@@ -436,7 +438,7 @@ export class TdaiCore {
       scheduler: this.scheduler,
       originalUserText: turn.userText,
       originalUserMessageCount: turn.originalUserMessageCount,
-      pluginStartTimestamp: turn.startedAt ?? Date.now(),
+      pluginStartTimestamp: turn.startedAt ?? this.processStartedAt,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
       bgTaskRegistry: this.bgTasks,
