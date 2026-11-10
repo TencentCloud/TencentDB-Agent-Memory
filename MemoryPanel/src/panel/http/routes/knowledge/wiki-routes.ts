@@ -18,8 +18,10 @@ import { loadPanelConfig } from '../../../config/panel-config.js';
 import type {
   WikiRawWriteFile,
   WikiFileFormat,
+  WikiSourceImportResult,
 } from '../../../kernel/ports/knowledge-client-port.js';
 import { respondEnvelope } from '../../envelope.js';
+import { assessWikiSourceImport } from './wiki-import-outcome.js';
 import {
   buildCtx,
   readJson,
@@ -415,6 +417,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
 
     const startedAt = Date.now();
     let rawPersisted = false;
+    let importResult: WikiSourceImportResult | undefined;
     let writeMs = 0;
     let yieldMs = 0;
 
@@ -455,7 +458,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           : undefined;
 
         const w0 = Date.now();
-        await kc.wikiSourceImport({
+        importResult = await kc.wikiSourceImport({
           wikiId,
           sourceUrl,
           providerId,
@@ -463,7 +466,11 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           actor: { teamId, userId: gate.userId },
         });
         writeMs = Date.now() - w0;
-        rawPersisted = true;
+        const assessment = assessWikiSourceImport(importResult);
+        if (!assessment.shouldIngest) {
+          throw new Error(assessment.errorMessage);
+        }
+        rawPersisted = assessment.rawPersisted;
       }
 
       // ② 触发 ingest：onBusy='replace' 让 KS 原子完成"取消旧任务 + 排队新任务"
@@ -490,6 +497,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           ingest_task_id: task.wiki_id,
           status: task.status,
           queued: task.queued === true,
+          ...(importResult ? { import_result: importResult } : {}),
         }),
       );
     } catch (err) {
