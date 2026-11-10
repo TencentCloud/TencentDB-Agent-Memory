@@ -228,7 +228,9 @@ export class VectorStore implements IMemoryStore {
   private readonly logger?: Logger;
 
   /** @see IMemoryStore.supportsDeferredEmbedding */
-  readonly supportsDeferredEmbedding = true;
+  get supportsDeferredEmbedding(): boolean {
+    return this.vecTablesReady;
+  }
 
   /**
    * When `true`, the store is in a degraded state (e.g. sqlite-vec failed to
@@ -1048,8 +1050,26 @@ export class VectorStore implements IMemoryStore {
       });
     }
 
-    // Mark vec0 tables as ready only when they were actually created
-    this.vecTablesReady = this.dimensions > 0;
+    // Mark vec0 tables as ready only when they are structurally safe to use.
+    // Orphaned shadow-table chunks can make every later vector insert fail
+    // while metadata/FTS writes continue, so keep the capability signal explicit
+    // and preserve FTS-only operation instead of repeatedly failing writes.
+    const vecIntegrityIssues = this.dimensions > 0
+      ? ["l0_vec", "l1_vec"]
+          .map((table) => this.checkVecShadowIntegrity(table))
+          .filter((issue): issue is string => !!issue)
+      : [];
+    if (vecIntegrityIssues.length > 0) {
+      this.vecTablesReady = false;
+      for (const issue of vecIntegrityIssues) {
+        this.logger?.error(
+          `${TAG} vec0 shadow-table integrity issue; vector search/writes disabled, FTS retained: ` +
+          `${issue}. Back up the database and rebuild the affected vector tables before re-embedding.`,
+        );
+      }
+    } else {
+      this.vecTablesReady = this.dimensions > 0;
+    }
     // L1 query statements (for l1-reader)
     // user_id / agent_id surfaced in every L1 read so callers (router /
     // candidate-pool / l1-reader) can enforce isolation downstream.
@@ -1123,6 +1143,58 @@ export class VectorStore implements IMemoryStore {
     this.db.prepare(
       "INSERT INTO embedding_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
     ).run("embedding_provider_info", JSON.stringify(meta));
+  }
+
+  /**
+   * Cheap structural check for vec0's chunk lifecycle.
+   *
+   * A healthy vec0 table has one vector/blob row and one metadata row for each
+   * `*_chunks.chunk_id`. Row-set drift is the deterministic signature of the
+   * corruption class that prevents all future chunk creation.
+   */
+  private checkVecShadowIntegrity(table: "l0_vec" | "l1_vec"): string | null {
+    try {
+      const count = (shadowTable: string, predicate: string): number => {
+        const row = this.db
+          .prepare(`SELECT COUNT(*) AS count FROM "${shadowTable}" row WHERE ${predicate}`)
+          .get() as { count?: number | bigint } | undefined;
+        return Number(row?.count ?? 0);
+      };
+
+      const orphanVectorChunks = count(
+        `${table}_vector_chunks00`,
+        `NOT EXISTS (SELECT 1 FROM "${table}_chunks" c WHERE c.chunk_id = row.rowid)`,
+      );
+      const orphanMetadataChunks = count(
+        `${table}_metadatachunks00`,
+        `NOT EXISTS (SELECT 1 FROM "${table}_chunks" c WHERE c.chunk_id = row.rowid)`,
+      );
+      const missingVectorChunks = count(
+        `${table}_chunks`,
+        `NOT EXISTS (SELECT 1 FROM "${table}_vector_chunks00" v WHERE v.rowid = row.chunk_id)`,
+      );
+      const missingMetadataChunks = count(
+        `${table}_chunks`,
+        `NOT EXISTS (SELECT 1 FROM "${table}_metadatachunks00" m WHERE m.rowid = row.chunk_id)`,
+      );
+
+      if (
+        orphanVectorChunks === 0 &&
+        orphanMetadataChunks === 0 &&
+        missingVectorChunks === 0 &&
+        missingMetadataChunks === 0
+      ) {
+        return null;
+      }
+      return (
+        `${table}: orphanVectorChunks=${orphanVectorChunks}, ` +
+        `orphanMetadataChunks=${orphanMetadataChunks}, ` +
+        `missingVectorChunks=${missingVectorChunks}, ` +
+        `missingMetadataChunks=${missingMetadataChunks}`
+      );
+    } catch (err) {
+      return `${table}: integrity probe failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   /** Allowed table names for row counting (whitelist to prevent SQL injection). */
