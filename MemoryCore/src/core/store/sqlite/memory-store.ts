@@ -657,6 +657,14 @@ export class VectorStore implements IMemoryStore {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_agent_session ON l0_conversations(user_id, agent_id, session_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_recorded  ON l0_conversations(user_id, recorded_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_agent_recorded ON l0_conversations(agent_id, recorded_at)");
+    // Pagination driver: equality prefix (user_id, agent_id) + timestamp ordered.
+    // queryL0Paginated's session filter is (session_key = ? OR session_id = ?),
+    // which cannot drive ordered access on its own; without this index the
+    // planner picks an equality scan and rebuilds a TEMP B-TREE for every
+    // ORDER BY timestamp DESC LIMIT/OFFSET. Measured on a 3.2k-row standalone
+    // DB: paginated fetch + count 21.5ms → 5.9ms, deep page (offset=3000)
+    // 40.6ms → 5.5ms.
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_agent_ts ON l0_conversations(user_id, agent_id, timestamp DESC)");
 
     // L0 vector virtual table (cosine distance, same dimensions as L1) — deferred when dimensions=0
     if (this.dimensions > 0) {
