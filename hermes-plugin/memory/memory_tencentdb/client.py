@@ -6,15 +6,46 @@ Thread-safe — can be shared across prefetch/sync threads.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
+import os
 import urllib.request
 import urllib.error
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10  # seconds
+
+# Default: warn when the API key has not been rotated in 90 days.
+_KEY_ROTATION_WARN_DAYS = 90
+_KEY_ROTATION_ENV_VAR = "MEMORY_TENCENTDB_GATEWAY_API_KEY_LAST_ROTATED"
+
+
+def _resolve_key_age_days() -> Tuple[Optional[int], Optional[str]]:
+    """Read the optional key-rotation timestamp from the environment.
+
+    Returns (age_in_days, rotated_on) where rotated_on is the raw env value.
+    Returns (None, None) when the env var is unset or unparseable.
+    """
+    raw = os.environ.get(_KEY_ROTATION_ENV_VAR)
+    if not raw or not raw.strip():
+        return None, None
+    cleaned = raw.strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.datetime.strptime(cleaned, fmt)
+            age = (datetime.datetime.now() - parsed).days
+            return age, cleaned
+        except ValueError:
+            continue
+    logger.warning(
+        "%s=%s could not be parsed as a date. Expected ISO formats: "
+        "YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, YYYY-MM-DDTHH:MM:SSZ.",
+        _KEY_ROTATION_ENV_VAR, cleaned,
+    )
+    return None, None
 
 
 class MemoryTencentdbSdkClient:
@@ -194,3 +225,24 @@ class MemoryTencentdbSdkClient:
         if config_override:
             body["config_override"] = config_override
         return self._post("/seed", body, timeout=timeout)
+
+    def get_auth_status(self) -> Dict[str, Any]:
+        """Return the current client auth configuration status.
+
+        Reports whether auth is enabled (Bearer token configured), the
+        configured key prefix (for audit — never the full key), and the
+        key age in days if a rotation timestamp is set.
+
+        Safe to call at any time — no network I/O, no side effects.
+        """
+        key_prefix = (self._api_key[:8] + "...") if self._api_key else None
+        key_age_days, rotated_on = _resolve_key_age_days()
+        stale = (key_age_days is not None and key_age_days > _KEY_ROTATION_WARN_DAYS)
+        return {
+            "auth_enabled": self._api_key is not None,
+            "key_prefix": key_prefix,
+            "key_age_days": key_age_days,
+            "key_rotated_on": rotated_on,
+            "key_stale": stale,
+            "stale_warn_days": _KEY_ROTATION_WARN_DAYS if stale else None,
+        }
