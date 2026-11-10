@@ -765,16 +765,16 @@ export default function register(api: OpenClawPluginApi) {
   }
 
   // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  // the session JSONL by default. Users can retain it to inspect what was
+  // recalled; L0 capture still sanitizes injected context independently.
+  api.logger.debug?.(`${TAG} Registering before_message_write hook (recall.showInjected=${cfg.recall.showInjected})`);
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
     api.logger.debug?.(`${TAG} [before_message_write] role=${msg.role}, contentType=${contentType}`);
 
     if (msg.role !== "user") return;
+    if (cfg.recall.showInjected) return;
 
     // UserMessage.content: string | (TextContent | ImageContent)[]
     const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
