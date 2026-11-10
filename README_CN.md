@@ -7,6 +7,7 @@
 
 <a href="https://trendshift.io/repositories/29310?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-29310" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/29310" alt="TencentCloud%2FTencentDB-Agent-Memory | Trendshift" width="250" height="55"/></a>
 
+[![npm](https://img.shields.io/npm/v/@tencentdb-agent-memory/memory-tencentdb?color=blue)](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-tencentdb)
 [![GitHub Release](https://img.shields.io/github/v/release/TencentCloud/TencentDB-Agent-Memory?label=release)](https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
@@ -43,6 +44,8 @@ $EDITOR .env       # 填入两组 LLM 参数（memory 组 + proxy 组）
 
 完整安装文档（Memory Hub 单独部署 / Proxy + Claude Code / CodeBuddy 用法 / 停止清理 / 端口
 说明等）见 [**INSTALL_CN.md**](./INSTALL_CN.md)（English: [INSTALL.md](./INSTALL.md)）。
+MongoDB 存储后端为**试验特性**（默认关闭），见
+[INSTALL_CN.md · MongoDB 存储后端](./INSTALL_CN.md#可选能力mongodb-存储后端试验特性默认关闭)。
 
 ### 从旧版本迁移数据
 
@@ -118,7 +121,7 @@ OpenCode 提供[现成的适配配置](./adapters/opencode/README.md)，Pi 需�
 
 - Agent 做完复杂工作后，可以从对话和工具调用中提炼和管理可复用 Skill。并在需要时导入到指定Agent的上下文。 Skill 支持在面板中编辑和导出。
 - Skill 不只是一段 Prompt：它有版本、资源文件、触发边界、执行步骤和验证规则。
-- 个人 Skill 默认私有；审核后可分享给团队，再配装给其他 Agent。
+- 个人 Skill 默认私有；可分享给团队，再配装给其他 Agent。
 
 <img width="" src="assets/images/skill.cn.png" alt="image.png" />
 
@@ -155,11 +158,11 @@ OpenCode 提供[现成的适配配置](./adapters/opencode/README.md)，Pi 需�
 
 管理员可以配置团队默认 Agent 模板，让新成员沿用团队的工作方式。
 
-具体来说，这些已有资产可以直接在面板导入和自动被处理：
+具体来说，可以在面板中导入代码库和文档，也可以通过客户端导入脚本导入历史会话：
 
 - **代码库**：导入公开仓库或已配置凭据的私有仓库，**CodeGraph** 自动索引符号、文件、调用关系与影响路径。
 - **文档与文件**：导入相关文档和文件（也可从已配置的外部来源导入），**Wiki** 自动生成结构化页面与链接图谱。
-- **对话 Session**：从[支持的客户端](./agents/README.md#本地资产导入)导入过去和 Agent 的对话 Session，**Skill 与 Chat Memory** 自动提取可复用 Skill 与记忆资产。
+- **对话 Session**：通过[本地资产导入脚本](./agents/README.md#本地资产导入)导入受支持客户端的历史会话，默认触发 **Skill 和 Chat Memory** 提取，也可以只触发其中一种。
 
 > 不再重新训练每一个 Agent。给它读档。
 
@@ -277,7 +280,7 @@ Chat Memory、Skill、Wiki 和 CodeGraph 都被统一登记为 Memory Asset。Me
 
 ### 3. 知识不整库注入，而是按需调用
 
-文档被整理为可搜索、可沿链接下钻的 Wiki；代码库被索引为包含文件、符号和调用关系的 CodeGraph。Agent 按需调用已获授权的知识工具，读取相关页面、源码或影响路径。Knowledge 服务提供 `/v3/tools/list` 和 `/v3/tools/call` 供集成使用。
+文档被整理为可搜索、可沿链接下钻的 Wiki；代码库被索引为包含文件、符号和调用关系的 CodeGraph。Agent 先通过 `/v3/tools/list` 发现能力，再用 `/v3/tools/call` 读取相关页面、源码或影响路径。
 
 这让文档和代码也成为记忆，但它们平时只是可用的工具，只有真正需要时才进入上下文。
 
@@ -292,8 +295,8 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 ## 注意事项
 
 - Wiki 和 CodeGraph 异步构建，需要等待一定时间处理才能 `ready`。
-- CodeGraph 支持公开 HTTPS 仓库和配置了团队凭据的私有仓库。使用 SSH 拉取私有仓库时，先在面板获取公钥，并在代码托管平台配置访问权限。
-- Memory Hub 支持手动装配资产。Proxy 的 Skill 按需选择功能默认关闭，启用后可按当前对话选择要加载的 Skill。
+- CodeGraph 支持公开 HTTPS 仓库和已配置凭据的私有仓库。使用 SSH 拉取私有仓库时，先在面板获取公钥，并在代码托管平台配置访问权限。
+- Memory Hub 支持手动装配资产。Proxy 的 Skill 按需选择功能默认关闭；启用并配置好策略后，Proxy 每轮最多选择一个相关 Skill 加载。
 
 ## 相关文档
 
