@@ -351,11 +351,13 @@ function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number
       `possible clock skew or invalid retentionDays=${retentionDays}`,
     );
   }
-  // Sanity check: gap between now and cutoff must be at least 24h
-  const MIN_GAP_MS = 24 * 60 * 60 * 1000;
+  // Sanity check: the cutoff must be at least (retentionDays - 1) days in the past.
+  // retentionDays=1 keeps only today's shard, so the cutoff is today 00:00 and the
+  // elapsed part of the day is legitimately shorter than 24h — not clock skew.
+  const MIN_GAP_MS = (retentionDays - 1) * 24 * 60 * 60 * 1000;
   if (nowMs - cutoffMs < MIN_GAP_MS) {
     throw new Error(
-      `cutoff sanity failed: gap ${nowMs - cutoffMs}ms < 24h, ` +
+      `cutoff sanity failed: gap ${nowMs - cutoffMs}ms < ${MIN_GAP_MS}ms, ` +
       `retentionDays=${retentionDays}, possible clock skew`,
     );
   }
