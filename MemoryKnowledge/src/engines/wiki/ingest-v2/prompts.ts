@@ -79,10 +79,10 @@ export function buildAnalysisPrompt(args: {
   existingPages: ExistingPageInfo[];
 }): string {
   const { sourceName, sourceText, existingPages } = args;
-  return `## Source to analyze: ${sourceName}
-
-## Existing wiki pages (for deciding what to update vs. create)
+  return `## Existing wiki pages (for deciding what to update vs. create)
 ${formatExistingPages(existingPages)}
+
+## Source to analyze: ${sourceName}
 
 ## Source Document
 ${sourceText}
@@ -161,12 +161,7 @@ export function buildGeneratePrompt(args: {
 }): string {
   const { sourceName, sourceText, existingPages, pagesToUpdate } = args;
 
-  const existingList =
-    existingPages.length > 0
-      ? existingPages
-          .map((p) => `- [${p.type}] ${p.relPath}${p.title ? ` — ${p.title}` : ""}${p.description ? `（${p.description}）` : ""}`)
-          .join("\n")
-      : "(wiki is empty — this is the first source)";
+  const existingList = formatExistingPages(existingPages);
 
   const updateSection =
     pagesToUpdate && pagesToUpdate.length > 0
@@ -176,11 +171,11 @@ export function buildGeneratePrompt(args: {
           .join("\n\n")
       : "";
 
-  return `## Source to ingest: ${sourceName}
-
-## Existing wiki pages (for deciding what to create vs. update, to avoid duplicates)
+  return `## Existing wiki pages (for deciding what to create vs. update, to avoid duplicates)
 ${existingList}
 ${updateSection}
+
+## Source to ingest: ${sourceName}
 
 ## Source Document
 ${sourceText}
@@ -207,13 +202,13 @@ export function buildGenerateFromAnalysisPrompt(args: {
   existingPages: ExistingPageInfo[];
 }): string {
   const { sourceName, sourceText, analysis, existingPages } = args;
-  return `## Source to ingest: ${sourceName}
+  return `## Existing wiki pages (reuse paths for merging — avoid duplicates)
+${formatExistingPages(existingPages)}
+
+## Source to ingest: ${sourceName}
 
 ## Extraction Plan (from analysis stage — generate pages based on this)
 ${analysis}
-
-## Existing wiki pages (reuse paths for merging — avoid duplicates)
-${formatExistingPages(existingPages)}
 
 ## Source Document (for detail verification)
 ${sourceText}
