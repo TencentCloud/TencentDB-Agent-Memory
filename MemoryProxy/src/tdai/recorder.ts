@@ -1,6 +1,12 @@
 import type { TdaiClient } from "./client.js";
 import type { TdaiIdentity, TdaiMessage } from "./types.js";
 import { extractUserQueryText } from "../common/user-query-extractor.js";
+import {
+  collectToolCalls,
+  formAnswerFromToolMessage,
+  formAnswerFromToolResultBlocks,
+  type ToolCallMeta,
+} from "../common/form-answer-extractor.js";
 
 /**
  * 从最后一条 user 消息中抽取「真正的用户提问」，写入 L0。
@@ -13,18 +19,44 @@ import { extractUserQueryText } from "../common/user-query-extractor.js";
  * 抽取算法在 `common/user-query-extractor.ts` 内实现（tdai / mem-command /
  * codebuddy adapter 共用同一份，避免语义漂移）；本模块只负责"取最后一条
  * user message → 抽 query 文本 → 组装 TdaiMessage"这几步。
+ *
+ * 待选表单（`ask_user_question`）的答案**不在 role=user 上**：它随 tool 结果
+ * 回流（OpenAI `role:"tool"` / Anthropic `user.tool_result`）。只扫 user 角色
+ * 会让整轮变成"用表单之前那句提问 + 表单之后的回答"，用户实际选了什么、
+ * 手填了什么都不进 L0。这里把表单答案也当作一次人类输入，取**由近及远
+ * 第一条**人类输入（真 user 文本或表单答案），见 `common/form-answer-extractor.ts`。
+ * session-init（proxy 自己伪造的选 Team/Agent/Task 表单）不参与抽取。
  */
 
 // 保留 re-export，避免下游（含单测）import 路径变化引发一次性大改。
 export { extractUserQueryText };
 
 export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | null {
+  // 只在真的遇到 tool 消息时才扫历史，绝大多数轮次不需要
+  let toolCalls: Map<string, ToolCallMeta> | null = null;
+
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i] as Record<string, unknown>;
-    if (msg?.role !== "user") continue;
-    // 只取真实 user_query，避免把 harness 上下文写进 L0
-    const content = extractUserQueryText(extractContentText(msg.content));
-    if (content.trim()) return { role: "user", content };
+    if (!msg) continue;
+
+    if (msg.role === "user") {
+      // 只取真实 user_query，避免把 harness 上下文写进 L0
+      const content = extractUserQueryText(extractContentText(msg.content));
+      if (content.trim()) return { role: "user", content };
+
+      // Anthropic 把 tool_result 塞在 user 角色里；body 文本为空说明这条
+      // user 消息只是工具回流，再看里面有没有表单答案
+      toolCalls ??= collectToolCalls(messages);
+      const fromToolResult = formAnswerFromToolResultBlocks(msg.content, toolCalls);
+      if (fromToolResult) return { role: "user", content: fromToolResult };
+      continue;
+    }
+
+    if (msg.role === "tool") {
+      toolCalls ??= collectToolCalls(messages);
+      const fromForm = formAnswerFromToolMessage(msg, toolCalls);
+      if (fromForm) return { role: "user", content: fromForm };
+    }
   }
   return null;
 }
