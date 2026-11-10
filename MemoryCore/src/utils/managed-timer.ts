@@ -13,6 +13,8 @@
  */
 
 type TimerHandle = ReturnType<typeof setTimeout>;
+// Node clamps larger delays to 1 ms rather than waiting for the requested time.
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 export class ManagedTimer {
   private handle: TimerHandle | null = null;
@@ -37,10 +39,7 @@ export class ManagedTimer {
     this.cancelInternal();
     this.callback = callback;
     this.scheduledAt = Date.now() + delayMs;
-    this.handle = setTimeout(() => this.fire(), delayMs);
-    // Don't let pipeline timers keep the process alive in CLI mode.
-    // In gateway mode the server listener holds the event loop anyway.
-    this.handle.unref();
+    this.arm();
   }
 
   /**
@@ -51,9 +50,7 @@ export class ManagedTimer {
     this.cancelInternal();
     this.callback = callback;
     this.scheduledAt = epochMs;
-    const delay = Math.max(0, epochMs - Date.now());
-    this.handle = setTimeout(() => this.fire(), delay);
-    this.handle.unref();
+    this.arm();
   }
 
   /**
@@ -116,6 +113,19 @@ export class ManagedTimer {
   }
 
   // ── Internals ────────────────────────────────────────
+
+  private arm(): void {
+    const delay = Math.min(MAX_TIMEOUT_MS, Math.max(0, this.scheduledAt - Date.now()));
+    this.handle = setTimeout(() => {
+      if (Date.now() < this.scheduledAt) {
+        this.arm();
+      } else {
+        this.fire();
+      }
+    }, delay);
+    // Keep long deadline chunks unref'ed, like ordinary pipeline timers.
+    this.handle.unref();
+  }
 
   private fire(): void {
     const cb = this.callback;
