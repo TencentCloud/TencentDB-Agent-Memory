@@ -9,15 +9,17 @@
  * 判定信号：agentSource + body.tools[]。**每次请求实时算**，不缓存，
  * 所以同一 sessionKey 下次带上 ask 工具会自动切回卡片模式。
  *
- * Scope（当前迭代）：只判定 workbuddy 有没有 `AskUserQuestion` 工具。
- * 其他客户端一律 `askUserQuestion: true`（走原逻辑），避免误伤 dsh / codebuddy /
- * claude-code / codex / opencode / hermes / openclaw 的既有分支。
+ * Scope（当前迭代）：判定 workbuddy 有没有 `AskUserQuestion` 工具，以及 dsh 当前
+ * 请求能否承载交互表单。`memoryPipeline` 与表单能力独立：PTC / headless 请求可以
+ * 不渲染表单，但仍应使用已恢复的会话身份做注入、L0 和 skill 提取。
  */
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 /** WorkBuddy 侧用来弹卡片表单的工具名。跟 workbuddy/form.ts 里的 TOOL_NAME 保持一致。 */
 export const WB_ASK_TOOL_NAME = "AskUserQuestion";
+/** dsh 侧交互表单工具；PTC 模式下通常只暴露 `run_code`。 */
+export const DSH_ASK_TOOL_NAME = "ask_user_question";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -32,6 +34,11 @@ export interface ClientCapabilities {
    * 其他客户端一律 true（保持既有行为）。
    */
   askUserQuestion: boolean;
+  /**
+   * 是否允许执行记忆流水线。交互表单能力不影响该域能力；无已恢复会话身份时，
+   * 下游仍会因缺少 sessionInfo 而安全跳过。
+   */
+  memoryPipeline: boolean;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -69,16 +76,26 @@ export function detectClientCapabilities(
   agentSource: string,
   body: unknown,
 ): ClientCapabilities {
-  // 仅对 workbuddy 做能力判定；其他客户端一律走原路径。
+  const tools = (body as { tools?: unknown } | null | undefined)?.tools;
+
+  if (agentSource === "dsh") {
+    const hasTools = Array.isArray(tools) && tools.length > 0;
+    return {
+      // tools 为空表示纯对话请求，保持原有"允许表单"语义。
+      askUserQuestion: !hasTools || toolsContain(tools, DSH_ASK_TOOL_NAME),
+      memoryPipeline: true,
+    };
+  }
+
+  // 其他非 workbuddy 客户端保持原有能力语义。
   if (agentSource !== "workbuddy") {
-    return { askUserQuestion: true };
+    return { askUserQuestion: true, memoryPipeline: true };
   }
 
   // workbuddy：检查 body.tools[] 是否含 AskUserQuestion。
   // - tools 非数组 / 空数组 / 缺失 → 视为**无能力**（新版 WB 就是这个形态）
   //   这样处理更保守：宁可走文字模式（体验较差但能走通），
   //   也不要走卡片模式（客户端不识别 tool → 卡死）。
-  const tools = (body as { tools?: unknown } | null | undefined)?.tools;
   const hasAskTool = toolsContain(tools, WB_ASK_TOOL_NAME);
-  return { askUserQuestion: hasAskTool };
+  return { askUserQuestion: hasAskTool, memoryPipeline: true };
 }
