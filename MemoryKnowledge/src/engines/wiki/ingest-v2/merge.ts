@@ -146,10 +146,11 @@ Output the merged complete page.`;
 
   const out = await llm.chat({ system: MERGE_SYSTEM, prompt, label: "merge-rewrite" });
 
-  // 兜底：若 LLM 返回空或无 frontmatter，退回候选页，避免丢页。
+  // A candidate contains only the new facts. Reject invalid rewrites so the
+  // commit layer preserves the existing page and records the merge failure.
   const mergedParsed = parseFrontmatter(out);
-  if (!out.trim() || !mergedParsed.hasFrontmatter) {
-    return reconcileSources(existingContent, candidateContent, candidateContent);
+  if (!mergedParsed.hasFrontmatter || !mergedParsed.body.trim()) {
+    throw new Error("Wiki page merge returned an empty or invalid page");
   }
   return reconcileSources(existingContent, candidateContent, out);
 }
