@@ -39,7 +39,7 @@ export class MemoryGenerationLogClient {
   }
 
   get(params: MemoryGenerationLogGetRequest): Promise<MemoryGenerationLog> {
-    if ("log_id" in params) {
+    if (params.log_id !== undefined) {
       if (!params.log_id?.trim()) throw new ParamError("log_id must be a non-empty string");
     } else if (!params.memory_id?.trim()) {
       throw new ParamError("memory_id must be a non-empty string");
