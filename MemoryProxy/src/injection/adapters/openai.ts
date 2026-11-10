@@ -18,6 +18,17 @@ import type {
   MessageRole,
 } from "../types.js";
 
+function parseOriginalPart(content: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class OpenAIAdapter implements ProtocolAdapter {
   readonly protocol = "openai" as const;
 
@@ -234,6 +245,14 @@ export class OpenAIAdapter implements ProtocolAdapter {
             image_url: { url: block.content, detail: block.metadata?.detail },
           });
           break;
+        case "custom": {
+          // Content parts this adapter does not model (input_audio, file, video_url, ...)
+          // were stored verbatim as JSON in parseContentPart; restore the original part
+          // instead of emitting a non-OpenAI `custom` part that upstreams reject.
+          const original = parseOriginalPart(block.content);
+          parts.push(original ?? { type: block.type, content: block.content, ...block.metadata });
+          break;
+        }
         default:
           parts.push({ type: block.type, content: block.content, ...block.metadata });
           break;
