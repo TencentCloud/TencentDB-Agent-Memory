@@ -2,12 +2,12 @@
  * @tencentdb-agent-memory/pi-tdai-client — Pi coding-agent extension.
  *
  * Routes Pi through the TDAI Memory Proxy. Config is env-only (Pi's
- * ExtensionAPI has no plugin config object). The extension carries only
- * routing + the dynamic per-session x-conversation-id header; all memory
- * capability (L3/L2 injection, L0 capture, L0/L1/L2 search via curl
- * recipes) arrives server-side from the proxy. (Scope C.)
+ * ExtensionAPI has no plugin config object). The extension supplies routing,
+ * the current session header and native read tools. The proxy still owns
+ * identity/scoping, L3/L2 injection and L0 capture.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerMemoryTools } from "./memory-tools.js";
 
 export default function (pi: ExtensionAPI) {
   const proxyBase = process.env.TDAI_PROXY_URL ?? "http://127.0.0.1:8096";
@@ -41,6 +41,8 @@ export default function (pi: ExtensionAPI) {
     );
     return;
   }
+
+  registerMemoryTools(pi, { proxyUrl: proxyBase, userKey, spaceId, agentSource });
 
   // Only send x-task-id when explicitly set; an absent/stale task makes the
   // proxy register with broad recall (no task filter) instead of failing.
