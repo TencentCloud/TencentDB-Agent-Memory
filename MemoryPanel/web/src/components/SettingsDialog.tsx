@@ -70,11 +70,11 @@ const RESOURCE_MODULES: ResourceModule[] = [
 type SettingsTab = 'permissions';
 
 // 每个开关一条状态记录：值、状态、失败原因放在一起，互斥状态由联合类型约束。
-// saving 带 requestId，用于丢弃过期响应；failed 带上失败原因，只显示在对应开关上。
+// 失败原因只记录、只展示在对应开关上。
 type SwitchState =
   | { status: 'idle'; value: boolean }
-  | { status: 'saving'; value: boolean; requestId: number }
-  | { status: 'failed'; value: boolean; error: string; requestId: number };
+  | { status: 'saving'; value: boolean }
+  | { status: 'failed'; value: boolean; error: string };
 
 function initialSwitches(): Record<string, SwitchState> {
   return Object.fromEntries(
@@ -90,6 +90,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const requestSeq = useRef(0);
+  // 在途请求标识放在 ref 里，不依赖渲染后的状态：同一帧内连续触发也只发一次请求。
+  const activeRequests = useRef<Record<string, number>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -118,32 +120,35 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   async function handleToggle(mod: ResourceModule, next: boolean) {
+    // 同一开关在途时拒绝重复提交；判断走 ref，避免读到上一帧的状态。
+    if (activeRequests.current[mod.id] !== undefined) return;
     const record = switches[mod.id];
-    // 同一开关还在保存中时拒绝重复提交。
-    if (record.status === 'saving') return;
-    const requestId = ++requestSeq.current;
     const previousValue = record.value;
+    const requestId = ++requestSeq.current;
+    activeRequests.current[mod.id] = requestId;
     setSwitches((prev) => ({
       ...prev,
-      [mod.id]: { status: 'saving', value: next, requestId },
+      [mod.id]: { status: 'saving', value: next },
     }));
     try {
       await userConfigApi.setAssetCapability(mod.paramKey, next);
-      setSwitches((prev) => {
-        const current = prev[mod.id];
-        // 只接受本次请求的响应，过期响应不写状态。
-        if (current.status !== 'saving' || current.requestId !== requestId) return prev;
-        return { ...prev, [mod.id]: { status: 'idle', value: next } };
-      });
+      // 只处理本次请求的结果，过期响应不写状态、也不弹提示。
+      if (activeRequests.current[mod.id] !== requestId) return;
+      delete activeRequests.current[mod.id];
+      setSwitches((prev) => ({
+        ...prev,
+        [mod.id]: { status: 'idle', value: next },
+      }));
       tea.notify.success(t(next ? 'settings.notify.enabled' : 'settings.notify.disabled', { label: t(mod.labelKey) }));
     } catch (e) {
+      if (activeRequests.current[mod.id] !== requestId) return;
+      delete activeRequests.current[mod.id];
       const msg = e instanceof Error ? e.message : String(e);
-      setSwitches((prev) => {
-        const current = prev[mod.id];
-        if (current.status !== 'saving' || current.requestId !== requestId) return prev;
-        // 失败只回滚本次请求写入的值，失败原因留在对应开关上。
-        return { ...prev, [mod.id]: { status: 'failed', value: previousValue, error: msg, requestId } };
-      });
+      // 失败只回滚本次请求写入的值，失败原因留在对应开关上。
+      setSwitches((prev) => ({
+        ...prev,
+        [mod.id]: { status: 'failed', value: previousValue, error: msg },
+      }));
       tea.notify.error(t('settings.notify.saveFailed', { msg }));
     }
   }

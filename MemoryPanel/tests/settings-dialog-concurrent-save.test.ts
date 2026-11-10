@@ -197,6 +197,19 @@ describe('SettingsDialog 并发保存', () => {
     expect(userConfigApi.setAssetCapability).toHaveBeenCalledTimes(1);
   });
 
+  it('同一帧内连续点击也只发一个请求', async () => {
+    await renderDialog();
+    const [wiki] = switches();
+
+    // 两次点击落在同一帧，禁用属性还没来得及生效。
+    act(() => {
+      wiki.click();
+      wiki.click();
+    });
+
+    expect(userConfigApi.setAssetCapability).toHaveBeenCalledTimes(1);
+  });
+
   it('失败后开关恢复为请求前的值', async () => {
     await renderDialog();
     const [wiki] = switches();
@@ -217,6 +230,8 @@ describe('SettingsDialog 并发保存', () => {
   });
 
   it('关闭弹窗后晚到的失败响应不回滚已更新的操作', async () => {
+    // 同一开关在途时会被拒绝，界面上制造不出同 key 的旧响应；
+    // 这里验证的是组件卸载后旧请求结算不写回界面。
     await renderDialog();
     const [wiki] = switches();
     act(() => {
