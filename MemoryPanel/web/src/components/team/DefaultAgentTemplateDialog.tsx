@@ -9,7 +9,7 @@
  * 已配置时打开弹窗会用 get-default-template 的返回值预填。
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Input, Modal, Tag } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { BooksIcon, CodeIcon, ToolsIcon } from 'tea-icons-react';
@@ -63,6 +63,18 @@ export default function DefaultAgentTemplateDialog({
   const [llmWikis, setLlmWikis] = useState<string[]>(initial?.asset_ids?.wikis ?? []);
   const [busy, setBusy] = useState(false);
 
+  // 弹窗可能在保存进行中被卸载（例如切换团队）。已卸载时不再回调、不弹通知，
+  // 避免旧团队的保存结果写到新团队或出现已过期的失败提示。
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // StrictMode 下 effect 会 setup → cleanup → setup，必须在 setup 里复位，
+    // 否则首次模拟卸载后 mountedRef 永远为 false。
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // 团队公共资产（skill / code_graph / wiki，后端 bootstrap 已按 visibility=team 过滤）
   const assets = useTeamAssets(team.team_id);
 
@@ -90,8 +102,10 @@ export default function DefaultAgentTemplateDialog({
         asset_ids: { skills, code_graphs: codeGraphs, wikis: llmWikis },
       };
       await agentsApi.setDefaultTemplate(team.team_id, template);
+      if (!mountedRef.current) return;
       onSaved(template);
     } catch (err) {
+      if (!mountedRef.current) return;
       tea.notify.error(getErrorMessage(err));
       setBusy(false);
     }

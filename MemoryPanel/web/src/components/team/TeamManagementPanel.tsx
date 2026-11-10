@@ -291,7 +291,10 @@ export default function TeamManagementPanel({
 
           {/* === 默认 Agent 模板（仅全局 admin 可见）=== */}
           {showAgents && _isAdmin && (
+            // teamId 作为 key：切团队时重挂载，连同弹窗与编辑状态一起清空，
+            // 避免把上一个团队未保存的编辑带进新团队。
             <DefaultAgentTemplateSection
+              key={activeTeam.team_id}
               teamId={activeTeam.team_id}
               teamName={activeTeam.name}
             />

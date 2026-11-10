@@ -9,7 +9,7 @@
  * 仅 system_admin 可调用，因此本组件只在 isAdmin=true 时渲染。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from 'tea-component';
 import { AddIcon, EditIcon } from 'tea-icons-react';
@@ -30,24 +30,34 @@ export default function DefaultAgentTemplateSection({
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!teamId) return;
-    setLoading(true);
-    try {
-      const data = await agentsApi.getDefaultTemplate(teamId);
-      // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
-      setTemplate(data && data.name ? data : null);
-    } catch (err) {
-      tea.notify.error(getErrorMessage(err));
-      setTemplate(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [teamId]);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!teamId) return;
+    // 切团队时先清掉上一个团队的模板，避免加载期间还显示 A 的数据
+    let cancelled = false;
+    setTemplate(null);
+    setLoading(true);
+
+    agentsApi
+      .getDefaultTemplate(teamId)
+      .then((data) => {
+        if (cancelled) return;
+        // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
+        setTemplate(data && data.name ? data : null);
+      })
+      .catch((err) => {
+        // 过期请求的失败不得影响当前团队：既不弹错，也不清空当前展示
+        if (cancelled) return;
+        tea.notify.error(getErrorMessage(err));
+        setTemplate(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId]);
 
   function handleSaved(saved: AgentTemplateConfig) {
     setTemplate(saved);
@@ -57,12 +67,13 @@ export default function DefaultAgentTemplateSection({
 
   const hasTemplate = !!template;
   const actionButton = hasTemplate ? (
-    <Button onClick={() => setShowDialog(true)} title={t('defaultAgent.edit.tooltip')}>
+    <Button disabled={loading} onClick={() => setShowDialog(true)} title={t('defaultAgent.edit.tooltip')}>
       <EditIcon size={14} /> {t('defaultAgent.edit')}
     </Button>
   ) : (
     <Button
       type="primary"
+      disabled={loading}
       onClick={() => setShowDialog(true)}
       title={t('defaultAgent.create.tooltip')}
     >
