@@ -7,14 +7,14 @@
 
 <a href="https://trendshift.io/repositories/29310?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-29310" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/29310" alt="TencentCloud%2FTencentDB-Agent-Memory | Trendshift" width="250" height="55"/></a>
 
-[![npm](https://img.shields.io/npm/v/@tencentdb-agent-memory/memory-tencentdb?color=blue)](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-tencentdb)
+[![GitHub Release](https://img.shields.io/github/v/release/TencentCloud/TencentDB-Agent-Memory?label=release)](https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E=2026.3.13-orange)](https://github.com/openclaw/openclaw)
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[安装](#安装) · [支持的 Agent](#所有-agent-共享同一个-memory-server) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
+[安装](#安装) · [支持的 Agent](#所有-agent-共享同一个-memory-server) · [最佳实践](#最佳实践) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
 [English](./README.md) · [**简体中文**](./README_CN.md)
 
@@ -43,8 +43,6 @@ $EDITOR .env       # 填入两组 LLM 参数（memory 组 + proxy 组）
 
 完整安装文档（Memory Hub 单独部署 / Proxy + Claude Code / CodeBuddy 用法 / 停止清理 / 端口
 说明等）见 [**INSTALL_CN.md**](./INSTALL_CN.md)（English: [INSTALL.md](./INSTALL.md)）。
-MongoDB 存储后端为**试验特性**（默认关闭），见
-[INSTALL_CN.md · MongoDB 存储后端](./INSTALL_CN.md#可选能力mongodb-存储后端试验特性默认关闭)。
 
 ### 从旧版本迁移数据
 
@@ -53,26 +51,38 @@ MongoDB 存储后端为**试验特性**（默认关闭），见
 
 ## 所有 Agent 共享同一个 Memory Server
 
-一套 Proxy，协议不变，零代码接入——把 Agent 的 base URL 指向 Proxy 即可，不需要插件、Hook 或 MCP Server。
+在客户端按接入指南配置 Proxy 地址和 User Key，即可使用同一套团队记忆服务。常见客户端通过原有模型协议接入，无需另装插件、Hook 或 MCP Server。
 
 <table>
 <tr>
-<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-deepseek-harness-dsh"><img src="./assets/images/agents/dsh.png" width="48" height="48" /><br /><sub><b>DeepSeek Harness</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-claude-code"><img src="./assets/images/agents/claude-code.png" width="48" height="48" /><br /><sub><b>Claude Code</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-codex"><img src="./assets/images/agents/codex.png" width="48" height="48" /><br /><sub><b>Codex</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-codebuddy"><img src="./assets/images/agents/codebuddy.png" width="48" height="48" /><br /><sub><b>CodeBuddy</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/dsh/"><img src="./assets/images/agents/dsh.png" width="48" height="48" /><br /><sub><b>DeepSeek Harness</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/claude-code/"><img src="./assets/images/agents/claude-code.png" width="48" height="48" /><br /><sub><b>Claude Code</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/codex/"><img src="./assets/images/agents/codex.png" width="48" height="48" /><br /><sub><b>Codex</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/codebuddy/"><img src="./assets/images/agents/codebuddy.png" width="48" height="48" /><br /><sub><b>CodeBuddy</b></sub></a></td>
 </tr>
 <tr>
-<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-workbuddy"><img src="./assets/images/agents/workbuddy.png" width="48" height="48" /><br /><sub><b>WorkBuddy</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-hermes"><img src="./assets/images/agents/hermes.png" width="48" height="48" /><br /><sub><b>Hermes</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-openclaw"><img src="./assets/images/agents/openclaw.png" width="48" height="48" /><br /><sub><b>OpenClaw</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL_CN.md#其他平台接入通用"><sub><b>更多框架适配中...</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/workbuddy/"><img src="./assets/images/agents/workbuddy.png" width="48" height="48" /><br /><sub><b>WorkBuddy</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/hermes/"><img src="./assets/images/agents/hermes.png" width="48" height="48" /><br /><sub><b>Hermes</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/openclaw/"><img src="./assets/images/agents/openclaw.png" width="48" height="48" /><br /><sub><b>OpenClaw</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/adapter-agent-development.md"><sub><b>更多框架适配中...</b></sub></a></td>
+</tr>
+<tr>
+<td align="center" width="140" colspan="2"><a href="./agents/opencode/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://opencode.ai/brand/files/opencode-logo-dark-square.png" /><img src="https://opencode.ai/brand/files/opencode-logo-light-square.png" width="48" height="48" alt="" /></picture><br /><sub><b>OpenCode</b></sub></a></td>
+<td align="center" width="140" colspan="2"><a href="https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/tag/v2.0.2"><img src="https://pi.dev/favicon.svg" width="48" height="48" alt="" /><br /><sub><b>Pi</b></sub></a></td>
 </tr>
 </table>
 
-各客户端具体配置步骤见 [**INSTALL_CN.md**](./INSTALL_CN.md)。
+各客户端具体配置步骤见上表或[接入总览](./agents/README.md)。
 
-没看到你常用的 Agent？[通用接入指南](./INSTALL_CN.md#其他平台接入通用) 可以试试自己动手适配——也欢迎直接提 PR 为它加上原生支持，参见 [**CONTRIBUTING_CN.md**](./CONTRIBUTING_CN.md)。
+OpenCode 提供[现成的适配配置](./adapters/opencode/README.md)，Pi 使用 OpenAI Chat Completions 协议接入。完成会话绑定后，可以保存常用的 Team、Agent 和 Task 组合，供新会话直接使用。
+
+没看到你常用的 Agent？[新客户端适配指南](./agents/adapter-agent-development.md) 可以试试自己动手适配——也欢迎直接提 PR 为它加上原生支持，参见 [**CONTRIBUTING_CN.md**](./CONTRIBUTING_CN.md)。
+
+### 最佳实践
+
+部署并接入 Agent 后，可以按指南初始化团队、导入和分配记忆资产，再用实际任务验证效果。
+
+最佳实践请看：[https://tencentcloud.github.io/TencentDB-Agent-Memory/best-practices](https://tencentcloud.github.io/TencentDB-Agent-Memory/best-practices)
 
 # TencentDB Agent Memory 是什么？
 
@@ -97,7 +107,7 @@ MongoDB 存储后端为**试验特性**（默认关闭），见
 ### 🧠 一个能记住人和事的大脑
 
 - **Chat Memory** 保留偏好、事实、决策和交互历史。
-- 每个 Agent 创建时自动获得独立记忆，下次对话不必从自我介绍开始。
+- 对话记忆按会话绑定和权限隔离；续接同一工作场景时，Agent 可以复用已有背景。
 - L0 Conversation → L1 Atom → L2 Scenario → L3 Persona，从原始对话逐层沉淀。
 
 <img width="" src="assets/images/chat_memory.cn.png" alt="image.png" />
@@ -106,7 +116,7 @@ MongoDB 存储后端为**试验特性**（默认关闭），见
 
 ### ⚡ 一个会积累经验的 Skill 库
 
-- Agent 做完复杂工作后，可以从对话和工具调用中提炼和管理可复用 Skill。并在需要时导入到指定Agent的上下文。
+- Agent 做完复杂工作后，可以从对话和工具调用中提炼和管理可复用 Skill。并在需要时导入到指定Agent的上下文。 Skill 支持在面板中编辑和导出。
 - Skill 不只是一段 Prompt：它有版本、资源文件、触发边界、执行步骤和验证规则。
 - 个人 Skill 默认私有；审核后可分享给团队，再配装给其他 Agent。
 
@@ -116,7 +126,7 @@ MongoDB 存储后端为**试验特性**（默认关闭），见
 
 ### 📖 一张同时看懂文档和代码的知识地图
 
-- **Wiki** 把产品文档、设计方案和运维手册生成结构化页面与链接图谱。(灵感来源于 Karpathy 的 LLM 知识库)
+- **Wiki** 把产品文档、设计方案和运维手册生成结构化页面与链接图谱，支持导入 Markdown、文本、HTML，以及 Word、Excel、PowerPoint 和 PDF。
 
 <img src="./assets/images/wiki.cn.png" alt="image.png" />
 
@@ -143,11 +153,13 @@ MongoDB 存储后端为**试验特性**（默认关闭），见
 
 <img alt="企业微信截图_17844464494523" src="assets/images/flowchart3.cn.png" />
 
+管理员可以配置团队默认 Agent 模板，让新成员沿用团队的工作方式。
+
 具体来说，这些已有资产可以直接在面板导入和自动被处理：
 
-- **代码库**：导入已有代码库，**CodeGraph** 自动索引符号、文件、调用关系与影响路径。
-- **文档与文件**：导入相关文档和文件，**Wiki** 自动生成结构化页面与链接图谱。
-- **对话 Session**：导入过去和 Agent 的对话 Session，**Skill 与 Chat Memory** 自动提取可复用 Skill 与记忆资产。
+- **代码库**：导入公开仓库或已配置凭据的私有仓库，**CodeGraph** 自动索引符号、文件、调用关系与影响路径。
+- **文档与文件**：导入相关文档和文件（也可从已配置的外部来源导入），**Wiki** 自动生成结构化页面与链接图谱。
+- **对话 Session**：从[支持的客户端](./agents/README.md#本地资产导入)导入过去和 Agent 的对话 Session，**Skill 与 Chat Memory** 自动提取可复用 Skill 与记忆资产。
 
 > 不再重新训练每一个 Agent。给它读档。
 
@@ -209,9 +221,10 @@ RAG 解决“能查到什么”。Team Memory 还要解决“谁可以用、哪�
 | :--- | :--- |
 | **组队** | 建立 Team，加入人和 Agent，确定共享边界 |
 | **资产背包** | 打开、搜索、审核和管理 Chat Memory、Skill、Wiki 与 CodeGraph |
-| **Agent Loadout** | 给不同 Agent 绑定不同记忆，调整优先级与使用方式 |
+| **Agent Loadout** | 给不同 Agent 绑定不同记忆，调整优先级与使用方式，并可配置团队默认模板 |
 | **Knowledge 工坊** | 构建 Wiki 和 CodeGraph，查看处理状态和资产信息 |
 | **权限控制** | 在私有、团队与 ACL 授权之间切换，必要时收回共享 |
+| **资产使用分析** | 启用可选的数据分析后，查看记忆、技能和知识工具的调用情况 |
 
 点开一条资产，关心的不只是“它写了什么”，还有“它从哪来、是哪个版本、分给了谁、最近是否被使用”。
 
@@ -264,7 +277,7 @@ Chat Memory、Skill、Wiki 和 CodeGraph 都被统一登记为 Memory Asset。Me
 
 ### 3. 知识不整库注入，而是按需调用
 
-文档被整理为可搜索、可沿链接下钻的 Wiki；代码库被索引为包含文件、符号和调用关系的 CodeGraph。Agent 先通过 `/v3/tools/list` 发现能力，再用 `/v3/tools/call` 读取相关页面、源码或影响路径。
+文档被整理为可搜索、可沿链接下钻的 Wiki；代码库被索引为包含文件、符号和调用关系的 CodeGraph。Agent 按需调用已获授权的知识工具，读取相关页面、源码或影响路径。Knowledge 服务提供 `/v3/tools/list` 和 `/v3/tools/call` 供集成使用。
 
 这让文档和代码也成为记忆，但它们平时只是可用的工具，只有真正需要时才进入上下文。
 
@@ -279,15 +292,14 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 ## 注意事项
 
 - Wiki 和 CodeGraph 异步构建，需要等待一定时间处理才能 `ready`。
-- CodeGraph 当前首先支持公开 HTTPS 仓库；私有仓库和 SSH 凭证接入仍在完善。
-- Hub 已支持人工绑定资产；全自动记忆路由仍在迭代。
+- CodeGraph 支持公开 HTTPS 仓库和配置了团队凭据的私有仓库。使用 SSH 拉取私有仓库时，先在面板获取公钥，并在代码托管平台配置访问权限。
+- Memory Hub 支持手动装配资产。Proxy 的 Skill 按需选择功能默认关闭，启用后可按当前对话选择要加载的 Skill。
 
 ## 相关文档
 
-- [路线图](./ROADMAP_CN.md)（接下来要做什么）
-- [完整安装指南](./INSTALL_CN.md)（Memory Core + Hub + Proxy 一键部署）
-- [Roadmap](./ROADMAP_CN.md)（我们接下来在做什么；English: [ROADMAP.md](./ROADMAP.md)）
-- [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)（如果在用旧版并想迁移存量数据）
+- [完整安装指南](./INSTALL_CN.md)
+- [客户端接入与本地资产导入](./agents/README.md)
+- [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
 - **API 文档**：
   - [Memory Core v3 API](./MemoryCore/v3-api-memorycore-doc.md)
@@ -296,14 +308,13 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
   - [Memory Panel API](./MemoryPanel/panel-api-doc.md)
 - [贡献指南](./CONTRIBUTING_CN.md)
 
-Agent Memory 还没有标准答案。Bug、文档、Benchmark、新框架适配，或者一个你觉得更好玩的 Memory Hub 用法，都欢迎。
 
 ---
 ## Roadmap
 
-当前版本 **v2.0.0**。下个版本（**v2.0.1**）的重点：零配置冷启动、更快的 Wiki 生成、用户 / 团队自定义 Prompt、Skill 导出，以及 Codex（IDE Plan 模式）接入。
+[v2.0.3](https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/tag/v2.0.3) 新增会话默认绑定和 Wiki 富文档支持。最新稳定版见 [GitHub Releases](https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/latest)，历史变更见 [CHANGELOG.md](./CHANGELOG.md)。
 
-👉 完整计划见 [**ROADMAP_CN.md**](./ROADMAP_CN.md)（English: [ROADMAP.md](./ROADMAP.md)）。
+早期规划见 [**ROADMAP_CN.md**](./ROADMAP_CN.md)（English: [ROADMAP.md](./ROADMAP.md)）。
 
 ---
 ## 致谢
@@ -321,12 +332,12 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 
 我们欢迎一切形式的贡献——Bug 反馈、功能建议、文档勘误、Benchmark 复现、生态集成，或者一个 Pull Request 都可以。Agent 记忆这件事远未有定论，希望和大家一起把它做出来。
 
-- 🐞 **发现 Bug 或有疑问？** 欢迎到 [GitHub Issues](https://github.com/Tencent/TencentDB-Agent-Memory/issues) 提交，我们会在 24 小时内响应。
-- 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
-- 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
-- ☁️ **云上托管版**已正式上线，诚邀体验，如有使用意向，请填写问卷，我们后续会尽快联系您：**[填写问卷](https://wj.qq.com/s2/27892273/3h5k/)**
+- 🐞 **发现 Bug 或有疑问？** 欢迎到 [GitHub Issues](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues) 提交，我们会在 24 小时内响应。
+- 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/TencentCloud/TencentDB-Agent-Memory/discussions) 发起讨论。
+- 🛠️ **想贡献代码？** 请先阅读 [贡献指南](./CONTRIBUTING_CN.md)。
+- ☁️ **云上托管版**已正式上线，诚邀体验：[腾讯云 Agent 记忆服务](https://cloud.tencent.com/product/agm)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/4d3d3752-90ef-47ca-9aa1-29a50ac5c979" width="200" alt="Agent Memory 微信社群二维码" />
+<p align="center"><img src="https://github.com/user-attachments/assets/41ed193d-e70e-484e-8627-0e363a4b1eb0" width="200" alt="Agent Memory 微信社群二维码" /></p>
 
 ---
 
