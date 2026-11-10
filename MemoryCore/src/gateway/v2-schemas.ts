@@ -106,11 +106,26 @@ import {
 // Override: conversation add default session
 // ============================
 
+/**
+ * v1 clients call the session identifier `session_key`; v2/v3 expose it as
+ * `session_id`. Accept the legacy name only when the canonical field is absent
+ * so the old spelling cannot be stripped and silently default the write bucket.
+ */
+function acceptLegacyConversationSessionKey(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const body = value as Record<string, unknown>;
+  if (body.session_id != null || !Object.prototype.hasOwnProperty.call(body, "session_key")) return value;
+  return { ...body, session_id: body.session_key ?? null };
+}
+
 /** conversationAdd with session_id defaulting to compatibility bucket. */
-export const conversationAddRequestSchema = z.object({
-  session_id: z.string().min(1).default(DEFAULT_ISOLATION_ID),
-  messages: z.array(_conversationItemSchema).min(1).max(100),
-});
+export const conversationAddRequestSchema = z.preprocess(
+  acceptLegacyConversationSessionKey,
+  z.object({
+    session_id: z.string().min(1).default(DEFAULT_ISOLATION_ID),
+    messages: z.array(_conversationItemSchema).min(1).max(100),
+  }),
+);
 export type ConversationAddRequest = z.infer<typeof conversationAddRequestSchema>;
 
 // ============================
