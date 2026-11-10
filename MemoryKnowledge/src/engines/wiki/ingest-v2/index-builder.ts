@@ -34,6 +34,17 @@ interface IndexEntry {
   type: string;
 }
 
+function escapeLinkLabel(title: string): string {
+  return title.replace(/[\\\[\]]/g, "\\$&");
+}
+
+function encodeLinkPath(path: string): string {
+  // Encode filename delimiters without turning bundle directory separators into %2F.
+  return path.split("/").map((part) => encodeURIComponent(part).replace(/[()]/g, (char) =>
+    char === "(" ? "%28" : "%29",
+  )).join("/");
+}
+
 /** 扫描 wiki/ 收集所有非结构性页的索引条目。 */
 function collectEntries(wikiDir: string): IndexEntry[] {
   const out: IndexEntry[] = [];
@@ -101,7 +112,7 @@ export function renderIndex(entries: IndexEntry[]): string {
     items.sort((a, b) => a.title.localeCompare(b.title));
     sections.push(`## ${heading}`, "");
     for (const it of items) {
-      sections.push(`* [${it.title}](${it.relPath})${it.description ? ` - ${it.description}` : ""}`);
+      sections.push(`* [${escapeLinkLabel(it.title)}](${encodeLinkPath(it.relPath)})${it.description ? ` - ${it.description}` : ""}`);
     }
     sections.push("");
   };
