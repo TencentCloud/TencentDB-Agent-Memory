@@ -390,7 +390,7 @@ export class LocalEmbeddingService implements EmbeddingService {
 const MAX_BATCH_SIZE = 256;
 
 /** Max retries for API calls */
-const MAX_RETRIES = 0;
+const MAX_RETRIES = 2;
 /** Default timeout per API call in milliseconds */
 const DEFAULT_API_TIMEOUT_MS = 10_000;
 
@@ -566,7 +566,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
               throw err;
             }
             lastError = err;
-            continue;
+            // Throw retryable HTTP failures through the common catch path so
+            // 5xx and 429 responses use the same bounded backoff as timeouts
+            // and transient network failures.
+            throw err;
           }
 
           const json = (await resp.json()) as OpenAIEmbeddingResponse;
