@@ -51,7 +51,7 @@ const log = createLogger("wiki-mgr");
 // ── 内联 frontmatter/wikilink 解析（不依赖外部模块，确保可编译） ──
 
 function extractFrontmatter(content: string): { title: string; type: string; sources: string[]; description: string } {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  const fmMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/);
   const fm = fmMatch ? fmMatch[1] : "";
   const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
   const typeMatch = fm.match(/^type:\s*["']?(.+?)["']?\s*$/m);
@@ -324,7 +324,7 @@ const SNIPPET_CONTEXT = 80;
 function makeSnippet(page: WikiPage): string {
   if (page.description) return page.description;
   const body = page.content
-    .replace(/^---\n[\s\S]*?\n---\n?/, "")
+    .replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
     .replace(/^#+\s+.*$/gm, "")
     .trim();
   return [...body].slice(0, SNIPPET_CONTEXT).join("").replace(/\n/g, " ").trim();
