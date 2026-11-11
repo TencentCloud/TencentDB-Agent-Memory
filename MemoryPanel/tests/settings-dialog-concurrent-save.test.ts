@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// 前置：先在 MemoryPanel/web 执行 npm ci，再在 MemoryPanel 执行 npm test
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
