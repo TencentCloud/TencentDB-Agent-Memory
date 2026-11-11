@@ -209,6 +209,17 @@ node --import tsx src/gateway/server.ts
 | `MEMORY_TENCENTDB_GATEWAY_CMD`    | —                   | If set, the provider auto-starts the Gateway with this command. If unset, the provider auto-discovers `src/gateway/server.ts` next to the checkout or under `$HOME` (see Option A above) |
 | `MEMORY_TENCENTDB_LOG_DIR`        | `~/.hermes/logs/memory_tencentdb` | Where the supervisor writes `gateway.stdout.log` / `gateway.stderr.log` |
 
+### v3 tenancy fallback
+
+When Hermes does not pass identity context to `initialize()`, the provider
+falls back to these optional variables before using the legacy `default` IDs:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEMORY_TENCENTDB_TEAM_ID` | `default` | v3 team ID |
+| `MEMORY_TENCENTDB_AGENT_ID` | `default` | v3 agent ID; set this to the migrated `agt-...` ID to avoid new writes landing in the legacy `default` bucket |
+| `MEMORY_TENCENTDB_USER_ID` | `default` | v3 user ID |
+
 ### Gateway data directory (owned by the Gateway, not this provider)
 
 The L0~L3 data directory is resolved **inside the Gateway** (`src/gateway/config.ts`),
