@@ -187,6 +187,18 @@ def _discover_gateway_cmd() -> Optional[str]:
     return None
 
 
+class GatewayResponseError(RuntimeError):
+    """A reachable Gateway rejected the operation or sent an invalid envelope."""
+
+
+def _require_gateway_success(response: Any) -> Dict[str, Any]:
+    # The v3 success code is numeric zero, not bool/string zero. Do not include
+    # backend messages or data in exceptions or model-facing error replies.
+    if not isinstance(response, dict) or type(response.get("code")) not in (int, float) or response["code"] != 0:
+        raise GatewayResponseError("Gateway returned an unsuccessful or invalid v3 envelope")
+    return response
+
+
 # Search tool limit bounds (shared by memory_search and conversation_search).
 _DEFAULT_SEARCH_LIMIT = 5
 _MAX_SEARCH_LIMIT = 20
@@ -425,10 +437,10 @@ class MemoryTencentdbProvider(MemoryProvider):
 
     def _ensure_alive_for_request(self) -> bool:
         """Lazy probe used by the request short-circuit guards."""
-        if self._gateway_available:
-            return True
         if self._is_breaker_open():
             return False
+        if self._gateway_available:
+            return True
         self._try_recover_gateway()
         return self._gateway_available
 
@@ -617,14 +629,18 @@ class MemoryTencentdbProvider(MemoryProvider):
         effective_session = session_id or self._session_id
         try:
             # Parallel fetch: L1 memories + L3 core + L2 scene navigation
-            results: Dict[str, Any] = {}
+            responses: Dict[str, Any] = {}
             errors: List[str] = []
+            result_lock = threading.Lock()
 
             def _fetch(label: str, fn):
                 try:
-                    results[label] = fn()
+                    response = _require_gateway_success(fn())
+                    with result_lock:
+                        responses[label] = response
                 except Exception as e:
-                    errors.append(f"{label}: {e}")
+                    with result_lock:
+                        errors.append(f"{label}: {e}")
 
             threads = [
                 threading.Thread(
@@ -662,10 +678,19 @@ class MemoryTencentdbProvider(MemoryProvider):
             for t in threads:
                 t.join(timeout=self._client._timeout if self._client else 10)
 
-            if errors:
-                logger.warning("memory-tencentdb prefetch partial failures: %s", "; ".join(errors))
+            # Workers can outlive join timeouts. Only completed responses at
+            # this boundary affect this recall's context and failure accounting.
+            with result_lock:
+                results = dict(responses)
+                completed_errors = list(errors)
+            if completed_errors:
+                logger.warning("memory-tencentdb prefetch partial failures: %s", "; ".join(completed_errors))
+            if not results:
+                self._record_failure()
+                return ""
 
-            # Build recall context from results
+            # Build recall context from results. Empty successful responses still
+            # demonstrate connectivity; partial success remains usable.
             parts: List[str] = []
 
             # L1 memories
@@ -740,18 +765,20 @@ class MemoryTencentdbProvider(MemoryProvider):
 
         def _sync():
             try:
-                client.conversation_add(
+                result = client.conversation_add(
                     messages=messages,
                     session_id=effective_session,
                     team_id=self._team_id,
                     agent_id=self._agent_id,
                     user_id=self._user_id,
                 )
+                _require_gateway_success(result)
                 self._record_success()
             except Exception as e:
                 self._record_failure()
                 logger.warning("memory-tencentdb sync failed: %s", e)
-                self._try_recover_gateway()
+                if not isinstance(e, GatewayResponseError):
+                    self._try_recover_gateway()
 
         oldest_to_join: Optional[threading.Thread] = None
         with self._sync_lock:
@@ -850,6 +877,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     agent_id=self._agent_id,
                     user_id=self._user_id,
                 )
+                _require_gateway_success(result)
                 self._record_success()
                 # Unwrap v3 envelope for LLM consumption
                 items = result.get("data", {}).get("items", [])
@@ -871,6 +899,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     agent_id=self._agent_id,
                     user_id=self._user_id,
                 )
+                _require_gateway_success(result)
                 self._record_success()
                 items = result.get("data", {}).get("items", [])
                 if not items:
@@ -893,6 +922,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     agent_id=self._agent_id,
                     user_id=self._user_id,
                 )
+                _require_gateway_success(result)
                 self._record_success()
                 content = result.get("data", {}).get("content", "")
                 if not content:
@@ -903,7 +933,8 @@ class MemoryTencentdbProvider(MemoryProvider):
 
         except Exception as e:
             self._record_failure()
-            self._try_recover_gateway()
+            if not isinstance(e, GatewayResponseError):
+                self._try_recover_gateway()
             return json.dumps({"error": f"Tool call failed: {e}"})
 
     # -- Optional hooks -------------------------------------------------------
