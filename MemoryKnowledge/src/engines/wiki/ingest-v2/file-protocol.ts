@@ -40,6 +40,10 @@ const OPEN_RE = /<<<FILE\s+path\s*=\s*"([^"]*)"\s*>>+/g;
  */
 const CLOSE_RE = /<<<\s*END\s*>>>/g;
 
+const INVALID_PORTABLE_CHAR_RE = /[\u0000-\u001f\u007f<>:"|?*]/;
+const WINDOWS_RESERVED_NAME_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+const MAX_PORTABLE_SEGMENT_BYTES = 240;
+
 /**
  * 校验并规范化 FILE 块声明的 path。
  * 返回规范化路径（POSIX 风格、wiki/ 前缀）或 null（非法，应跳过）。
@@ -47,7 +51,10 @@ const CLOSE_RE = /<<<\s*END\s*>>>/g;
  * 规则：
  *   - 必须是相对路径（拒绝绝对路径 / 盘符）。
  *   - 拆分后任一段不得为 ".." 或 "."（防穿越）。
+ *   - 任一段不得含控制字符、Windows 非法字符、尾随空白/点或保留设备名，
+ *     且 UTF-8 长度不得超过 240 字节。
  *   - 规范化后必须以 "wiki/" 开头（只允许写 wiki/**）。
+ *   - 文件名必须以 Markdown 扩展名 `.md` 结尾（大小写不敏感）。
  */
 export function normalizeWikiPath(raw: string): string | null {
   if (!raw) return null;
@@ -63,11 +70,16 @@ export function normalizeWikiPath(raw: string): string | null {
   // 防穿越：任何一段是 .. 或 . 都拒绝
   for (const seg of segments) {
     if (seg === ".." || seg === ".") return null;
+    if (INVALID_PORTABLE_CHAR_RE.test(seg)) return null;
+    if (/[ .]$/.test(seg)) return null;
+    if (WINDOWS_RESERVED_NAME_RE.test(seg)) return null;
+    if (Buffer.byteLength(seg, "utf8") > MAX_PORTABLE_SEGMENT_BYTES) return null;
   }
   const normalized = segments.join("/");
   // 白名单：只允许写 wiki/**（且不能就是 "wiki" 目录本身）
   if (normalized !== "wiki" && !normalized.startsWith("wiki/")) return null;
   if (normalized === "wiki") return null;
+  if (!/\.md$/i.test(normalized)) return null;
   return normalized;
 }
 
