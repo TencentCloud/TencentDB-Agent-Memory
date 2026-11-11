@@ -569,6 +569,8 @@ export interface ProxyConfig {
   upstream: {
     url: string; // OpenAI-compatible upstream URL
     apiKey: string; // 若非空则替换请求中的 API Key
+    /** Model IDs published by `/v1/models` in addition to pricing/pool models. */
+    models?: string[];
     /**
      * Per-agent overrides keyed by agent name (URL path prefix, e.g. "claude-code").
      * Empty / missing entry → agent falls back to `url` + `apiKey`.
@@ -959,6 +961,7 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
+    models?: string[] | string;
     /** Per-agent override map. See `AgentUpstreamEntry`. */
     agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
   };
