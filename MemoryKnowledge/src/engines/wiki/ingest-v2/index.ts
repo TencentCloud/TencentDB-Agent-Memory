@@ -25,7 +25,12 @@ import { parseFrontmatter, buildPage } from "./frontmatter.js";
 import { mergePage, type MergeOptions } from "./merge.js";
 import { chunkText } from "./chunker.js";
 import { slugify, dirForType } from "./slug.js";
-import { isInsideRoot } from "./safe-path.js";
+import {
+  isInsideRoot,
+  isMarkdownFileName,
+  isStructuralWikiFile,
+  stripMarkdownExtension,
+} from "./safe-path.js";
 import { rebuildIndexFile } from "./index-builder.js";
 import { appendIngestLog, appendIngestLogBatch } from "./log-writer.js";
 import { createLogger } from "../../../logger.js";
@@ -66,15 +71,6 @@ export function dumpGenerateFailure(args: {
     return null;
   }
 }
-
-/** 不允许 ingest 写入/覆盖的结构性文件（PRD §3.7-2）。 */
-const STRUCTURAL_FILES = new Set([
-  "wiki/index.md",
-  "wiki/schema.md",
-  "wiki/purpose.md",
-  "wiki/log.md",
-  "wiki/overview.md",
-]);
 
 /** 粗略上下文预算（字符）：保留余量给 prompt 框架与输出。 */
 const SOURCE_CHAR_BUDGET = 28_000;
@@ -192,7 +188,7 @@ export async function extractSource(
     }
     for (const f of files) {
       const canonicalPath = canonicalizePagePath(f.path, f.content);
-      if (STRUCTURAL_FILES.has(canonicalPath)) {
+      if (isStructuralWikiFile(canonicalPath)) {
         warnings.push(`跳过结构性文件: ${canonicalPath}`);
         continue;
       }
@@ -365,15 +361,17 @@ function walk(baseDir: string, dir: string, out: ExistingPageInfo[]): void {
     }
     if (st.isDirectory()) {
       if (entry !== "media") walk(baseDir, full, out);
-    } else if (entry.endsWith(".md")) {
+    } else if (isMarkdownFileName(entry)) {
       const rel = `wiki/${full.slice(baseDir.length + 1).replace(/\\/g, "/")}`;
-      if (STRUCTURAL_FILES.has(rel)) continue;
+      if (isStructuralWikiFile(rel)) continue;
       try {
         const content = readFileSync(full, "utf-8");
         const { frontmatter } = parseFrontmatter(content);
         out.push({
           relPath: rel,
-          title: typeof frontmatter.title === "string" ? frontmatter.title : basename(entry, ".md"),
+          title: typeof frontmatter.title === "string"
+            ? frontmatter.title
+            : stripMarkdownExtension(basename(entry)),
           type: frontmatter.type,
           description: typeof frontmatter.description === "string" ? frontmatter.description : undefined,
         });

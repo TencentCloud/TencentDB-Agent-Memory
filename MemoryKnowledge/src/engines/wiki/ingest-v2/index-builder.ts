@@ -14,9 +14,11 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseFrontmatter } from "./frontmatter.js";
-
-/** 结构性文件不列入 index。 */
-const STRUCTURAL = new Set(["index.md", "schema.md", "purpose.md", "log.md", "overview.md"]);
+import {
+  isMarkdownFileName,
+  isStructuralWikiFile,
+  stripMarkdownExtension,
+} from "./safe-path.js";
 
 /** 分组展示顺序与中文小节标题。未知 type 归到「其它」。 */
 const GROUP_ORDER: Array<{ type: string; heading: string }> = [
@@ -56,9 +58,9 @@ function collectEntries(wikiDir: string): IndexEntry[] {
         if (entry !== "media") walk(full);
         continue;
       }
-      if (!entry.endsWith(".md")) continue;
+      if (!isMarkdownFileName(entry)) continue;
       const rel = relative(wikiDir, full).replace(/\\/g, "/");
-      if (STRUCTURAL.has(rel)) continue;
+      if (isStructuralWikiFile(rel)) continue;
       let content: string;
       try {
         content = readFileSync(full, "utf-8");
@@ -69,7 +71,7 @@ function collectEntries(wikiDir: string): IndexEntry[] {
       const title =
         typeof frontmatter.title === "string" && frontmatter.title.trim()
           ? frontmatter.title.trim()
-          : entry.replace(/\.md$/, "");
+          : stripMarkdownExtension(entry);
       const description =
         typeof frontmatter.description === "string" ? frontmatter.description.trim() : "";
       out.push({ title, relPath: `/${rel}`, description, type: frontmatter.type });

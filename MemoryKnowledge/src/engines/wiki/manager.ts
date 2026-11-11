@@ -45,6 +45,7 @@ import { getIngestConcurrency } from "../../config.js";
 import { extractableExtensions } from "../../document-converter/format-registry.js";
 import { slugify } from "./ingest-v2/slug.js";
 import { DEFAULT_SCHEMA, DEFAULT_PURPOSE } from "./ingest-v2/template.js";
+import { isMarkdownFileName, stripMarkdownExtension } from "./ingest-v2/safe-path.js";
 
 const log = createLogger("wiki-mgr");
 
@@ -477,7 +478,7 @@ function buildRelated(
 }
 
 function idFromPath(relPath: string): string {
-  return relPath.replace(/^wiki\//, "").replace(/\.md$/, "");
+  return stripMarkdownExtension(relPath.replace(/^wiki\//, ""));
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -841,13 +842,13 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
       const full = join(dir, entry);
       const stat = statSync(full);
       if (stat.isDirectory()) { if (entry !== "media") scanRecursive(baseDir, full, pages); }
-      else if (entry.endsWith(".md")) {
+      else if (isMarkdownFileName(entry)) {
         try {
           const content = readFileSync(full, "utf-8");
           const rel = full.slice(baseDir.length + 1);
-          const id = rel.replace(/\.md$/, "").replace(/\\/g, "/");
+          const id = stripMarkdownExtension(rel).replace(/\\/g, "/");
           const fm = extractFrontmatter(content);
-          pages.push({ id, title: fm.title || basename(entry, ".md").replace(/-/g, " "), type: fm.type, path: full, relPath: `wiki/${rel}`, content, sources: fm.sources, links: extractWikilinks(content), description: fm.description });
+          pages.push({ id, title: fm.title || stripMarkdownExtension(basename(entry)).replace(/-/g, " "), type: fm.type, path: full, relPath: `wiki/${rel}`, content, sources: fm.sources, links: extractWikilinks(content), description: fm.description });
         } catch { /* skip */ }
       }
     }
@@ -1091,7 +1092,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
         const fullPath = join(state.path, relPath);
         if (!fullPath.startsWith(join(state.path, "raw"))) return null; // 防路径穿越
         try { return readFileSync(fullPath, "utf-8"); } catch {}
-        if (!relPath.endsWith(".md")) {
+        if (!isMarkdownFileName(relPath)) {
           try { return readFileSync(fullPath + ".md", "utf-8"); } catch {}
         }
         return null;
@@ -1107,7 +1108,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
       if (!fullPath.startsWith(base)) return null;
       // 先直接尝试，再补 .md
       try { return readFileSync(fullPath, "utf-8"); } catch {}
-      if (!cleanPath.endsWith(".md")) {
+      if (!isMarkdownFileName(cleanPath)) {
         try { return readFileSync(fullPath + ".md", "utf-8"); } catch {}
       }
       return null;
