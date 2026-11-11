@@ -150,12 +150,12 @@ redis:
 YAML
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
-$DOCKER run -d --name "$CONTAINER" \
+no_pathconv $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias proxy \
   --add-host=host.docker.internal:host-gateway \
   -p "${PROXY_PORT}:8096" \
-  -v "$CONFIG_FILE:/data/config.yaml:ro" \
+  -v "$(host_path "$CONFIG_FILE"):/data/config.yaml:ro" \
   "$PROXY_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90
