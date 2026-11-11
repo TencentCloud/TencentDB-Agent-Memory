@@ -792,7 +792,7 @@ export const enUS = {
   'memory.list.fixedTo': 'Agent Fixed Asset · {{id}}',
   'memory.list.teamPool': 'Team Memory Pool',
   'memory.list.teamPoolShort': 'Team Pool',
-  'memory.list.uploadedBy': 'Uploaded by: ',
+  'memory.list.uploadedBy': 'Asset owner: ',
   'memory.unbind': 'Unbind',
   'memory.unbind.tooltip':
     "Remove this Agent's fixed binding to this memory block (the memory itself is preserved)",
@@ -821,7 +821,7 @@ export const enUS = {
   'memory.confirm.private.ok': 'Set Private',
   'memory.detail.fixedTo': 'Fixed to {{name}}',
   'memory.detail.teamPool': 'Team Memory Pool',
-  'memory.detail.uploadedBy': 'Uploaded: {{user}}',
+  'memory.detail.uploadedBy': 'Asset owner: {{user}}',
   'memory.detail.updated': 'Updated: {{time}}',
   'memory.detail.refresh': 'Refresh',
   'memory.detail.noL0': 'This memory block has no L0 conversation history.',
