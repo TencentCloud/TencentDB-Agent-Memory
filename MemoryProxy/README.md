@@ -249,6 +249,7 @@ Config sections at a glance:
 ```bash
 TDAI_MEMORY_SYSTEM_USER_ID   # user_id of the memory internal service account
 TDAI_MEMORY_SYSTEM_USER_KEY  # apiKey of the memory internal service account (ops reference only)
+TDAI_AUTH_API_KEY            # optional Core gateway Bearer used by auth/enable verify calls
 TDAI_PROXY_ADMIN_API_KEY     # shared secret for ops endpoint auth
 PROXY_DB_PATH                # sqlite backend db path (used when storage.sqlite.dbPath is empty)
 ```

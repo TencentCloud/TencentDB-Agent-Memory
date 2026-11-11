@@ -193,6 +193,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   auth: {
     enabled: false,
     url: "",
+    apiKey: "",
     timeoutMs: 5000,
   },
   systemUsers: [],
@@ -615,6 +616,10 @@ export function buildConfig(
     auth: {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
+      apiKey:
+        (process.env.TDAI_AUTH_API_KEY ?? "").trim() ||
+        yaml.auth?.apiKey ||
+        DEFAULT_CONFIG.auth.apiKey,
       timeoutMs: yaml.auth?.timeoutMs ?? DEFAULT_CONFIG.auth.timeoutMs,
     },
     // Entries without a non-empty userId are silently dropped — matching is
