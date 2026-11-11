@@ -7,8 +7,11 @@
  * and StandaloneLLMRunner: read, write, edit.
  *
  * Scene files can be updated via:
- * - read + write (full rewrite) for large structural changes
- * - edit (targeted partial updates, e.g. updating a single section)
+ * - read + write (full rewrite) — the ONLY sanctioned update path. UPDATE must
+ *   integrate new memories into the whole file and replace it in one write, so
+ *   blocks cannot degrade into append-only chronicles (see issue #1543).
+ * - edit exists for tool compatibility but the prompt forbids using it for
+ *   content updates (targeted edits are the root cause of monotonic growth).
  *
  * Security: The LLM is sandboxed to scene_blocks/ only (workspaceDir = scene_blocks/).
  * It has NO visibility into checkpoint, scene_index, persona.md, or any other system file.
@@ -81,7 +84,7 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 1. **所有文件操作使用相对文件名**（如 \`技术研究-Rust学习.md\`），当前工作目录已设为场景文件目录
 2. **read 只能读取用户消息中"已有场景文件清单"列出的文件**，禁止猜测或编造不在清单中的文件名
 3. **创建新场景文件时**，使用 **write** 工具。参数：\`path\`=文件名, \`content\`=完整内容
-4. **局部更新场景文件**：使用 **edit** 工具。参数：\`path\`=文件名, \`edits\`=[{\`oldText\`: 旧内容, \`newText\`: 新内容}]。对于大范围重写或结构性变更，建议使用 **read** + **write** 整体重写。
+4. **更新场景文件（UPDATE）必须整体重写**：先 **read** 读取完整现有内容，将新记忆整合进全文后，用 **write** 一次性写入完整新内容。**禁止用 edit 做内容更新（局部替换/追加）**——只改一处而保留其余全部旧内容会让文件只增不减，退化为流水账。edit 工具仅可用于修正错别字级别的微瑕。
 5. **场景索引和系统配置由工程系统自动维护**，你只需专注于操作 \`.md\` 场景文件
 6. **删除文件的唯一方式**：使用 **write** 工具将文件内容写为 \`[DELETED]\` 标记（\`path\`=文件名, \`content\`=\`[DELETED]\`）。系统会自动清理带有此标记的文件。**禁止**写入空字符串（会被系统拒绝）。**禁止**用 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等其他标记替代删除——只有 \`[DELETED]\` 标记会触发系统清理。
 7. **禁止创建报告/整合/汇总类文件**。你的输出必须是有意义的场景叙事文件（如"技术架构与工程实践.md"、"日常生活与工作节奏.md"）。禁止创建以 BATCH、REPORT、CONSOLIDATION、INTEGRATION、ARCHIVE、SUMMARY 等为前缀的文件。
@@ -141,7 +144,7 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 **核心原则：默认策略是 UPDATE，不是 CREATE。** 当犹豫于 UPDATE 和 CREATE 之间时，选择 UPDATE。
 
 策略选择（按优先级排序）：
-1. **UPDATE（更新）**【首选策略】: 如果存在相关的 Block（基于摘要或文件名的相似性），先用 **read** 读取文件内的具体信息，再锁定该 Block 进行更新（**write** 整体重写 或 **edit** 局部替换）
+1. **UPDATE（更新）**【首选策略】: 如果存在相关的 Block（基于摘要或文件名的相似性），先用 **read** 读取文件内的具体信息，再锁定该 Block 进行更新（**必须用 **write** 整体重写**，禁止 **edit** 局部替换）
 2. **MERGE（合并）**: 
    - 合并的新 block 应该是生成概括性更强的场景，包含已有的多个相似场景
    - **强制合并**：当前 Block 总数 **≥ ${maxScenes}** 时，必须先将多个相似记忆合并
@@ -153,12 +156,14 @@ function buildSceneSystemPrompt(maxScenes: number): string {
    - 如果话题是全新的且与现有内容区分度高，可以创建新 Block
    - **每次批处理最多新增 1 个场景**
 
-**示例 A：新记忆整合进已有 block（UPDATE - 原地更新）**
+**示例 A：新记忆整合进已有 block（UPDATE - 必须整体重写）**
 **具体操作步骤（工具调用）**：
 1. **read**(\`path\`='Python后端开发.md') → 获取已有内容 A
-2. 分析新记忆 + 已有内容 A → 整合生成新内容 B（\`heat = 旧heat + 1\`）
-3. **write**(\`path\`='Python后端开发.md', \`content\`=B) → **整体重写该场景文件**
-   或 **edit**(\`path\`='Python后端开发.md', \`edits\`=[{\`oldText\`: 旧章节, \`newText\`: 新章节}]) → **局部更新某部分**
+2. 将新记忆与内容 A **全文整合**：被新表述取代的旧内容直接删除，生成完整新内容 B（\`heat = 旧heat + 1\`）
+3. **写入前自查**：估算 B 的总字符数，必须 ≤ 1500 字符；超长则先删减/合并最不重要的旧内容
+4. **write**(\`path\`='Python后端开发.md', \`content\`=B) → **整体重写该场景文件**
+
+❌ 错误做法：用 **edit** 只替换/追加一个章节、保留其余全部旧内容——这是 UPDATE 的禁止路径。
 
 **示例 B：合并多个 block（MERGE — 合并后必须删除旧文件）**
 **具体操作步骤（工具调用）**：
@@ -178,6 +183,7 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 ### 撰写准则 (严格遵守)
 核心部分禁止列表: "用户核心特征"和"核心叙事"必须是连贯的段落，信息要连贯，可以分段。
 叙事弧线: "核心叙事"必须遵循故事结构（情境 -> 行动 -> 结果）。
+单点存储: **同一条事实/决策/偏好只允许出现在一个章节、一个场景文件中。** 整合时若发现同一信息重复出现在多个章节或多个文件中，必须合并为一处，其余位置删除。
 
 ### 热度管理 (Heat Management):
 新建 Block: heat: 1
@@ -188,7 +194,11 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 
 ### 📄 场景文件内容（必须输出）
 
-请你参考这个模板输出 .md 文件的内容或基于已有md进行更新，每个md控制在1500字符内。不要把模板本身放在 Markdown 代码块中，只需直接输出要写入文件的原始文本。
+请你参考这个模板输出 .md 文件的内容或基于已有md进行更新。不要把模板本身放在 Markdown 代码块中，只需直接输出要写入文件的原始文本。
+
+**📏 硬性长度上限：单个场景文件 ≤ 1500 字符（META 与全部章节合计）。这是硬约束，不是建议：**
+- **每次 write 前必须自查**待写内容的总长度；超过 1500 字符时，必须先删减/合并最不重要的旧内容，压缩到上限以内后再写入
+- 发现已有场景文件超限时，即使本批没有新记忆，也应主动将其压缩到 ≤ 1500 字符
 
 > 模板中的中文章节标题（\`## 用户核心特征\` 等）和示例文本仅作为**结构骨架**参考；**实际章节标题与正文必须按上述输出语言书写**（例如英文场景：\`## User Core Traits\`、\`## User Preferences\`、\`## Implicit Signals\`、\`## Core Narrative\` 等）。
 
@@ -201,7 +211,7 @@ heat: [Integer]
 -----META-END-----
 
 ## 用户基础信息
-[可为空，如果没有可不写这节，可按照需求添加更多点，合并和更新方式尽量叠加，有冲突则覆盖]
+[可为空，如果没有可不写这节，可按照需求添加更多点。合并和更新时必须先 read 再整段重写，重复条目直接合并删除，有冲突则覆盖旧值]
    -姓名：
    -职业：
    -居住地：
@@ -227,6 +237,7 @@ heat: [Integer]
 
 ## 演变轨迹
 > [注意] 可以为空，仅记录【用户偏好/性格/重大观念】转变，不记录琐碎、日常更新。当发生冲突时，不要直接覆盖，要记录变化轨迹。
+> [强制] **禁止把过程性事件当作演变记录**（做过什么 ≠ 观念变了）。**同一天/同一时期的多次转变必须合并为一条**，只保留最终状态和综合原因。写入前先读取现有轨迹：新变化若与已有条目指向同一转变，必须更新/合并该条目，**禁止追加重复条目**。
 - [2026-01-10]: 从 "反对加班" 转向 "接受弹性工作"，原因：创业压力（记忆ID: #987）
 
 
@@ -250,8 +261,7 @@ reason: 具体原因描述
 
 **执行文件操作**（必须使用工具）：
    - 使用 **read** 读取需要更新的场景文件
-   - 使用 **write** 创建新文件或**整体重写**已有场景文件
-   - 使用 **edit** 对场景文件进行**局部更新**（如只更新某个章节）
+   - 使用 **write** 创建新文件或**整体重写**已有场景文件（UPDATE 必须整体重写，不要用 edit 局部更新）
    - **删除文件**：使用 **write**(\`path\`=文件名, \`content\`='[DELETED]') 写入删除标记。系统会自动清理这些文件。**重要**：只有 \`[DELETED]\` 标记会触发系统清理。写入空字符串会被系统拒绝，写入 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等标记**不会删除文件**，文件会继续占用场景配额。`;
 }
 
@@ -311,7 +321,7 @@ function buildWorkSceneSystemPrompt(maxScenes: number): string {
 1. **所有文件操作使用相对文件名**（如 \`Agent-Memory-群聊抽取.md\`），当前工作目录已设为场景文件目录。
 2. **read 只能读取用户消息中"已有场景文件清单"列出的文件**，禁止猜测或编造不在清单中的文件名。
 3. **创建新场景文件时**，使用 **write** 工具。参数：\`path\`=文件名, \`content\`=完整内容。
-4. **局部更新场景文件**：使用 **edit** 工具。参数：\`path\`=文件名, \`edits\`=[{\`oldText\`: 旧内容, \`newText\`: 新内容}]。对于大范围重写或结构性变更，建议使用 **read** + **write** 整体重写。
+4. **更新场景文件（UPDATE）必须整体重写**：先 **read** 读取完整现有内容，将新记忆整合进全文后，用 **write** 一次性写入完整新内容。**禁止用 edit 做内容更新（局部替换/追加）**——只改一处而保留其余全部旧内容会让文件只增不减，退化为流水账。edit 工具仅可用于修正错别字级别的微瑕。
 5. **场景索引和系统配置由工程系统自动维护**，你只需专注于操作 \`.md\` 场景文件。
 6. **删除文件的唯一方式**：使用 **write** 工具将文件内容写为 \`[DELETED]\` 标记（\`path\`=文件名, \`content\`=\`[DELETED]\`）。系统会自动清理带有此标记的文件。**禁止**写入空字符串。**禁止**用 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等其他标记替代删除。
 7. **禁止创建报告/整合/汇总类文件**。你的输出必须是有意义的工作场景文件，如 \`Agent-Memory-群聊抽取.md\`、\`后端接口-查询能力.md\`、\`团队记忆-SOP与禁忌.md\`。禁止创建以 BATCH、REPORT、CONSOLIDATION、INTEGRATION、ARCHIVE、SUMMARY 等为前缀的文件。
@@ -398,7 +408,7 @@ function buildWorkSceneSystemPrompt(maxScenes: number): string {
 1. **UPDATE（更新）【首选策略】**
    - 如果存在相关 Block，先用 **read** 读取文件内容，再锁定该 Block 更新。
    - 适合：同一项目、模块、任务、方法、资产的补充或状态变化。
-   - 可使用 **write** 整体重写，或 **edit** 局部替换。
+   - **必须整体重写**：将新记忆与已有内容全文整合后，用 **write** 一次性写入完整新内容。**禁止用 edit 做内容更新（局部替换/追加）**——保留其余全部旧内容会让文件只增不减。写入前自查总长度 ≤ 1500 字符。
 
 2. **MERGE（合并）**
    - 合并后的新 block 应该是概括性更强的工作场景，包含多个相似场景。
@@ -438,7 +448,8 @@ function buildWorkSceneSystemPrompt(maxScenes: number): string {
 3. 每个场景文件应围绕一个清晰的工作方法体系，例如某个 SOP、判断逻辑、禁忌集合或可复用经验。
 4. 不写个人画像，不推断个人性格、偏好或私人状态。
 5. 允许记录工作角色、owner、reviewer、decision maker，但只能服务于说明方法的适用条件。
-6. 每个 md 控制在 1500 字符内，优先保留可复用、可执行的方法论信息。
+6. **硬性长度上限：单个场景文件 ≤ 1500 字符（META 与全部章节合计）**。每次 write 前必须自查总长度，超限时先删减/合并最不重要的旧内容再写入；发现已有文件超限时应主动压缩。优先保留可复用、可执行的方法论信息。
+7. **单点存储**：同一条事实/方法/决策只允许出现在一个章节、一个场景文件中；整合时发现重复必须合并为一处，其余删除。
 
 ---
 
@@ -492,7 +503,7 @@ heat: [Integer]
 [可为空。记录仍需跟进的任务、owner、deadline，以及相关文档、Prompt、PR、Issue、报告等资产。]
 
 ## 演化记录
-[可为空。只记录方法、规则、禁忌或判断逻辑的变化，不记录普通进展。]
+[可为空。只记录方法、规则、禁忌或判断逻辑的变化，不记录普通进展。**禁止把过程性事件当作演化记录**；同一天/同一时期的多次变化必须合并为一条，只保留最终形态和综合原因；新变化与已有条目指向同一变化时必须更新/合并该条目，禁止追加重复条目。]
 
 - [2026-01-10]&#58; 从 "..." 调整为 "..."，原因：...
 
@@ -520,8 +531,7 @@ reason: 具体原因描述
 
 **执行文件操作（必须使用工具）**：
 - 使用 **read** 读取需要更新的场景文件。
-- 使用 **write** 创建新文件或整体重写已有场景文件。
-- 使用 **edit** 对场景文件进行局部更新。
+- 使用 **write** 创建新文件或整体重写已有场景文件（UPDATE 必须整体重写，不要用 edit 局部更新）。
 - **删除文件**：使用 **write**(\`path\`=文件名, \`content\`='[DELETED]') 写入删除标记。系统会自动清理这些文件。**重要**：只有 \`[DELETED]\` 标记会触发系统清理。写入空字符串会被系统拒绝，写入 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等标记不会删除文件。`;
 }
 
