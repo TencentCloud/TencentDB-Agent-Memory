@@ -19,6 +19,41 @@ export interface ChunkOptions {
 const DEFAULT_TARGET = 12_000;
 const DEFAULT_OVERLAP = 400;
 
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** Avoid ending a slice between a UTF-16 surrogate pair. */
+function surrogateSafeEnd(text: string, start: number, end: number): number {
+  if (
+    end > start &&
+    end < text.length &&
+    isHighSurrogate(text.charCodeAt(end - 1)) &&
+    isLowSurrogate(text.charCodeAt(end))
+  ) {
+    return end - 1;
+  }
+  return end;
+}
+
+/** Return up to `length` trailing code units without starting at a low surrogate. */
+function surrogateSafeTail(text: string, length: number): string {
+  let start = Math.max(0, text.length - length);
+  if (
+    start > 0 &&
+    start < text.length &&
+    isHighSurrogate(text.charCodeAt(start - 1)) &&
+    isLowSurrogate(text.charCodeAt(start))
+  ) {
+    start += 1;
+  }
+  return text.slice(start);
+}
+
 /**
  * 把文本切成「切分单位」数组：每个单位尽量是一个完整的 markdown 小节
  * （从一个标题行到下一个标题行之前）。无标题的开头部分作为独立单位。
@@ -55,7 +90,11 @@ function splitIntoUnits(text: string, target: number): string[] {
       if (p.length <= target) {
         units.push(p);
       } else {
-        for (let i = 0; i < p.length; i += target) units.push(p.slice(i, i + target));
+        for (let i = 0; i < p.length;) {
+          const end = surrogateSafeEnd(p, i, Math.min(p.length, i + target));
+          units.push(p.slice(i, end));
+          i = end;
+        }
       }
     }
   }
@@ -83,9 +122,12 @@ export function chunkText(text: string, opts: ChunkOptions = {}): string[] {
     const candidate = buf ? `${buf}\n\n${unit}` : unit;
     if (candidate.length > target && buf) {
       chunks.push(buf);
-      // 重叠：用上一块末尾 overlap 字符作为下一块开头
-      const tail = overlap > 0 ? buf.slice(-overlap) : "";
-      buf = tail ? `${tail}\n\n${unit}` : unit;
+      // 重叠也必须计入单块上限；单位本身接近 target 时只保留可容纳的部分。
+      const separator = "\n\n";
+      const availableOverlap = Math.max(0, target - unit.length - separator.length);
+      const tailLength = Math.min(overlap, availableOverlap);
+      const tail = tailLength > 0 ? surrogateSafeTail(buf, tailLength) : "";
+      buf = tail ? `${tail}${separator}${unit}` : unit;
     } else {
       buf = candidate;
     }
