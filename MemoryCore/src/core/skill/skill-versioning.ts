@@ -314,6 +314,22 @@ export class SkillVersioning {
   //  真删除：一次性删掉某 skill 的所有版本（含 storage 与 shark 上报）
   // ─────────────────────────────────────────────────
 
+  /** Read all versions in stable pages before any mutation of the version table. */
+  private async listAllVersions(skillId: string, teamId?: string): Promise<Skill[]> {
+    const versions: Skill[] = [];
+    for (let offset = 0; ;) {
+      const page = await this.store.listVersions(
+        skillId,
+        teamId,
+        { limit: SkillVersioning.LIST_LIMIT, offset },
+      );
+      versions.push(...page);
+      if (page.length < SkillVersioning.LIST_LIMIT) break;
+      offset += page.length;
+    }
+    return versions;
+  }
+
   /**
    * 物理删除一整个 skill（含所有版本行 + 每个版本的 storage 目录）。
    *
@@ -345,9 +361,9 @@ export class SkillVersioning {
   ): Promise<number> {
     const reportDelta = opts?.reportVdbDelta ?? true;
 
-    // 1. 先拉全量版本元信息（拿 storage_dir）。listVersions 上限 1000,
-    //    单 skill 版本数在 TTL 保护 + 业务上限下远小于此值。
-    const versions = await this.store.listVersions(skillId, teamId, { limit: 1000, offset: 0 });
+    // 1. 先分页拉全量版本元信息（拿 storage_dir）。DB 行随后会整组删除，
+    //    因此不能只读取第一页，否则超出后端单页上限的 storage 目录会变成孤儿。
+    const versions = await this.listAllVersions(skillId, teamId);
 
     // 2. 物理删 DB 行
     const deleted = await this.store.deleteAllVersions(skillId, teamId);
@@ -415,11 +431,7 @@ export class SkillVersioning {
     // ⚠️ 必须显式传大 limit：listVersions 的后端默认是 50 条，不传 limit 会导致
     // 超过 50 版本的 skill 永远收敛不到真实上限（静默失效，不报错）。
     // 1000 是三个后端的硬上限（Math.min(..., 1000)），对齐 deleteSkill:350 的既有写法。
-    const all = await this.store.listVersions(
-      skillId,
-      undefined,
-      { limit: SkillVersioning.LIST_LIMIT, offset: 0 },
-    );
+    const all = await this.listAllVersions(skillId);
     if (!all.length) return;
 
     // archived skill 整组保护
