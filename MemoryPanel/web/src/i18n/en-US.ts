@@ -1755,6 +1755,8 @@ export const enUS = {
   'guide.manual.note.openclaw.0': 'Header preselect required: team-id / agent-id / task-id / conversation-id',
   'guide.manual.note.openclaw.1': 'x-conversation-id identifies the current session — change it for each new conversation',
   'guide.manual.note.openclaw.2': 'x-task-id is required in the current version; use "no-task" when there is none',
+  'guide.manual.note.pi.0': 'Load the pi-plugin extension first; the provider is skipped when TDAI_TEAM_ID / TDAI_AGENT_ID / TDAI_USER_KEY is missing',
+  'guide.manual.note.pi.1': 'The base URL must end with /v1; TDAI_MODEL must match the upstream group model',
 
   // ===== Analytics (Observability) =====
   'menu.analytics': 'Observability',

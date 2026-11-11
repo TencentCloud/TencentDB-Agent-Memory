@@ -1724,6 +1724,8 @@ export const zhCN = {
   'guide.manual.note.openclaw.0': '需 Header 预选：team-id / agent-id / task-id / conversation-id',
   'guide.manual.note.openclaw.1': 'x-conversation-id 标识当前会话，每次新对话需手动更换',
   'guide.manual.note.openclaw.2': 'x-task-id 当前版本必填，无 Task 可填 no-task',
+  'guide.manual.note.pi.0': '需先载入 pi-plugin 扩展；环境变量缺 TDAI_TEAM_ID / TDAI_AGENT_ID / TDAI_USER_KEY 时会跳过注册',
+  'guide.manual.note.pi.1': '接入地址必须带 /v1；TDAI_MODEL 需与上游分组里的模型一致',
 
   // ===== Analytics（可观测） =====
   'menu.analytics': '线上调用情况',
