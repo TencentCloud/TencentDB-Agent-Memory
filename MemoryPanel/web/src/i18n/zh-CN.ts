@@ -802,6 +802,7 @@ export const zhCN = {
   'memory.detail.fixedTo': '固定到 {{name}}',
   'memory.detail.teamPool': '团队记忆池',
   'memory.detail.uploadedBy': '资产归属用户：{{user}}',
+  'memory.detail.ownerHint': '这里显示的是记忆资产的归属用户，不代表全部 L0/L1 对话均由该用户上传；L0/L1 按用户隔离，L2/L3 按团队与 Agent 共享。',
   'memory.detail.updated': '更新：{{time}}',
   'memory.detail.noL0': '该记忆块未保留 L0 对话原文。',
   'memory.detail.noL0InRange': '当前时间范围内没有 L0 对话原文，可调整右上角的时间筛选范围试试。',
