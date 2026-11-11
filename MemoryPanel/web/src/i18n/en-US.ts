@@ -822,6 +822,7 @@ export const enUS = {
   'memory.detail.fixedTo': 'Fixed to {{name}}',
   'memory.detail.teamPool': 'Team Memory Pool',
   'memory.detail.uploadedBy': 'Asset owner: {{user}}',
+  'memory.detail.ownerHint': 'This is the memory asset owner, not necessarily the uploader of every L0/L1 message. L0/L1 are user-scoped; L2/L3 are shared by team and agent.',
   'memory.detail.updated': 'Updated: {{time}}',
   'memory.detail.refresh': 'Refresh',
   'memory.detail.noL0': 'This memory block has no L0 conversation history.',
