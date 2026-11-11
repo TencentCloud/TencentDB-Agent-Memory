@@ -12,7 +12,7 @@
 import { randomBase62 } from "../../../utils/short-id.js";
 import { TcvdbClient, TcvdbApiError, type QueryResponse } from "./client.js";
 import type { BM25LocalEncoder } from "../bm25-local.js";
-import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
+import type { SparseVector } from "#tcvdb-text";
 import type { StoreLogger } from "../types.js";
 import type {
   ISkillStore,
