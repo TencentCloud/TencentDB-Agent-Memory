@@ -5,9 +5,21 @@
  * Maps object keys to local file paths under a configurable root directory.
  */
 
-import { readFile, writeFile, mkdir, readdir, unlink, stat, rm, appendFile } from "node:fs/promises";
+import {
+  readFile,
+  writeFile,
+  mkdir,
+  readdir,
+  unlink,
+  stat,
+  rm,
+  appendFile,
+  open,
+  rename,
+} from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, dirname, sep, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { join, dirname, basename, sep, resolve } from "node:path";
 import type {
   IStorageBackend,
   StorageObject,
@@ -20,6 +32,25 @@ import type {
 import { pageEntries } from "./list-page.js";
 
 const TAG = "[storage][local]";
+
+async function writeFileAtomic(filePath: string, content: string | Buffer): Promise<void> {
+  const directory = dirname(filePath);
+  await mkdir(directory, { recursive: true });
+  const tempPath = join(directory, `.${basename(filePath)}.${randomUUID()}.tmp`);
+
+  try {
+    await writeFile(tempPath, content, { flag: "wx", mode: 0o666 });
+    const handle = await open(tempPath, "r+");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tempPath, filePath);
+  } finally {
+    await unlink(tempPath).catch(() => {});
+  }
+}
 
 export interface LocalStorageBackendOptions {
   /** Root directory for all stored files. */
@@ -90,15 +121,14 @@ export class LocalStorageBackend implements IStorageBackend {
 
   async putObject(key: string, content: string | Buffer, opts?: PutObjectOptions): Promise<void> {
     const filePath = this.resolvePath(key);
-    await mkdir(dirname(filePath), { recursive: true });
 
     const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
-    await writeFile(filePath, buf);
+    await writeFileAtomic(filePath, buf);
 
     // Store metadata as a sidecar .meta.json file if metadata is provided
     if (opts?.contentType || (opts?.metadata && Object.keys(opts.metadata).length > 0)) {
       const metaPath = filePath + ".meta.json";
-      await writeFile(metaPath, JSON.stringify({
+      await writeFileAtomic(metaPath, JSON.stringify({
         contentType: opts.contentType,
         metadata: opts.metadata,
       }));
