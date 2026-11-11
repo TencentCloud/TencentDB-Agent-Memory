@@ -15,6 +15,7 @@ import type { ICredentialStore } from "../source-auth/types.js";
 import type { WikiSourceRegistry } from "./registry.js";
 import type { WikiServiceLike } from "./import-runner.js";
 import { runImport } from "./import-runner.js";
+import { MAX_LINKS_CRAWL_DEPTH } from "./types.js";
 
 export interface WikiSourceRouteDeps {
   registry: WikiSourceRegistry;
@@ -75,8 +76,15 @@ export function createWikiSourceRoutes(deps: WikiSourceRouteDeps): Hono {
       }
       const maxDepth = raw.maxDepth;
       if (maxDepth !== undefined) {
-        if (typeof maxDepth !== "number" || !Number.isInteger(maxDepth) || maxDepth < 1) {
-          return c.json(wrapError(400, "crawl.maxDepth must be an integer >= 1"));
+        if (
+          typeof maxDepth !== "number" ||
+          !Number.isInteger(maxDepth) ||
+          maxDepth < 1 ||
+          maxDepth > MAX_LINKS_CRAWL_DEPTH
+        ) {
+          return c.json(
+            wrapError(400, `crawl.maxDepth must be an integer between 1 and ${MAX_LINKS_CRAWL_DEPTH}`),
+          );
         }
       }
       crawl = {
