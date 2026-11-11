@@ -1,7 +1,7 @@
 {
   "name": "@tencentdb-agent-memory/knowledge-service",
   "version": "0.1.0",
-  "description": "Standalone knowledge service — Code-Graph + LLM-Wiki engine for user-side deployment",
+  "description": "Standalone knowledge service \u2014 Code-Graph + LLM-Wiki engine for user-side deployment",
   "type": "module",
   "main": "./dist/server.js",
   "bin": {
@@ -39,7 +39,7 @@
     "crc-32": "^1.2.2",
     "dayjs": "^1.11.20",
     "dotenv": "^16.4.0",
-    "drizzle-orm": "^0.44.0",
+    "drizzle-orm": "0.45.4",
     "graphology": "^0.26.0",
     "graphology-communities-louvain": "^2.0.2",
     "hono": "^4.7.0",
@@ -50,7 +50,7 @@
     "minisearch": "^7.2.0",
     "officeparser": "^8.1.1",
     "p-limit": "^6.2.0",
-    "simple-git": "^3.36.0",
+    "simple-git": "4.0.2",
     "yaml": "^2.8.3",
     "zod": "^4.4.3"
   },
@@ -94,5 +94,11 @@
       "better-sqlite3",
       "esbuild"
     ]
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.4"
+    },
+    "@opentelemetry/propagator-jaeger": "2.11.0"
   }
 }
