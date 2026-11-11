@@ -8,7 +8,7 @@ import { createLogger } from "../logger.js";
 
 const log = createLogger("error-handler");
 
-export function errorHandler(err: Error, c: Context) {
+export function errorHandler(err: Error, c: Context): Response {
   const msg = err instanceof Error ? err.message : String(err);
   log.error(`unhandled error: ${msg}`);
   return c.json(wrapError(500, msg), 500);

@@ -77,6 +77,7 @@ export function migrate(_db: Db, raw: Database.Database): void {
       sync_error      TEXT,
       stats_json      TEXT,
       version         INTEGER NOT NULL DEFAULT 0,
+      has_last_good   INTEGER NOT NULL DEFAULT 0,
       last_sync_at    TEXT,
       created_at      TEXT NOT NULL,
       updated_at      TEXT NOT NULL,
@@ -185,6 +186,13 @@ export function migrate(_db: Db, raw: Database.Database): void {
   // so we check PRAGMA table_info first.
   addColumnIfMissing(raw, "knowledge_code_graph", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_code_graph", "summary", "TEXT");
+  // Existing ready rows have already committed a serving index. This backfill
+  // runs only when the column is first added; later writes use the explicit flag.
+  raw.transaction(() => {
+    if (addColumnIfMissing(raw, "knowledge_code_graph", "has_last_good", "INTEGER NOT NULL DEFAULT 0")) {
+      raw.exec("UPDATE knowledge_code_graph SET has_last_good = 1 WHERE status = 'ready'");
+    }
+  })();
   addColumnIfMissing(raw, "knowledge_wiki", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "summary", "TEXT");
   // service_id on audit tables is nullable → safe to add to existing dev DBs.
@@ -206,12 +214,13 @@ function addColumnIfMissing(
   table: string,
   column: string,
   type: string,
-): void {
-  if (hasColumn(raw, table, column)) return;
+): boolean {
+  if (hasColumn(raw, table, column)) return false;
   raw.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
+  return true;
 }
 
-/** True iff the given column exists on the table (SQLite PRAGMA-based). */
+/** True iff the given column exists on the table. */
 function hasColumn(raw: Database.Database, table: string, column: string): boolean {
   const cols = raw.pragma(`table_info(${table})`) as Array<{ name: string }>;
   return cols.some((c) => c.name === column);
