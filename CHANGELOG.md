@@ -19,6 +19,15 @@
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
+- **跨平台适配器系统 Round 2** ([#235](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/235) / [#359](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/359))：传输层抽象、Adapter Factory、OpenCode 适配器、测试深挖。
+  - **Transport Layer**：新增 `MemoryClient` 统一接口（`src/adapters/shared/transports/`），支持 HTTP transport（复用 GatewayClient + retry + circuit-breaker）和 InProcess transport（直接调用 TdaiCore，可注入 fake core 零外部依赖测试）。
+  - **Adapter Factory**：`createMemoryClient()` + `createMemoryClientFromEnv()`，通过 `TDAI_ADAPTER_TRANSPORT` 环境变量切换 transport 类型。
+  - **OpenCode 适配器**：新增第 7 个平台适配器（`src/adapters/opencode/`），workspace 隔离 session key，所有操作 fail-open 降级。
+  - **Fake Gateway**：轻量级 fake HTTP server（`__tests__/adapters/helpers/fake-gateway.ts`），适配器集成测试无需启动真实 Gateway 进程。
+  - **Claude Code E2E 深度测试**：13 个测试覆盖完整生命周期（UserPromptSubmit → Stop → SessionEnd）、故障恢复、熔断器状态转换、并发安全。
+  - **幂等写入测试**：12 个测试覆盖 dedup、超时重试、大数据量（10k+ chars）、Unicode/emoji。
+  - **架构文档**：`docs/transport-architecture.md` 中英双语，含 transport 选择指南和错误模型说明。
+  - **测试**：51 个新增测试（factory 16 + E2E 13 + OpenCode 16 + 幂等 6），全量 171/172 通过。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
