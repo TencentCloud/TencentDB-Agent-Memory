@@ -15,6 +15,19 @@ export interface SceneIndexEntry {
 }
 
 /**
+ * Canonical scene order used by both index persistence and prompt rendering.
+ * Heat is the user-facing priority; filename breaks ties deterministically so
+ * filesystem enumeration order cannot change the stable system context.
+ */
+export function compareSceneIndexEntries(a: SceneIndexEntry, b: SceneIndexEntry): number {
+  const heatDiff = b.heat - a.heat;
+  if (heatDiff !== 0) return heatDiff;
+  if (a.filename < b.filename) return -1;
+  if (a.filename > b.filename) return 1;
+  return 0;
+}
+
+/**
  * Read the scene index from disk.
  *
  * The index is written exclusively by syncSceneIndex() (engineering side).
@@ -42,7 +55,7 @@ export async function readSceneIndex(dataDir: string): Promise<SceneIndexEntry[]
         updated: typeof item.updated === "string" ? item.updated : "",
       });
     }
-    return entries;
+    return entries.sort(compareSceneIndexEntries);
   } catch {
     return [];
   }
@@ -57,7 +70,8 @@ export async function writeSceneIndex(
 ): Promise<void> {
   const indexPath = path.join(dataDir, ".metadata", "scene_index.json");
   await fs.mkdir(path.dirname(indexPath), { recursive: true });
-  await fs.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
+  const sortedEntries = [...entries].sort(compareSceneIndexEntries);
+  await fs.writeFile(indexPath, JSON.stringify(sortedEntries, null, 2), "utf-8");
 }
 
 /**
@@ -91,6 +105,7 @@ export async function syncSceneIndex(dataDir: string): Promise<SceneIndexEntry[]
     }
   }
 
-  await writeSceneIndex(dataDir, entries);
-  return entries;
+  const sortedEntries = entries.sort(compareSceneIndexEntries);
+  await writeSceneIndex(dataDir, sortedEntries);
+  return sortedEntries;
 }
