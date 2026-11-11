@@ -1,0 +1,124 @@
+# ────────────────────────────────────────────────────────────────
+# 从任意 ref 构建 TDB 三件套镜像并推送到 ghcr.io（手动触发）
+#
+# 用法（Actions → Build images (ghcr) → Run workflow）：
+#   source_ref: 要构建的源码分支/标签/commit（默认 feat/server_team）
+#   components: core | proxy | hub | all | 逗号列表，如 core,proxy
+#   version:    镜像 tag；留空 = 自动 <ref>-<日期>-<sha>
+#   platforms:  linux/amd64（快）或 linux/amd64,linux/arm64
+#   push:       1=推送到 ghcr；0=只构建不推送
+#
+# 构建逻辑本体在 deploy/dockerhub/publish.sh（上游自带的公开发布脚本，
+# 支持 REGISTRY/NAMESPACE 覆盖、自带 secret-scan）。本 workflow 只负责
+# 把它接上 GitHub runners + ghcr.io。
+# ────────────────────────────────────────────────────────────────
+name: Build images (ghcr)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "源码 ref（分支/标签/commit），默认默认分支"
+        required: true
+        default: "feat/server_team"
+      components:
+        description: "组件：core | proxy | hub | all | 逗号列表，如 core,proxy"
+        required: true
+        default: "core,proxy"
+      version:
+        description: "镜像 tag；留空 = 自动 <ref>-<日期>-<sha>"
+        required: false
+        default: ""
+      platforms:
+        description: "目标平台（amd64 快；含 arm64 会启用 QEMU）"
+        required: true
+        default: "linux/amd64"
+      push:
+        description: "推送到 ghcr？1=推；0=只构建不推"
+        required: true
+        default: "1"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-images
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ inputs.components }} @ ${{ inputs.source_ref }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout source ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Resolve image version
+        id: v
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            SAN=$(printf '%s' "${{ inputs.source_ref }}" | tr '/_ ' '---' | tr -cd 'A-Za-z0-9.-' | cut -c1-40)
+            V="${SAN}-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          fi
+          case "$V" in dev-*) echo "::error::version 不能以 dev- 开头（publish.sh 限制）"; exit 1 ;; esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "resolved version = $V"
+
+      - name: "Set up QEMU (仅 arm64 时需要)"
+        if: ${{ contains(inputs.platforms, 'arm64') }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: "Set up Buildx (builder: multiarch)"
+        uses: docker/setup-buildx-action@v3
+        with:
+          name: multiarch
+
+      - name: Login to ghcr.io
+        if: ${{ inputs.push == '1' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push via deploy/dockerhub/publish.sh
+        env:
+          REGISTRY: ghcr.io
+          VERSION: ${{ steps.v.outputs.version }}
+          PLATFORMS: ${{ inputs.platforms }}
+          PUSH: ${{ inputs.push }}
+        run: |
+          set -euo pipefail
+          NAMESPACE=$(printf '%s' "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          export NAMESPACE
+          TARGETS=()
+          case "${{ inputs.components }}" in
+            all) TARGETS=(memory-core memory-proxy memory-hub) ;;
+            *)
+              IFS=',' read -ra parts <<< "${{ inputs.components }}"
+              for p in "${parts[@]}"; do
+                p=$(echo "$p" | xargs)
+                case "$p" in
+                  core) TARGETS+=(memory-core) ;;
+                  proxy) TARGETS+=(memory-proxy) ;;
+                  hub) TARGETS+=(memory-hub) ;;
+                  memory-core|memory-proxy|memory-hub) TARGETS+=("$p") ;;
+                  *) echo "::error::未知组件: $p"; exit 1 ;;
+                esac
+              done
+              ;;
+          esac
+          echo "targets: ${TARGETS[*]}"
+          echo "version: $VERSION"
+          echo "namespace: $NAMESPACE"
+          cd deploy/dockerhub
+          for t in "${TARGETS[@]}"; do
+            echo "── publish.sh $t ──"
+            ./publish.sh "$t"
+          done
