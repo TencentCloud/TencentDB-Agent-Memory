@@ -4,7 +4,7 @@
  * 见 docs/design/2026-07-12-cos-shark-sts-credential-plan.md §3.2 §3.6。
  *
  * Key 路径：
- *   ttl/<spaceId>/<userId>/<agentSource>/<sessionId>/inj-hook/<hookId>.json
+ *   ttl/<spaceId>/<userId>/<agentSource>/<sessionId>/inj-hook/<storageHookId>.json
  *
  * spaceId 是 P4 (kernel-sts) 新增的隔离段。老 caller 传空字符串时用 `_default` 兜底。
  *

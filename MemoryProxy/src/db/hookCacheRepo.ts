@@ -1,8 +1,10 @@
 /**
  * HookCacheRepo — persistence layer for prewarmed injection blocks.
  *
- * Keyed by (spaceId, userId, agentSource, sessionId, hookId). Blocks are stored as
- * JSON for protocol-agnostic round-trip.
+ * Keyed by (spaceId, userId, agentSource, sessionId, storageHookId). Blocks are
+ * stored as JSON for protocol-agnostic round-trip. `storageHookId` is opaque to
+ * the repo; the injection layer may append a configuration variant while the
+ * registry keeps the logical hook id unchanged.
  *
  * Failure semantics: any DB error degrades silently (returns null / no-op).
  * Callers (pipeline) treat "no cache" as equivalent to `cacheStrategy=none`
