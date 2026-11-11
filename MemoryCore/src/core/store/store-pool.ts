@@ -193,15 +193,20 @@ export class StorePool {
       : `sqlite:${instanceId}`;
     const cached = this.pool.get(instanceId);
 
-    // 命中且配置未变
-    if (cached && cached.configFingerprint === fingerprint) {
+    // 命中且配置未变，且实例没有进入 degraded/no-op 模式
+    if (
+      cached &&
+      cached.configFingerprint === fingerprint &&
+      !cached.pooledStore.store.isDegraded()
+    ) {
       cached.lastAccessedAt = now;
       return cached.pooledStore;
     }
 
-    // 配置变了 → 关闭旧的
+    // 配置变了或缓存实例已 degraded → 关闭旧的
     if (cached) {
-      this.logger.info(`${TAG} Config changed for ${instanceId}, recreating store`);
+      const reason = cached.configFingerprint === fingerprint ? "degraded" : "config changed";
+      this.logger.info(`${TAG} ${reason} for ${instanceId}, recreating store`);
       await this.closeEntry(instanceId, cached);
     }
 
@@ -216,26 +221,34 @@ export class StorePool {
       : backend === "tcvdb" && vdbConfig ? this.createTcvdbStore(vdbConfig)
       : this.createSqliteStore(instanceId);
 
+    const storeDesc =
+      backend === "mongodb" && mongoConfig ? `mongodb ${mongoConfig.endpoint} / ${mongoConfig.database}`
+      : backend === "tcvdb" && vdbConfig ? `${vdbConfig.url} / ${vdbConfig.database}`
+      : `sqlite @ ${this.getSqlitePath(instanceId)}`;
+    // 先初始化；失败或 degraded 的实例不进入可复用池。
+    try {
+      await pooledStore.store.init();
+      if (pooledStore.store.isDegraded()) {
+        throw new Error("store init left store in degraded mode");
+      }
+    } catch (e) {
+      this.logger.warn(`${TAG} Store init failed for ${instanceId}: ${e}`);
+      try {
+        await pooledStore.store.close();
+      } catch (closeErr) {
+        this.logger.warn(`${TAG} Failed to close uninitialized store for ${instanceId}: ${closeErr}`);
+      }
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+
     this.pool.set(instanceId, {
       pooledStore,
       configFingerprint: fingerprint,
       lastAccessedAt: now,
     });
-
-    const storeDesc =
-      backend === "mongodb" && mongoConfig ? `mongodb ${mongoConfig.endpoint} / ${mongoConfig.database}`
-      : backend === "tcvdb" && vdbConfig ? `${vdbConfig.url} / ${vdbConfig.database}`
-      : `sqlite @ ${this.getSqlitePath(instanceId)}`;
     this.logger.info(
       `${TAG} Created ${backend} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
     );
-
-    // 初始化 Store (建表/检查连接)
-    try {
-      await pooledStore.store.init();
-    } catch (e) {
-      this.logger.warn(`${TAG} Store init failed for ${instanceId}: ${e}`);
-    }
 
     return pooledStore;
   }
