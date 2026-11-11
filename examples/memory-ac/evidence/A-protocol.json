@@ -1,0 +1,19 @@
+{
+  "at": "2026-09-14T04:15:31.476Z",
+  "version": "ac-source-removal-v9.1",
+  "parent_sha256": "4eef2fd69c6529785280abd1b529efe319c6057d0bd67d15687c06726976ad27",
+  "script_sha256": "f365cf8d28cc4a777af24c307b1ce64ccea245985d0da63397724ec2d1777932",
+  "algorithm_sha256": "8626244f0e48a5a578603a7bc4f44fcd4cb818e4084f370eac34f40be48fd54a",
+  "all_queries": 168,
+  "reference_unchanged": true,
+  "caliper_fraction": 0.05,
+  "caliper_floor_tokens": 8,
+  "source_selection": "first hash-ranked annotated turn, all its selected chunks; require complete original annotated set; equal removed item count",
+  "caveats": [
+    "Annotation is not a semantic minimal-support gold set.",
+    "Residual prompt length difference reported, not an exact token-matched causal estimate.",
+    "Unmatched and originally incomplete queries retained in eligibility ledger.",
+    "No-memory is diagnostic and does not establish absence of pretraining contamination."
+  ],
+  "human_calibration": false
+}

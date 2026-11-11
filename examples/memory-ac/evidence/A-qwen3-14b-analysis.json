@@ -1,0 +1,223 @@
+{
+  "status": "pass",
+  "reader": "qwen3-14b",
+  "n_all": 168,
+  "n_matched": 34,
+  "matched_fraction": 0.20238095238095238,
+  "human_calibrated": false,
+  "splits": {
+    "all": {
+      "n": 34,
+      "accuracy": {
+        "original": 0.7941176470588235,
+        "support_removed": 0.2647058823529412,
+        "control_removed": 0.7647058823529411
+      },
+      "signals": {
+        "selective_evidence_sensitivity": 17,
+        "nonspecific_sensitivity": 4,
+        "original_answer_failure": 7,
+        "undetermined": 6
+      },
+      "support_vs_control": {
+        "paired_n": 34,
+        "eligible_n": 34,
+        "clusters": 34,
+        "complete_delta": -0.5,
+        "complete_delta_ci95": [
+          -0.7058823529411765,
+          -0.2647058823529412
+        ],
+        "token_reduction": 0.0009120620202174301,
+        "token_reduction_ci95": [
+          -0.0012415349887133775,
+          0.002928043335041375
+        ],
+        "quality_wins": 3,
+        "quality_losses": 20,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "support_vs_original": {
+        "paired_n": 34,
+        "eligible_n": 34,
+        "clusters": 34,
+        "complete_delta": -0.5294117647058824,
+        "complete_delta_ci95": [
+          -0.7352941176470589,
+          -0.3235294117647059
+        ],
+        "token_reduction": 0.13420055985509638,
+        "token_reduction_ci95": [
+          0.12122159357319251,
+          0.1490985510452384
+        ],
+        "quality_wins": 2,
+        "quality_losses": 20,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "control_vs_original": {
+        "paired_n": 34,
+        "eligible_n": 34,
+        "clusters": 34,
+        "complete_delta": -0.029411764705882353,
+        "complete_delta_ci95": [
+          -0.17647058823529413,
+          0.11764705882352941
+        ],
+        "token_reduction": 0.1334101761896921,
+        "token_reduction_ci95": [
+          0.11991263420186427,
+          0.14905903224684314
+        ],
+        "quality_wins": 3,
+        "quality_losses": 4,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "token_gap_p50": 4,
+      "token_gap_max": 8,
+      "source_related_caveat": "Selected for complete annotation and matched removable control; automatic rubric labels, not a population causal or confidence guarantee."
+    },
+    "train": {
+      "n": 19,
+      "accuracy": {
+        "original": 0.7894736842105263,
+        "support_removed": 0.3684210526315789,
+        "control_removed": 0.6842105263157895
+      },
+      "signals": {
+        "selective_evidence_sensitivity": 9,
+        "original_answer_failure": 4,
+        "undetermined": 4,
+        "nonspecific_sensitivity": 2
+      },
+      "support_vs_control": {
+        "paired_n": 19,
+        "eligible_n": 19,
+        "clusters": 19,
+        "complete_delta": -0.3157894736842105,
+        "complete_delta_ci95": [
+          -0.631578947368421,
+          0
+        ],
+        "token_reduction": 0.00028684116170674123,
+        "token_reduction_ci95": [
+          -0.0032043381809219174,
+          0.003166465621230352
+        ],
+        "quality_wins": 3,
+        "quality_losses": 9,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "support_vs_original": {
+        "paired_n": 19,
+        "eligible_n": 19,
+        "clusters": 19,
+        "complete_delta": -0.42105263157894735,
+        "complete_delta_ci95": [
+          -0.6842105263157895,
+          -0.10526315789473684
+        ],
+        "token_reduction": 0.14198670605612995,
+        "token_reduction_ci95": [
+          0.1250957644741162,
+          0.1631661763699802
+        ],
+        "quality_wins": 2,
+        "quality_losses": 10,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "control_vs_original": {
+        "paired_n": 19,
+        "eligible_n": 19,
+        "clusters": 19,
+        "complete_delta": -0.10526315789473684,
+        "complete_delta_ci95": [
+          -0.2631578947368421,
+          0
+        ],
+        "token_reduction": 0.141740521910389,
+        "token_reduction_ci95": [
+          0.12316197423914288,
+          0.16489728388253133
+        ],
+        "quality_wins": 0,
+        "quality_losses": 2,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "token_gap_p50": 5,
+      "token_gap_max": 8,
+      "source_related_caveat": "Selected for complete annotation and matched removable control; automatic rubric labels, not a population causal or confidence guarantee."
+    },
+    "development": {
+      "n": 15,
+      "accuracy": {
+        "original": 0.8,
+        "support_removed": 0.13333333333333333,
+        "control_removed": 0.8666666666666667
+      },
+      "signals": {
+        "selective_evidence_sensitivity": 8,
+        "nonspecific_sensitivity": 2,
+        "undetermined": 2,
+        "original_answer_failure": 3
+      },
+      "support_vs_control": {
+        "paired_n": 15,
+        "eligible_n": 15,
+        "clusters": 15,
+        "complete_delta": -0.7333333333333333,
+        "complete_delta_ci95": [
+          -0.9333333333333333,
+          -0.4666666666666667
+        ],
+        "token_reduction": 0.0016169455897809826,
+        "token_reduction_ci95": [
+          -0.0013091021099644884,
+          0.004545924165719639
+        ],
+        "quality_wins": 0,
+        "quality_losses": 11,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "support_vs_original": {
+        "paired_n": 15,
+        "eligible_n": 15,
+        "clusters": 15,
+        "complete_delta": -0.6666666666666666,
+        "complete_delta_ci95": [
+          -0.8666666666666667,
+          -0.4
+        ],
+        "token_reduction": 0.1252390734575335,
+        "token_reduction_ci95": [
+          0.10762480888120718,
+          0.1482284285118799
+        ],
+        "quality_wins": 0,
+        "quality_losses": 10,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "control_vs_original": {
+        "paired_n": 15,
+        "eligible_n": 15,
+        "clusters": 15,
+        "complete_delta": 0.06666666666666667,
+        "complete_delta_ci95": [
+          -0.2,
+          0.3333333333333333
+        ],
+        "token_reduction": 0.1238223418573351,
+        "token_reduction_ci95": [
+          0.10619696580097715,
+          0.14696822308690016
+        ],
+        "quality_wins": 3,
+        "quality_losses": 2,
+        "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+      },
+      "token_gap_p50": 4,
+      "token_gap_max": 8,
+      "source_related_caveat": "Selected for complete annotation and matched removable control; automatic rubric labels, not a population causal or confidence guarantee."
+    }
+  }
+}

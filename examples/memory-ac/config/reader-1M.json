@@ -1,0 +1,27 @@
+{
+  "version": "ac-v11-qa-1",
+  "configs": {
+    "beam": {
+      "model": "qwen3.5:9b",
+      "digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7",
+      "server_version": "0.34.0",
+      "think": false,
+      "options": {
+        "temperature": 0,
+        "seed": 20260914,
+        "num_ctx": 32768,
+        "num_predict": 2048,
+        "presence_penalty": 0
+      }
+    }
+  },
+  "source_hashes": {
+    "results/slate-feedback-v11/beam-1M/views.jsonl": "28e16db34685bfbf2d44d73fbfd06e0ac501471a0946888c11048f2dc67d3a28",
+    "results/slate-feedback-v11/beam-1M/references.jsonl": "d5971bfa1282f0eecea8637b6ed9f539364c9bcee4d7e4be0667c4ebcada36e5",
+    "scripts/v11-qa.mjs": "908e77ca020e1e4c9704db1878df4e9992b6038820cf79606f38e96cba54aa2e",
+    "src/ac-evaluation-v1-1.mjs": "ceb3c00606acdb4b9d936fadaf2a05e2b9d77845744d191f7797fe69e1942aab"
+  },
+  "failure_policy": "Reader length failure counts as wrong with no retry; Judge does not score partial output. Infrastructure failures stop.",
+  "old_results_read_only": true,
+  "protected_access": false
+}
