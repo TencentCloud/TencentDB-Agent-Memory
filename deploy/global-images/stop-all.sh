@@ -21,6 +21,8 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 MEMORY_CORE_VOLUME="${MEMORY_CORE_VOLUME:-tdai-memory-core-data}"
 PANEL_VOLUME="${PANEL_VOLUME:-tdai-panel-data}"
+# 与 start-proxy.sh 的默认卷名保持一致（proxy session store）。
+PROXY_VOLUME="${PROXY_VOLUME:-tdai-proxy-data}"
 MONGO_LOCAL_CONTAINER="${MONGO_LOCAL_CONTAINER:-tdai-mongo-local}"
 
 for c in tdai-proxy tdai-memory-hub tdai-memory-core "$MONGO_LOCAL_CONTAINER"; do
@@ -34,7 +36,7 @@ done
 
 if (( PURGE == 1 )); then
   warn "--purge 已启用：删除 volume + 网络 + admin key 文件"
-  for v in "$MEMORY_CORE_VOLUME" "$PANEL_VOLUME" mongo-local-db mongo-local-configdb mongo-local-mongot; do
+  for v in "$MEMORY_CORE_VOLUME" "$PANEL_VOLUME" "$PROXY_VOLUME" mongo-local-db mongo-local-configdb mongo-local-mongot; do
     if $DOCKER volume inspect "$v" >/dev/null 2>&1; then
       $DOCKER volume rm "$v" >/dev/null && ok "已删除 volume $v" || warn "删除 volume $v 失败"
     fi
