@@ -1,0 +1,7 @@
+{
+  "name": "memory-tdai",
+  "version": "1.0.0",
+  "description": "Four-layer memory system for Codex CLI (TencentDB Agent Memory)",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}
