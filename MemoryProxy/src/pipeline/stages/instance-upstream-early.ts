@@ -57,9 +57,11 @@ export async function stageInstanceUpstreamEarly(
     config.coreSkill, spaceId, config.instanceUpstream,
   );
   const legacyProxy = isLegacyProxyPath(c.req.path);
+  // P3: 团队身份优先取 x-team-id 请求头（headerAutoSelect 预选 / dsh headless 自动绑定都会带上）
+  const teamId = (c.req.header("x-team-id") ?? "").toLowerCase();
   const earlyConvResolution: Resolution = legacyProxy
     ? { kind: "official", row: null }
-    : resolveForAgent(instanceConfigs, agent ?? "");
+    : resolveForAgent(instanceConfigs, agent ?? "", teamId);
   const earlyExtractRow = resolveExtraction(instanceConfigs);
   const earlySysMatch = hasSystemUsers() ? matchSystemUserByUserId(earlyUserId) : null;
 

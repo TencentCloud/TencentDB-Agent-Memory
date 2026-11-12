@@ -16,6 +16,10 @@ import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { GuidePage } from '@/pages/GuidePage';
 import { AnalyticsPage } from '@/pages/AnalyticsPage';
+import { ModelAdminPage } from '@/pages/ModelAdminPage';
+import { VectorPage } from '@/pages/VectorPage';
+import { SystemStatusPage } from '@/pages/SystemStatusPage';
+import { SessionDefaultPage } from '@/pages/SessionDefaultPage';
 
 export const routes: RouteObject[] = [
   {
@@ -31,6 +35,10 @@ export const routes: RouteObject[] = [
       { path: 'team/members', element: <MembersPage /> },
       { path: 'team/agents', element: <AgentsPage /> },
       { path: 'team/api-keys', element: <ApiKeysPage /> },
+      { path: 'models', element: <ModelAdminPage /> },
+      { path: 'vector', element: <VectorPage /> },
+      { path: 'system', element: <SystemStatusPage /> },
+      { path: 'session-default', element: <SessionDefaultPage /> },
       { path: 'guide', element: <GuidePage /> },
     ],
   },

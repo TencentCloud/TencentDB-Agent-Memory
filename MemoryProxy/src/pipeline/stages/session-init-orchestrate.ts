@@ -150,6 +150,9 @@ export async function stageSessionInitOrchestrate(
     input.kernelUserKey,
   );
   const presetIdentity: PresetIdentity = parsePresetIdentity(input.config.sessionInit, input.headers) ?? {};
+  // v3.4：workspace 维度 —— 客户端可带 x-tdai-workspace-id 区分多工作区（如 DSH 多 profile）
+  const _wsRaw = (input.headers as Record<string, unknown> | undefined)?.["x-tdai-workspace-id"];
+  const workspaceId = typeof _wsRaw === "string" ? _wsRaw.trim().slice(0, 128) : "";
 
   const compositeKey = input.compositeKeyOverride ?? `${input.agentSourceForState}:${input.sessionKey}`;
   const identity = {
@@ -211,6 +214,7 @@ export async function stageSessionInitOrchestrate(
       input.kernelUserKey,
       input.spaceId,
       presetIdentity,
+      workspaceId,
     );
   }
 

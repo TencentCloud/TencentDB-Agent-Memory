@@ -28,15 +28,18 @@ import {
 /** 面向 Router 的输入 (user_id 必传, task_id 必填, 可为 DEFAULT_TASK_SENTINEL)。 */
 export interface SetUserSessionDefaultInput {
   user_id: string;
+  /** 工作区维度；'' = 全局默认。 */
+  workspace_id?: string;
   team_id: string;
   agent_id: string;
   task_id: string;
 }
 
 export interface IUserSessionDefaultService {
-  get(callerId: string, userId: string): Promise<UserSessionDefaultEntity | null>;
+  get(callerId: string, userId: string, workspaceId?: string): Promise<UserSessionDefaultEntity | null>;
+  list(callerId: string, userId: string): Promise<UserSessionDefaultEntity[]>;
   set(callerId: string, input: SetUserSessionDefaultInput): Promise<UserSessionDefaultEntity>;
-  delete(callerId: string, userId: string): Promise<{ ok: true }>;
+  delete(callerId: string, userId: string, workspaceId?: string): Promise<{ ok: true }>;
 }
 
 export class UserSessionDefaultService implements IUserSessionDefaultService {
@@ -45,9 +48,14 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
     private readonly metaService: MetadataService,
   ) {}
 
-  async get(callerId: string, userId: string): Promise<UserSessionDefaultEntity | null> {
+  async get(callerId: string, userId: string, workspaceId: string = ""): Promise<UserSessionDefaultEntity | null> {
     this.metaService.assertCallerIsOwner(userId, callerId);
-    return (await this.store.getUserSessionDefault(userId)) ?? null;
+    return (await this.store.getUserSessionDefault(userId, workspaceId)) ?? null;
+  }
+
+  async list(callerId: string, userId: string): Promise<UserSessionDefaultEntity[]> {
+    this.metaService.assertCallerIsOwner(userId, callerId);
+    return (await this.store.listUserSessionDefaults(userId)) ?? [];
   }
 
   async set(callerId: string, input: SetUserSessionDefaultInput): Promise<UserSessionDefaultEntity> {
@@ -60,7 +68,7 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
     // 先探测"是否已有旧配置"用于区分 create / overwrite, 但**成功日志要等 upsert
     // 之后再打** —— 否则校验失败(team 不存在 / agent 不可见 / task 已结束等)时也
     // 会留下一条 "set create/overwrite" 记录, 排查时会被误导成"已经写进去了"。
-    const existed = await this.store.getUserSessionDefault(input.user_id);
+    const existed = await this.store.getUserSessionDefault(input.user_id, (input.workspace_id ?? "").trim());
 
     // 校验失败统一记 rejected (含具体 error code), 与"写库失败"区分。
     // 这样日志里 set 只有三种终态: create / overwrite / rejected。
@@ -155,6 +163,7 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
     // 5. upsert
     const payload: UpsertUserSessionDefaultInput = {
       user_id: input.user_id,
+      workspace_id: (input.workspace_id ?? "").trim(),
       team_id: input.team_id,
       agent_id: input.agent_id,
       task_id: input.task_id,
@@ -169,16 +178,16 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
     return saved;
   }
 
-  async delete(callerId: string, userId: string): Promise<{ ok: true }> {
+  async delete(callerId: string, userId: string, workspaceId: string = ""): Promise<{ ok: true }> {
     this.metaService.assertCallerIsOwner(userId, callerId);
     // 幂等: 没有配置也返回 ok。日志区分"真的删掉了"与"本来就没有", 便于
     // 排查"用户反馈解除无效"类问题。
-    const existed = await this.store.getUserSessionDefault(userId);
+    const existed = await this.store.getUserSessionDefault(userId, workspaceId);
     console.log(
       `[user-session-default] delete user=${userId} ` +
         `${existed ? "removed" : "no-op (not set)"}`,
     );
-    await this.store.deleteUserSessionDefault(userId);
+    await this.store.deleteUserSessionDefault(userId, workspaceId);
     return { ok: true };
   }
 }
