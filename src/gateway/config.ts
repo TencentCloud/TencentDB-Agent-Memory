@@ -15,6 +15,7 @@ import { getEnv } from "../utils/env.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import { normalizeDisableThinking } from "../utils/no-think-fetch.js";
+import { normalizeUserId } from "../utils/user-id.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
 
 // ============================
@@ -66,6 +67,32 @@ export interface GatewayConfig {
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
   memory: MemoryTdaiConfig;
+  /**
+   * Multi-user routing — one isolated memory store per (teacher) user,
+   * lazily created under `<data.baseDir>/users/<uid>/` when a request carries
+   * a regular user's id. Owners and identity-less traffic keep the main store.
+   */
+  multiUser: {
+    /**
+     * Master switch. Changing the on-disk layout is opt-in: when `false` the
+     * gateway behaves exactly as before (everything routes to the main store).
+     *
+     * **Default: false.**
+     * env: `TDAI_MULTI_USER` (`"true"` / `"1"`)
+     * yaml: `multiUser.enabled`
+     */
+    enabled: boolean;
+    /**
+     * Owner user ids that keep using the main store even when multi-user
+     * routing is enabled (admins, cron identities). Entries are normalized
+     * via `normalizeUserId` at load time; invalid entries are dropped.
+     *
+     * **Default: [].**
+     * env: `TDAI_MULTI_USER_OWNERS` (comma-separated)
+     * yaml: `multiUser.ownerUserIds` (string[] or comma-separated string)
+     */
+    ownerUserIds: string[];
+  };
 }
 
 // ============================
@@ -142,11 +169,16 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const memoryRaw = obj(fileConfig, "memory");
   const memory = parseMemoryConfig(memoryRaw as Record<string, unknown> | undefined);
 
+  // Multi-user routing config
+  const multiUserConfig = obj(fileConfig, "multiUser");
+  const multiUser = resolveMultiUser(multiUserConfig);
+
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
     data: { baseDir },
     llm,
     memory,
+    multiUser,
   };
 
   // Merge overrides one level deep so partial `server`/`data`/`llm` patches
@@ -159,6 +191,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     server: { ...base.server, ...(overrides.server ?? {}) },
     data: { ...base.data, ...(overrides.data ?? {}) },
     llm: { ...base.llm, ...(overrides.llm ?? {}) },
+    multiUser: { ...base.multiUser, ...(overrides.multiUser ?? {}) },
   };
 }
 
@@ -303,6 +336,74 @@ function resolveCorsOrigins(serverConfig: Record<string, unknown>): string[] {
   const envValue = env("TDAI_CORS_ORIGINS");
   if (!envValue) return [];
   return envValue.split(",").map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * Read `multiUser` routing config.
+ *
+ * `enabled`:
+ *   env `TDAI_MULTI_USER` (`"true"` / `"1"`, case-insensitive) takes
+ *   precedence over yaml `multiUser.enabled` (boolean). Default `false`.
+ *
+ * `ownerUserIds`:
+ *   yaml takes precedence over env (same list semantics as `corsOrigins` —
+ *   an explicit yaml list wins even if `TDAI_MULTI_USER_OWNERS` leaks in
+ *   from the shell). Accepted yaml shapes:
+ *     multiUser:
+ *       ownerUserIds: ["userA", "userB"]   # array
+ *       ownerUserIds: "userA,userB"        # comma-separated string
+ *   env: `TDAI_MULTI_USER_OWNERS="userA,userB"`
+ *
+ * Every entry is normalized via `normalizeUserId`; invalid entries are
+ * dropped with a one-line stderr WARN (they are usually operator typos —
+ * silently ignoring them would send an "owner" to a per-user store),
+ * duplicates de-duplicated, so the runtime can trust the list to contain
+ * only valid uids.
+ */
+function resolveMultiUser(src: Record<string, unknown>): GatewayConfig["multiUser"] {
+  // 1. enabled — env first (scalar precedence, like apiKey/port).
+  let enabled = false;
+  const envEnabled = env("TDAI_MULTI_USER");
+  if (envEnabled !== undefined) {
+    const v = envEnabled.toLowerCase();
+    enabled = v === "true" || v === "1";
+  } else if (typeof src["enabled"] === "boolean") {
+    enabled = src["enabled"];
+  }
+
+  // 2. ownerUserIds — yaml takes precedence over env (list precedence,
+  //    like corsOrigins). Empty string from env is treated as "not set".
+  let rawOwners: string[];
+  const yamlOwners = src["ownerUserIds"];
+  if (Array.isArray(yamlOwners)) {
+    rawOwners = yamlOwners
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map(s => s.trim());
+  } else if (typeof yamlOwners === "string" && yamlOwners.trim()) {
+    rawOwners = yamlOwners.split(",").map(s => s.trim()).filter(Boolean);
+  } else {
+    const envOwners = env("TDAI_MULTI_USER_OWNERS");
+    rawOwners = envOwners ? envOwners.split(",").map(s => s.trim()).filter(Boolean) : [];
+  }
+
+  // 3. Normalize + de-duplicate; invalid entries are dropped (fail-closed).
+  const ownerUserIds: string[] = [];
+  for (const raw of rawOwners) {
+    const normalized = normalizeUserId(raw);
+    if (normalized === null) {
+      // Stderr-only — no logger exists at config-load time. Quoting the raw
+      // entry verbatim is safe here (operator config, not attacker-controlled
+      // request input, unlike the type/length-only user_id routing WARN).
+      process.stderr.write(
+        `[tdai-gateway] WARN: dropping invalid multiUser.ownerUserIds entry ` +
+        `(${JSON.stringify(raw)} does not match ^[a-z0-9_-]{1,64}$ after normalization)\n`,
+      );
+      continue;
+    }
+    ownerUserIds.push(normalized);
+  }
+
+  return { enabled, ownerUserIds: [...new Set(ownerUserIds)] };
 }
 
 /**

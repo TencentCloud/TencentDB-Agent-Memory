@@ -63,6 +63,60 @@ jobs:
           path: "*.tgz"
           retention-days: 7
 
+  # ── 3. Node tests (unit + e2e) ─────────────────────────────
+  test-node:
+    name: Tests (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: pnpm install
+        env:
+          MEMORY_TENCENTDB_SKIP_OPENCLAW_PATCH: "1"
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm test (unit)
+        run: pnpm test
+
+      - name: pnpm test:e2e (gateway subprocess + HTTP)
+        run: pnpm test:e2e
+
+  # ── 4. Python tests (Hermes plugin) ────────────────────────
+  test-python:
+    name: Tests (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run plugin tests
+        run: python -m pytest hermes-plugin/memory/memory_tencentdb/tests/ -q
+
   # ── 5. Plugin manifest validation ──────────────────────────
   manifest:
     name: Manifest
