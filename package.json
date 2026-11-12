@@ -7,7 +7,8 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "clean-legacy-recall-injection": "./bin/clean-legacy-recall-injection.mjs"
   },
   "exports": {
     ".": {
@@ -18,7 +19,7 @@
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
     "build:plugin": "tsdown",
-    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory",
+    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory && npm run build:clean-legacy-recall-injection",
     "prepack": "npm run build",
     "build:migrate-sqlite-to-vdb": "tsc -p scripts/migrate-sqlite-to-tcvdb/tsconfig.json --noEmitOnError false",
     "migrate-sqlite-to-tcvdb": "node ./bin/migrate-sqlite-to-tcvdb.mjs",
@@ -29,7 +30,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs",
+    "build:clean-legacy-recall-injection": "tsc -p scripts/clean-legacy-recall-injection/tsconfig.json",
+    "clean:legacy-recall-injection": "node ./bin/clean-legacy-recall-injection.mjs"
   },
   "files": [
     "dist/",
@@ -38,10 +41,12 @@
     "scripts/migrate-sqlite-to-tcvdb/dist/",
     "scripts/export-tencent-vdb/dist/",
     "scripts/read-local-memory/dist/",
+    "scripts/clean-legacy-recall-injection/dist/",
     "scripts/memory-tencentdb-ctl.sh",
     "scripts/install_hermes_memory_tencentdb.sh",
     "scripts/setup-hermes-memory-tencentdb.bat",
     "scripts/postinstall.mjs",
+    "scripts/clean-legacy-recall-injection/README.md",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
@@ -50,6 +55,7 @@
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
+    "docs/legacy-recall-history-cleanup.md",
     "LICENSE",
     "!src/**/*.test.ts",
     "!src/**/*.spec.ts",
