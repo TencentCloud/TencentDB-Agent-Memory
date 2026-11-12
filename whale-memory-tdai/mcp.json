@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "memory-tdai": {
+      "command": "node",
+      "args": [
+        "-e",
+        "import(require('node:url').pathToFileURL((process.env.WHALE_PLUGIN_ROOT||'.')+'/mcp-bridge.js').href)"
+      ]
+    }
+  }
+}
