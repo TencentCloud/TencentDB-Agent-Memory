@@ -177,7 +177,7 @@ openclaw gateway restart
 | `server.apiKey` | `local` | Bearer；standalone 默认可用 `local` |
 | `server.instanceId` | `default` | 经 `x-tdai-service-id` 发送 |
 | `server.teamId` | `default` | v3 isolation `team_id` |
-| `server.agentId` | `default` | v3 isolation `agent_id` |
+| `server.agentId` | `default` | 运行时上下文没有 agent id 时的 v3 isolation `agent_id` 兜底 |
 | `server.userId` | `default` | v3 isolation `user_id` |
 | `server.rejectUnauthorized` | `true` | 是否校验 HTTPS 证书 |
 | `recall.maxResults` | `5` | 每轮最多注入的 L1 条数 |
