@@ -383,25 +383,49 @@ class GatewaySupervisor:
                 # The Gateway is started with start_new_session=True. Terminate
                 # the whole process group so `pnpm -> tsx -> node server.ts`
                 # does not leave the real listener orphaned after the top-level
-                # wrapper exits.
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except Exception:
-                    proc.terminate()
+                # wrapper exits. On Windows os.killpg does not exist, so use
+                # taskkill /T to terminate the process tree instead.
+                self._terminate_tree(proc, force=False)
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 logger.warning("memory-tencentdb Gateway did not exit in 10s, sending SIGKILL")
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    proc.kill()
+                self._terminate_tree(proc, force=True)
                 proc.wait(timeout=5)
         except Exception as e:
             logger.warning("Error shutting down memory-tencentdb Gateway: %s", e)
         finally:
             self._process = None
             self._close_log_handles()
+
+    @staticmethod
+    def _terminate_tree(proc: subprocess.Popen, *, force: bool) -> None:
+        """Terminate the Gateway process tree, platform-aware.
+
+        POSIX: signal the whole process group (the gateway spawns
+        pnpm -> tsx -> node). Windows has no os.killpg; taskkill /T walks the
+        child process tree of the wrapper PID, and /F forces it when the
+        graceful wait already timed out.
+        """
+        if os.name == "nt":
+            # Windows has no os.killpg. taskkill /T walks the child process tree
+            # of the wrapper PID. The graceful form (without /F) only reaches
+            # processes with a window message loop, which node.exe lacks, so we
+            # always force here.
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+            )
+            return
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL if force else signal.SIGTERM)
+        except Exception:
+            # Fall back to signalling just the wrapper process.
+            if force:
+                proc.kill()
+            else:
+                proc.terminate()
 
     @property
     def client(self) -> MemoryTencentdbSdkClient:
