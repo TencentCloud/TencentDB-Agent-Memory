@@ -1,9 +1,9 @@
 import type { AgentContext, ContextBlock, InjectionHook, HookPriority } from "../types.js";
 import { HOOK_PRIORITY } from "../types.js";
-import { getLastUserMessage, getMessageText } from "../context.js";
+import { getLastUserMessage } from "../context.js";
 import type { TdaiClient } from "../../tdai/client.js";
 import { getTdaiIdentity } from "../../tdai/identity.js";
-import { extractUserQueryText } from "../../tdai/recorder.js";
+import { extractUserQueryTextFromBlocks } from "../../common/user-query-extractor.js";
 import type { CoreSkillConfig } from "../../types.js";
 import { getMetadataClient } from "../../meta/client.js";
 import { resolveFixedAssetCtxs } from "./tdai-fixed-asset.js";
@@ -50,8 +50,10 @@ export class TdaiL1RecallInjector implements InjectionHook {
     if (!lastUser) return [];
     // 用「干净的真实 user_query」作检索词，而不是整条原始消息 blob
     // （后者含 <user_info>/<additional_data>/<question_answer> 等噪声，
-    //  会让 FTS5/向量检索命中率极低甚至 0，导致 L1 召不回）。
-    const query = extractUserQueryText(getMessageText(lastUser)).trim().slice(0, 2048);
+    //  会让 FTS5/向量检索命中率极低甚至 0，导致 L1 召不回）。按 block 传入，
+    //  以便丢弃与用户输入合并在同一条消息里的 CC 续聊摘要。
+    const textBlocks = lastUser.blocks.filter((b) => b.type === "text").map((b) => b.content);
+    const query = extractUserQueryTextFromBlocks(textBlocks).trim().slice(0, 2048);
     if (!query) return [];
 
     // 拿 self + 借入 ≤2 个的 ctx 列表
