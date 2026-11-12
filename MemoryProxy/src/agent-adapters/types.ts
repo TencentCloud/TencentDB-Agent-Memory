@@ -21,17 +21,38 @@
  */
 
 /**
- * 客户端类型标识。
+ * Runtime source of truth for built-in agent kinds.
  *
- * 注: 本字段当前只作标签用 —— 全仓库零处按值分支 (`resolveAgentAdapter` /
- * `resolveAgentStrategy` 都按 agentSource 字符串分派, 不读 agentKind)。
- * 因此给 hermes/openclaw 一个诚实值不会改变任何行为。
+ * The union is derived from this list so runtime consumers such as the
+ * whitelist prefix matcher cannot drift from the type-level registry.
  */
-export type AgentKind =
-  | "claude-code" | "codebuddy" | "codex" | "workbuddy"
-  | "dsh" | "opencode" | "pi"
-  | "hermes" | "openclaw"
-  | "unknown";
+export const AGENT_KINDS = [
+  "claude-code",
+  "codebuddy",
+  "codex",
+  "workbuddy",
+  "dsh",
+  "opencode",
+  "pi",
+  "hermes",
+  "openclaw",
+] as const;
+
+/** Client type identifier. */
+export type AgentKind = (typeof AGENT_KINDS)[number] | "unknown";
+
+/** Legacy protocol aliases that are accepted as URL prefixes but are not adapters. */
+export const LEGACY_AGENT_ROUTE_PREFIXES = [
+  "cursor",
+  "anthropic",
+  "openai",
+] as const;
+
+/** Every accepted `/{agent}` route prefix. */
+export const AGENT_ROUTE_PREFIXES = [
+  ...AGENT_KINDS,
+  ...LEGACY_AGENT_ROUTE_PREFIXES,
+] as const;
 
 export type RequestKind = "main" | "fork" | "sidequery" | "auxiliary";
 

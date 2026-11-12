@@ -9,6 +9,8 @@
  * 新增端点时，只需在 `WHITELIST_ENDPOINTS` 增加一条记录即可，无需散点修改。
  */
 
+import { AGENT_ROUTE_PREFIXES } from "../agent-adapters/types.js";
+
 /** 白名单端点元数据。 */
 export interface WhitelistEndpoint {
   /**
@@ -172,8 +174,8 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  * 白名单入口 `/v1/messages`、`/responses` 自身不会被误剥（因为它们不匹配 agent
  * 段——agent 段限定为已知名字）。
  *
- * ⚠ 这份名单必须覆盖 `server.ts` 里所有以 `/{agent}[/{spaceId}]/{v1|...}` 注册路由的
- * agent 段。漏掉一个 agent 时它的路径剥不掉前缀，`matchWhitelistEndpoint` 恒返回 null，
+ * 名单由 `AGENT_KINDS` 与 legacy 协议别名共同生成，不再手工维护 alternation。
+ * 漏掉一个 agent 时它的路径剥不掉前缀，`matchWhitelistEndpoint` 恒返回 null，
  * 而两个调用方对 null 的处理不对称，故障只在一处暴露、另一处完全看不出来：
  *   - `pipeline/stages/resolve-target-full.ts` 有
  *     `?? (protocol === "anthropic" ? "/messages" : "/chat/completions")` 兜底，
@@ -182,9 +184,15 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  *     `handleAuxiliaryEndpoint`）没有兜底，null 直接判成 404 `Unregistered endpoint`，
  *     于是该 agent 在 `server.ts` 里**已显式注册**的 aux 路由（`/v1/messages/count_tokens`、
  *     `/v1/embeddings` 等）永远到不了上游，且启动阶段无任何报错。
- * 新增 agent 路由时同步补这里；更稳妥的做法是让路由注册与本名单共用同一份来源。
+ * 新增内置 agent 时只需扩展 `AGENT_KINDS`，本正则会自动更新。
  */
-const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai|pi|dsh)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
+const AGENT_PREFIX_ALTERNATION = AGENT_ROUTE_PREFIXES
+  .map((prefix) => prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+const AGENT_PREFIX_RE = new RegExp(
+  `^\\/(${AGENT_PREFIX_ALTERNATION})(?:\\/[^/]+)?(?=\\/v1\\/|\\/responses(?:\\/|$)|\\/memories\\/|\\/realtime\\/)`,
+  "i",
+);
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。
