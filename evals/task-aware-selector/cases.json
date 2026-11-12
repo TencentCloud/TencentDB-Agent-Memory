@@ -1,0 +1,68 @@
+[
+  {
+    "name": "database-migration-blocker",
+    "query": "继续数据库迁移，现在应该做什么？",
+    "maxResults": 2,
+    "candidates": [
+      { "memoryId": "f31a94c2", "content": "上一次测试环境迁移已经完成。", "relevance": 0 },
+      { "memoryId": "7bd208a1", "content": "用户倾向于在工作日上午安排变更。", "relevance": 1 },
+      { "memoryId": "c084b76e", "content": "当前阻塞：目标表 amount 字段类型尚未确认。", "relevance": 2 },
+      { "memoryId": "18e5d329", "content": "下一步：联系数据负责人确认字段映射，再生成迁移脚本。", "relevance": 2 }
+    ]
+  },
+  {
+    "name": "pull-request-dco",
+    "query": "这个 PR 下一步怎样才能提交？",
+    "maxResults": 2,
+    "candidates": [
+      { "memoryId": "a9e36d40", "content": "仓库过去关闭过两个远程 rerank PR。", "relevance": 0 },
+      { "memoryId": "2c418bf7", "content": "功能分支已经从 main 创建。", "relevance": 1 },
+      { "memoryId": "d750ca13", "content": "当前提交缺少 Signed-off-by，DCO 检查会失败。", "relevance": 2 },
+      { "memoryId": "68f2a0de", "content": "下一步应运行全量测试并使用 git commit -s。", "relevance": 2 }
+    ]
+  },
+  {
+    "name": "incident-rollback",
+    "query": "生产发布异常，先处理什么？",
+    "maxResults": 2,
+    "candidates": [
+      { "memoryId": "49eb1a73", "content": "三个月前的发布采用了蓝绿部署。", "relevance": 0 },
+      { "memoryId": "bc2f8076", "content": "本次发布的变更说明已经归档。", "relevance": 0 },
+      { "memoryId": "05d4ce91", "content": "当前错误率已超过回滚阈值，且仍在上升。", "relevance": 2 },
+      { "memoryId": "e7138b4a", "content": "值班手册要求先停止放量，然后回滚到上一稳定版本。", "relevance": 2 }
+    ]
+  },
+  {
+    "name": "travel-current-plan",
+    "query": "继续安排这次东京行程，下一项是什么？",
+    "maxResults": 2,
+    "candidates": [
+      { "memoryId": "13cb6a82", "content": "用户去年完成了大阪旅行。", "relevance": 0 },
+      { "memoryId": "8e40d157", "content": "用户通常喜欢靠窗座位。", "relevance": 1 },
+      { "memoryId": "fa719c03", "content": "东京住宿已经预订，但机场交通尚未确定。", "relevance": 2 },
+      { "memoryId": "642de9b5", "content": "下一步需要比较成田特快和机场巴士的时间。", "relevance": 2 }
+    ]
+  },
+  {
+    "name": "api-contract-decision",
+    "query": "继续完成接口设计，需要先确定什么？",
+    "maxResults": 2,
+    "candidates": [
+      { "memoryId": "9b3a1f62", "content": "旧版接口使用 XML，现已停用。", "relevance": 0 },
+      { "memoryId": "37dce084", "content": "用户要求所有错误信息保持简洁。", "relevance": 1 },
+      { "memoryId": "c16f59ab", "content": "未决问题：分页游标是否允许过期。", "relevance": 2 },
+      { "memoryId": "74ae230d", "content": "确定游标生命周期后才能冻结响应 Schema。", "relevance": 2 }
+    ]
+  },
+  {
+    "name": "research-next-evidence",
+    "query": "这个研究结论还缺什么证据？",
+    "maxResults": 2,
+    "candidates": [
+      { "memoryId": "e58c7a14", "content": "早期调研列出了五个候选方向。", "relevance": 0 },
+      { "memoryId": "21ab936f", "content": "初步结果显示新方案可能降低延迟。", "relevance": 1 },
+      { "memoryId": "d60f42be", "content": "当前样本只覆盖短会话，尚未验证长会话。", "relevance": 2 },
+      { "memoryId": "83c1ed75", "content": "下一步需要补充长会话对照实验和 P95 延迟。", "relevance": 2 }
+    ]
+  }
+]

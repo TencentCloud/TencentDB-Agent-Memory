@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "eval:task-selector": "tsx scripts/eval-task-selector.ts",
     "postinstall": "node scripts/postinstall.mjs"
   },
   "files": [
@@ -38,6 +39,8 @@
     "scripts/migrate-sqlite-to-tcvdb/dist/",
     "scripts/export-tencent-vdb/dist/",
     "scripts/read-local-memory/dist/",
+    "scripts/eval-task-selector.ts",
+    "evals/task-aware-selector/",
     "scripts/memory-tencentdb-ctl.sh",
     "scripts/install_hermes_memory_tencentdb.sh",
     "scripts/setup-hermes-memory-tencentdb.bat",
