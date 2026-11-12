@@ -12,6 +12,8 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  /** Callback invoked after cleanup completes. Used to recalibrate checkpoint counters. */
+  onAfterCleanup?: () => Promise<void>;
 }
 
 interface CleanupStats {
@@ -183,6 +185,9 @@ export class LocalMemoryCleaner {
     this.opts.logger?.info(
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
+
+    // Trigger post-cleanup callback (e.g. recalibrate checkpoint counters)
+    await this.opts.onAfterCleanup?.();
 
   }
 
