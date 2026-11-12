@@ -43,6 +43,8 @@ export interface CodeGraphBuildContext {
   dir: string;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
   setInternalStatus: (s: string) => void;
+  /** Aborted when the build exceeds its hard deadline. Workers should check between async stages. */
+  signal: AbortSignal;
   /**
    * 资产归属用户（SSH clone 用它定位该用户的私钥）。
    * 取 `owner_user_id ?? user_id`；两者都缺时为空串（worker 据此报「未配置 SSH 公钥」）。
@@ -111,6 +113,11 @@ export interface CodeGraphServiceOptions {
   localWorker?: CodeGraphWorker;
   queue?: BuildQueue;
   logger?: CodeGraphServiceLogger;
+  /**
+   * Hard deadline for one build. A worker that never settles is marked failed so
+   * the serial queue can continue. Set to 0 to disable. Defaults to 30 minutes.
+   */
+  buildTimeoutMs?: number;
   /** Callback config for TMC status notifications. Optional. */
   callbackConfig?: { tmcCallbackUrl: string };
   /**
@@ -131,6 +138,34 @@ export interface CodeGraphServiceOptions {
    * 由 module.ts 装配时提供（封装 instancePool.delete + closeIndex）。
    */
   releaseInstance?: (codeGraphId: string) => void;
+}
+
+export const DEFAULT_CODE_GRAPH_BUILD_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * Resolve the runtime build deadline from minutes.
+ * 0 disables the deadline; invalid, negative, and non-finite values use the default.
+ */
+export function resolveCodeGraphBuildTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const raw = env.KNOWLEDGE_CODEGRAPH_BUILD_TIMEOUT_MIN;
+  if (raw == null || raw.trim() === "") return DEFAULT_CODE_GRAPH_BUILD_TIMEOUT_MS;
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes < 0) return DEFAULT_CODE_GRAPH_BUILD_TIMEOUT_MS;
+  if (minutes === 0) return 0;
+  return Math.min(minutes, 24 * 60) * 60_000;
+}
+
+class CodeGraphBuildTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    const duration =
+      timeoutMs >= 60_000
+        ? `${Math.round(timeoutMs / 60_000)} minute(s)`
+        : `${timeoutMs}ms`;
+    super(`code-graph build timed out after ${duration}`);
+    this.name = "CodeGraphBuildTimeoutError";
+  }
 }
 
 export interface CreateCodeGraphParams {
@@ -162,6 +197,7 @@ export class CodeGraphService {
   private readonly localWorker?: CodeGraphWorker;
   private readonly queue: BuildQueue;
   private readonly logger?: CodeGraphServiceLogger;
+  private readonly buildTimeoutMs: number;
   private readonly callbackConfig?: { tmcCallbackUrl: string };
   private readonly releaseInstance?: (codeGraphId: string) => void;
   private readonly credentialStore?: ICredentialStore;
@@ -180,6 +216,12 @@ export class CodeGraphService {
     this.worker = opts.worker;
     this.queue = opts.queue ?? new BuildQueue();
     this.logger = opts.logger;
+    this.buildTimeoutMs =
+      opts.buildTimeoutMs == null ||
+      !Number.isFinite(opts.buildTimeoutMs) ||
+      opts.buildTimeoutMs < 0
+        ? DEFAULT_CODE_GRAPH_BUILD_TIMEOUT_MS
+        : opts.buildTimeoutMs;
     this.callbackConfig = opts.callbackConfig;
     this.releaseInstance = opts.releaseInstance;
     this.credentialStore = opts.credentialStore;
@@ -438,18 +480,45 @@ export class CodeGraphService {
     });
     // 本地构建换 worker；未注入 localWorker 时退化到常规 worker（保守：宁可走原路径也不静默跳过）。
     const worker = fromLocalDir ? (this.localWorker ?? this.worker) : this.worker;
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await worker({
+      const workerPromise = Promise.resolve().then(() => worker({
         codeGraphId,
         serviceId,
         teamId,
         repoUrl,
         branch,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
-        setInternalStatus: (s) =>
-          this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),
+        setInternalStatus: (s) => {
+          if (controller.signal.aborted) return;
+          const current = this.store.getCodeGraphById(serviceId, codeGraphId);
+          if (current?.status !== "processing") return;
+          this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
+            status: "processing",
+            internal_status: s,
+          });
+        },
+        signal: controller.signal,
         ownerUserId,
-      });
+      }));
+      const result =
+        this.buildTimeoutMs > 0
+          ? await Promise.race([
+              workerPromise,
+              new Promise<never>((_resolve, reject) => {
+                timeout = setTimeout(() => {
+                  controller.abort();
+                  reject(new CodeGraphBuildTimeoutError(this.buildTimeoutMs));
+                }, this.buildTimeoutMs);
+                timeout.unref?.();
+              }),
+            ])
+          : await workerPromise;
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
       // 结束前检查点：processing 期间被删 → 跳过 ready/audit/回调，做幂等收尾清理。
       if (this.isDeleted(serviceId, codeGraphId)) {
         this.finishCancelled(serviceId, teamId, codeGraphId);
@@ -473,10 +542,23 @@ export class CodeGraphService {
       await this.onBuildComplete(synced, "ready", null, result.stats ?? null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
       if (this.isDeleted(serviceId, codeGraphId)) {
         this.finishCancelled(serviceId, teamId, codeGraphId);
         return;
+      }
+      if (err instanceof CodeGraphBuildTimeoutError) {
+        try {
+          this.releaseInstance?.(codeGraphId);
+        } catch (releaseErr) {
+          this.logger?.warn?.(
+            `[code-graph] release instance after timeout failed ${codeGraphId}: ${String(releaseErr)}`,
+          );
+        }
       }
       this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
         status: "failed",
