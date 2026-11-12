@@ -23,13 +23,21 @@ cd TencentDB-Agent-Memory/deploy/global-images
 ./start-all.sh
 ```
 
-`start-all.sh` 是**交互式**的，运行时会自动完成：
+脚本提供交互式配置流程。
+
+**Windows 10/11**：启动 Docker Desktop 并切到 Linux 容器后，在同一目录的 PowerShell
+5.1 或 7+ 中运行 `.\start-all.ps1`，无需 Git Bash/WSL。若被执行策略阻止，可运行
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-all.ps1`，仅影响本次进程。
+预检用 `.\verify.ps1`，停止并保留数据用 `.\stop-all.ps1`。非交互模式、配置格式和
+其他 Windows 用法见 [Windows 部署说明](./deploy/global-images/README.md#windows-原生-powershell)。
+
+`start-all.sh` 和 `start-all.ps1` 的交互流程如下：
 
 1. `.env` 不存在时，自动从 `.env.example` 复制一份
 2. 引导你填写两组 LLM（回车 = 保留默认值）：
    - `memory 组`：`MEMORY_LLM_BASE_URL` / `MEMORY_LLM_API_KEY` / `MEMORY_LLM_MODEL`（memory + hub 内部用）
    - `proxy 组`：`PROXY_UPSTREAM_URL` / `PROXY_UPSTREAM_API_KEY` / `PROXY_UPSTREAM_MODEL`（proxy 转发上游，可复用 memory 组）
-3. 填完**立即检查 LLM 通路**，不通会提示重新输入，直到通过或主动放弃
+3. 填完**立即检查 LLM 通路**；Bash 入口可重试，PowerShell 入口失败会中止，修改配置后重跑
 4. 把填写值写回 `.env` 持久化
 5. 通过后拉起三件套
 
