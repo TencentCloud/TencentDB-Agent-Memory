@@ -22,6 +22,7 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
+import { RecallCachePolicy, stableHash, type RecallItem } from "./recall-cache-policy.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -32,7 +33,7 @@ const RECALL_LINE_SEPARATOR = "\n";
  * Memory tools usage guide — injected at the end of memory context so the
  * main agent knows how to actively retrieve deeper information.
  */
-const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
+export const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
 ## 记忆工具调用指南
 
 当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
@@ -54,6 +55,20 @@ export interface RecalledMemory {
   type: string;
 }
 
+/** Diagnostics describing what the prompt-cache stability policy did this turn. */
+export interface RecallCacheDiagnostics {
+  /** 1-based recall turn index within the session. */
+  turn: number;
+  /** Reason code from `RecallCachePolicy.resolveSystemContext`. */
+  systemContextReason: string;
+  /** True when a newer system context was deliberately withheld to keep the prefix stable. */
+  systemContextWithheld: boolean;
+  /** Number of recalled memories skipped because they were already injected this session. */
+  dedupSkipped: number;
+  /** Number of memories actually injected after dedup + budget. */
+  injected: number;
+}
+
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
@@ -67,9 +82,11 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Effective search strategy used */
   recallStrategy?: string;
+  /** Prompt-cache stability policy diagnostics (undefined when the policy is off) */
+  cacheDiagnostics?: RecallCacheDiagnostics;
 }
 
-export async function performAutoRecall(params: {
+export interface AutoRecallParams {
   userText: string;
   actorId: string;
   sessionKey: string;
@@ -78,18 +95,38 @@ export async function performAutoRecall(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
-}): Promise<RecallResult | undefined> {
+  /**
+   * Prompt-cache stability policy. Owned by the caller (TdaiCore) so state
+   * survives across turns. Omit to keep the legacy inject-everything behaviour.
+   */
+  cachePolicy?: RecallCachePolicy;
+}
+
+/**
+ * Guard shared between the recall body and its timeout race.
+ *
+ * When the race is lost, the (still running) inner call must not commit
+ * de-duplication bookkeeping: the host already discarded the result, so those
+ * memories were never shown and must remain eligible for a later turn.
+ */
+interface AbandonToken {
+  abandoned: boolean;
+}
+
+export async function performAutoRecall(params: AutoRecallParams): Promise<RecallResult | undefined> {
   const { cfg, logger } = params;
   const timeoutMs = cfg.recall.timeoutMs ?? 5000;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const token: AbandonToken = { abandoned: false };
 
   return Promise.race([
-    performAutoRecallInner(params).finally(() => {
+    performAutoRecallInner(params, token).finally(() => {
       if (timer) clearTimeout(timer);
     }),
     new Promise<undefined>((resolve) => {
       timer = setTimeout(() => {
+        token.abandoned = true;
         logger?.warn?.(
           `${TAG} ⚠️ Recall timed out after ${timeoutMs}ms — skipping memory injection to avoid blocking the user`,
         );
@@ -99,45 +136,49 @@ export async function performAutoRecall(params: {
   ]);
 }
 
-async function performAutoRecallInner(params: {
-  userText: string;
-  actorId: string;
-  sessionKey: string;
-  cfg: MemoryTdaiConfig;
-  pluginDataDir: string;
-  logger?: Logger;
-  vectorStore?: IMemoryStore;
-  embeddingService?: EmbeddingService;
-}): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+async function performAutoRecallInner(
+  params: AutoRecallParams,
+  token: AbandonToken = { abandoned: false },
+): Promise<RecallResult | undefined> {
+  const { userText, sessionKey, cfg, pluginDataDir, logger, vectorStore, embeddingService, cachePolicy } = params;
   const tRecallStart = performance.now();
+
+  const policyActive = !!cachePolicy && cachePolicy.options.enabled;
+  const turnIndex = policyActive ? cachePolicy!.beginTurn(sessionKey) : 0;
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
   const tSearchStart = performance.now();
-  let memoryLines: string[] = [];
+  let memoryItems: RecallItem[] = [];
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
+  let dedupSkipped = 0;
   if (!userText || userText.length === 0) {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
-    memoryLines = searchResult.lines;
+    memoryItems = searchResult.items;
     searchTiming = searchResult.timing;
-    memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
-    // Extract structured RecalledMemory from formatted lines for metric reporting
-    recalledL1Memories = memoryLines.map((line) => {
-      const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-      if (match) {
-        const tag = match[1];
-        const content = match[2].trim();
-        const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-        return { content, score: 0, type: typePart };
-      }
-      return { content: line, score: 0, type: "unknown" };
-    });
+    // Session-level de-duplication runs *before* the character budget so the
+    // budget is spent on genuinely new information rather than on repeats.
+    if (policyActive) {
+      const decision = cachePolicy!.filterMemories(sessionKey, memoryItems);
+      dedupSkipped = decision.skippedIds.length;
+      memoryItems = decision.kept;
+    }
+
+    memoryItems = applyRecallBudget(memoryItems, cfg.recall, logger);
+
+    // Only what survived dedup + budget is recorded as "already shown".
+    if (policyActive && !token.abandoned) {
+      cachePolicy!.commitInjected(sessionKey, memoryItems.map((m) => m.id));
+    }
+
+    // Structured payload for metric reporting — taken straight from the search
+    // results instead of re-parsing the rendered line with a regex.
+    recalledL1Memories = memoryItems.map((m) => ({ content: m.content, score: 0, type: m.type }));
   }
   const tSearchEnd = performance.now();
 
@@ -161,7 +202,9 @@ async function performAutoRecallInner(params: {
   try {
     const sceneIndex = await readSceneIndex(pluginDataDir);
     if (sceneIndex.length > 0) {
-      sceneNavigation = generateSceneNavigation(sceneIndex, pluginDataDir);
+      sceneNavigation = generateSceneNavigation(sceneIndex, pluginDataDir, {
+        stable: policyActive && cachePolicy!.options.stabilizeSceneNavigation,
+      });
       logger?.debug?.(`${TAG} Scene navigation generated: ${sceneIndex.length} scenes`);
     }
   } catch {
@@ -169,11 +212,16 @@ async function performAutoRecallInner(params: {
   }
   const tSceneEnd = performance.now();
 
-  if (memoryLines.length === 0 && !personaContent && !sceneNavigation) {
+  // Nothing fresh to inject. Bail out *unless* the session already holds a
+  // frozen system context: a transient read failure (persona.md being rewritten
+  // by the L3 pipeline, scene index mid-write) must not silently drop the
+  // cached prefix, which would cost a full re-prefill on the next turn.
+  const hasFrozen = policyActive && cachePolicy!.hasFrozenSystemContext(sessionKey);
+  if (memoryItems.length === 0 && !personaContent && !sceneNavigation && !hasFrozen) {
     const totalMs = performance.now() - tRecallStart;
     logger?.info(
       `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
-      `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
+      `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryItems.length},` +
       `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
       `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
       `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms, ` +
@@ -203,28 +251,53 @@ async function performAutoRecallInner(params: {
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
-  if (memoryLines.length > 0) {
+  if (memoryItems.length > 0) {
+    const lines = memoryItems.map((m) => m.line).join(RECALL_LINE_SEPARATOR);
     prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${lines}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
+  //
+  // Under the cache policy the guide is attached whenever *any* stable part
+  // exists, independent of this turn's dynamic recall: making its presence
+  // depend on `prependContext` would toggle the system-prompt tail on and off
+  // between turns, which is exactly the churn we are trying to remove.
+  const attachGuide = policyActive
+    ? stableParts.length > 0
+    : stableParts.length > 0 || !!prependContext;
+  if (attachGuide) {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const freshSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+
+  // Freeze the stable block for the session so background L2/L3 pipeline writes
+  // cannot invalidate the provider's prefix cache mid-conversation.
+  let appendSystemContext = freshSystemContext;
+  let systemContextReason = "policy-off";
+  let systemContextWithheld = false;
+  if (policyActive) {
+    const decision = cachePolicy!.resolveSystemContext(sessionKey, freshSystemContext);
+    appendSystemContext = decision.text;
+    systemContextReason = decision.reason;
+    systemContextWithheld = decision.withheld;
+  }
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
     `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
-    `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
+    `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryItems.length},` +
     `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
     `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
     `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms(${personaContent ? `${personaContent.length}chars` : "none"}), ` +
-    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
+    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})` +
+    (policyActive
+      ? `, cache(turn=${turnIndex},sys=${systemContextReason},dedupSkipped=${dedupSkipped},` +
+        `sysHash=${appendSystemContext ? stableHash(appendSystemContext) : "none"})`
+      : ""),
   );
 
   if (!appendSystemContext && !prependContext) {
@@ -237,6 +310,15 @@ async function performAutoRecallInner(params: {
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
+    cacheDiagnostics: policyActive
+      ? {
+          turn: turnIndex,
+          systemContextReason,
+          systemContextWithheld,
+          dedupSkipped,
+          injected: memoryItems.length,
+        }
+      : undefined,
   };
 }
 
@@ -258,42 +340,24 @@ interface SearchTiming {
 }
 
 interface SearchResult {
-  lines: string[];
+  items: RecallItem[];
   timing: SearchTiming;
 }
 
 /**
- * Search memories and return both formatted lines and structured details.
+ * Build the injectable item for a recalled record.
  *
- * This is a thin wrapper around `searchMemories` that also captures
- * the recalled memory metadata for metric reporting (agent_turn event).
- * It parses the returned formatted lines to extract type/content info.
+ * `id` is the store's record id — the de-duplication key.  When a backend does
+ * not supply one we fall back to a content hash, which is still stable enough
+ * to detect a repeat of the same memory within a session.
  */
-async function searchMemoriesWithDetails(
-  userText: string,
-  pluginDataDir: string,
-  cfg: MemoryTdaiConfig,
-  logger: Logger | undefined,
-  strategy: "keyword" | "embedding" | "hybrid",
-  vectorStore?: IMemoryStore,
-  embeddingService?: EmbeddingService,
-): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
-  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
-
-  // Extract structured data from formatted memory lines.
-  // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
-  const memories: RecalledMemory[] = result.lines.map((line) => {
-    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-    if (match) {
-      const tag = match[1];
-      const content = match[2].trim();
-      const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-      return { content, score: 0, type: typePart };
-    }
-    return { content: line, score: 0, type: "unknown" };
-  });
-
-  return { lines: result.lines, memories, timing: result.timing };
+function toRecallItem(id: string | undefined, m: FormatableMemory): RecallItem {
+  return {
+    id: id && id.length > 0 ? id : `h:${stableHash(`${m.type}\u0000${m.content}`)}`,
+    type: m.type,
+    content: m.content,
+    line: formatMemoryLine(m),
+  };
 }
 
 /**
@@ -314,7 +378,7 @@ async function searchMemories(
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
 ): Promise<SearchResult> {
-  const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
+  const emptyResult: SearchResult = { items: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
   // base64 image data, etc.) so FTS / embedding queries are based on pure user intent.
   const cleanText = sanitizeText(userText);
@@ -361,14 +425,14 @@ async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
-      return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
+      const items = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
+      return { items, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: items.length, embeddingHits: 0 } };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
-      return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
+      const items = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+      return { items, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: items.length } };
     }
 
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
@@ -379,8 +443,8 @@ async function searchMemories(
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
-      const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
-      return { lines, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
+      const items = results.map((r) => toRecallItem(r.record_id, vectorResultToFormatable(r)));
+      return { items, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
@@ -402,7 +466,7 @@ async function searchByKeyword(
   threshold: number,
   logger?: Logger,
   vectorStore?: IMemoryStore,
-): Promise<string[]> {
+): Promise<RecallItem[]> {
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
@@ -420,7 +484,7 @@ async function searchByKeyword(
 
         if (filtered.length > 0) {
           logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
-          return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return filtered.map((r) => toRecallItem(r.record_id, ftsResultToFormatable(r)));
         }
 
         // BM25 absolute scores are unreliable when the document set is very
@@ -431,7 +495,7 @@ async function searchByKeyword(
             `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
             `but document set is small — returning all matched results`,
           );
-          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return ftsResults.slice(0, maxResults).map((r) => toRecallItem(r.record_id, ftsResultToFormatable(r)));
         }
         logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
       }
@@ -455,7 +519,7 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
-): Promise<string[]> {
+): Promise<RecallItem[]> {
   logger?.debug?.(
     `${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`,
   );
@@ -487,7 +551,7 @@ async function searchByEmbedding(
 
   if (filtered.length > 0) {
     logger?.debug?.(`${TAG} [embedding-search] Found ${filtered.length} relevant memories above threshold (from ${vecResults.length} candidates)`);
-    return filtered.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
+    return filtered.map((r) => toRecallItem(r.record_id, vectorResultToFormatable(r)));
   }
 
   logger?.debug?.(`${TAG} [embedding-search] No results above threshold ${threshold}`);
@@ -593,7 +657,7 @@ async function searchHybrid(
 
   if (keywordResults.length === 0 && embeddingResults.length === 0) {
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
-    return { lines: [], timing };
+    return { items: [], timing };
   }
 
   // RRF merge: k=60 is a standard constant from the RRF paper
@@ -638,11 +702,11 @@ async function searchHybrid(
       `${TAG} Hybrid search found ${sorted.length} results ` +
       `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
     );
-    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
+    return { items: sorted.map(([id, { formatable }]) => toRecallItem(id, formatable)), timing };
   }
 
   logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
-  return { lines: [], timing };
+  return { items: [], timing };
 }
 
 // ============================
@@ -706,31 +770,35 @@ function formatMemoryLine(m: FormatableMemory): string {
 }
 
 function applyRecallBudget(
-  lines: string[],
+  items: RecallItem[],
   recall: MemoryTdaiConfig["recall"],
   logger?: Logger,
-): string[] {
+): RecallItem[] {
   const maxCharsPerMemory = normalizeBudgetLimit(recall.maxCharsPerMemory);
   const maxTotalRecallChars = normalizeBudgetLimit(recall.maxTotalRecallChars);
 
   if (!maxCharsPerMemory && !maxTotalRecallChars) {
-    return lines;
+    return items;
   }
 
-  const budgeted: string[] = [];
+  const budgeted: RecallItem[] = [];
   let usedChars = 0;
   let truncatedCount = 0;
   let droppedCount = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  const withLine = (item: RecallItem, line: string): RecallItem =>
+    line === item.line ? item : { ...item, line };
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const line = item.line;
     const perMemoryBounded = maxCharsPerMemory
       ? truncateRecallLine(line, maxCharsPerMemory)
       : line;
     let wasTruncated = perMemoryBounded !== line;
 
     if (!maxTotalRecallChars) {
-      budgeted.push(perMemoryBounded);
+      budgeted.push(withLine(item, perMemoryBounded));
       if (wasTruncated) truncatedCount++;
       continue;
     }
@@ -738,7 +806,7 @@ function applyRecallBudget(
     const separatorChars = budgeted.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
     const remainingChars = maxTotalRecallChars - usedChars - separatorChars;
     if (remainingChars <= 0) {
-      droppedCount += lines.length - i;
+      droppedCount += items.length - i;
       break;
     }
 
@@ -746,23 +814,23 @@ function applyRecallBudget(
       const canFit = remainingChars >= MIN_TRUNCATED_RECALL_LINE_CHARS;
       if (canFit) {
         const totalBounded = truncateRecallLine(perMemoryBounded, remainingChars);
-        budgeted.push(totalBounded);
+        budgeted.push(withLine(item, totalBounded));
         usedChars += separatorChars + totalBounded.length;
         wasTruncated ||= totalBounded !== perMemoryBounded;
         if (wasTruncated) truncatedCount++;
       }
-      droppedCount += lines.length - i - (canFit ? 1 : 0);
+      droppedCount += items.length - i - (canFit ? 1 : 0);
       break;
     }
 
-    budgeted.push(perMemoryBounded);
+    budgeted.push(withLine(item, perMemoryBounded));
     usedChars += separatorChars + perMemoryBounded.length;
     if (wasTruncated) truncatedCount++;
   }
 
   if (truncatedCount > 0 || droppedCount > 0) {
     logger?.debug?.(
-      `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
+      `${TAG} Recall budget applied: input=${items.length}, output=${budgeted.length}, ` +
       `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
       `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
     );
