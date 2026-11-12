@@ -41,6 +41,9 @@ export const SKILLS_DDL = `
     metadata_json   TEXT NOT NULL DEFAULT '{}',
     created_at_ms   INTEGER NOT NULL,
     updated_at_ms   INTEGER NOT NULL,
+    mutation_id     TEXT,
+    mutation_payload_hash TEXT,
+    mutation_request_hash TEXT,
 
     UNIQUE(skill_id, version)
   );
@@ -62,6 +65,26 @@ export const SKILLS_DDL = `
 
   CREATE INDEX IF NOT EXISTS idx_skills_task_audit
     ON skills(task_id, created_at_ms DESC);
+`;
+
+export const SKILL_TOMBSTONES_DDL = `
+  CREATE TABLE IF NOT EXISTS skill_tombstones (
+    team_id TEXT NOT NULL,
+    skill_id TEXT NOT NULL,
+    PRIMARY KEY (team_id, skill_id)
+  );
+`;
+
+/** Durable intent receipts outlive version TTL and physical skill deletion.
+ * They are historical responses, not proof that retired resource bytes still exist. */
+export const SKILL_MUTATION_RECEIPTS_DDL = `
+  CREATE TABLE IF NOT EXISTS skill_mutation_receipts (
+    team_id TEXT NOT NULL,
+    skill_id TEXT NOT NULL,
+    mutation_id TEXT NOT NULL,
+    skill_json TEXT NOT NULL,
+    PRIMARY KEY (team_id, skill_id, mutation_id)
+  );
 `;
 
 // ═════════════════════════════════════════════════════════════════════

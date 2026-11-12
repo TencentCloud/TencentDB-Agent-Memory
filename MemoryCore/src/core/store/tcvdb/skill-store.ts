@@ -9,13 +9,20 @@
  * 接口:   src/core/skill/skill-store.interface.ts
  */
 
+import { randomUUID } from "node:crypto";
+import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
 import { randomBase62 } from "../../../utils/short-id.js";
 import { TcvdbClient, TcvdbApiError, type QueryResponse } from "./client.js";
 import type { BM25LocalEncoder } from "../bm25-local.js";
-import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
 import type { StoreLogger } from "../types.js";
 import type {
   ISkillStore,
+  SkillPublicationCoordinator,
+  SkillPublicationCandidate,
+  SkillDeletionRequest,
+  SkillDeletionReceipt,
+  SkillDeletionResult,
+  SkillDeletionCleanup,
   SkillStoreCapabilities,
   SkillSearchResult,
   ExpiredVersionMeta,
@@ -28,7 +35,7 @@ import type {
   SkillManifestEntry,
   SkillStatus,
 } from "../../skill/types.js";
-import { SkillStoreError } from "../../skill/skill-store.interface.js";
+import { SkillStoreError, assertSkillExpectedVersion, assertSkillMutationMatch, skillPayloadHash, projectPublishedCandidates, lookupSkillMutation, collectSkillDeletionTargets } from "../../skill/skill-store.interface.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────
 
@@ -54,12 +61,14 @@ export interface TcvdbSkillStoreConfig {
   ulid?: () => string;
   /** 注入 now */
   now?: () => number;
+  publicationCoordinator?: SkillPublicationCoordinator;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
 const TAG = "[tcvdb-skill-store]";
 const SKILLS_COLLECTION_SUFFIX = "_skills";
+const PUBLICATION_LIST_FIELDS = ["id", "skill_id", "team_id", "version", "is_head", "status", "mutation_id", "name"];
 
 /** VDB 密集向量索引 (DISK_FLAT, HNSW fallback) */
 const VECTOR_INDEX_DISK_FLAT: Record<string, unknown> = {
@@ -85,7 +94,7 @@ const SKILL_OUTPUT_FIELDS: string[] = [
   "team_id", "owner_agent_id", "user_id", "task_id",
   "name", "description", "content", "content_hash",
   "manifest_json", "storage_dir", "status", "metadata_json",
-  "created_at_ms", "updated_at_ms",
+  "created_at_ms", "updated_at_ms", "mutation_id", "mutation_payload_hash", "mutation_request_hash",
 ];
 
 /** 向量字段名 (VDB 内部名) */
@@ -113,6 +122,7 @@ function isDiskFlatUnsupported(err: unknown): boolean {
 // ─── Implementation ─────────────────────────────────────────────────────
 
 export class TcvdbSkillStore implements ISkillStore {
+  private publicationCoordinator?: SkillPublicationCoordinator;
   private readonly client: TcvdbClient;
   private readonly skillsCollection: string;
   private readonly embeddingModel: string;
@@ -126,6 +136,7 @@ export class TcvdbSkillStore implements ISkillStore {
   private initialized = false;
 
   constructor(config: TcvdbSkillStoreConfig) {
+    this.publicationCoordinator = config.publicationCoordinator;
     this.client = new TcvdbClient({
       url: config.url,
       username: config.username,
@@ -140,6 +151,10 @@ export class TcvdbSkillStore implements ISkillStore {
     this.bm25Encoder = config.bm25Encoder;
     this.ulid = config.ulid ?? defaultUlid;
     this.now = config.now ?? (() => Date.now());
+  }
+
+  setPublicationCoordinator(coordinator: SkillPublicationCoordinator): void {
+    this.publicationCoordinator = coordinator;
   }
 
   // ── ISkillStore: 生命周期 ─────────────────────────────────────────────
@@ -173,133 +188,64 @@ export class TcvdbSkillStore implements ISkillStore {
   // ── ISkillStore: CRUD ─────────────────────────────────────────────────
 
   async appendVersion(input: AppendVersionInput): Promise<Skill> {
+    const coordinator = this.publicationCoordinator;
+    if (!coordinator) throw new SkillStoreError("SKILL_PUBLICATION_COORDINATOR_REQUIRED");
     await this._ensureInit();
-    if (this.degraded) throw new Error("TcvdbSkillStore degraded");
-
+    if (this.degraded) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "store degraded");
     const tid = input.team_id ?? "default";
     const sid = input.skill_id;
-
-    // 1. 查旧 head
-    const head = await this._getHeadAsync(sid, tid);
-
-    // 2. Name 唯一性校验 (无 head → 新 skill, 检查重名)
-    if (!head) {
-      await this._assertNameUnique(input.name, tid, input.owner_agent_id ?? "default", sid);
-    } else {
-      // 已有 history → name 不可变
-      if (head.name !== input.name) {
-        throw new SkillStoreError("SKILL_NAME_DUPLICATE", "name change is not allowed across versions");
+    const replay = input.mutation_id ? await this.getByMutationId(sid, input.mutation_id, tid) : null;
+    if (replay) return assertSkillMutationMatch(replay, input);
+    const head = await this._getHeadAsync(sid, tid, { includeArchived: true });
+    assertSkillExpectedVersion(input, head);
+    if (head && head.name !== input.name) throw new SkillStoreError("SKILL_NAME_DUPLICATE", "name change is not allowed across versions");
+    if (!head) await this._assertNameUnique(input.name, tid, input.owner_agent_id ?? "default", sid);
+    const mutationId = input.mutation_id ?? randomUUID();
+    const payloadHash = skillPayloadHash(input);
+    const committed = await coordinator.execute({
+      scope: { team_id: tid, skill_id: sid }, mutation_id: mutationId, payload_hash: payloadHash,
+      expected_version: input.expected_version ?? head?.version ?? 0,
+      name: input.name, owner_agent_id: head?.owner_agent_id ?? input.owner_agent_id ?? "default",
+      previous_head: head,
+    }, async () => {
+      const ts = this.now();
+      const doc: Record<string, unknown> = {
+        id: this.ulid(), skill_id: sid, version: (head?.version ?? 0) + 1,
+        // This physical candidate is invisible until the authority's pointer CAS.
+        // A late upsert cannot overwrite another attempt or flip an old head.
+        is_head: 1, team_id: tid, owner_agent_id: head?.owner_agent_id ?? input.owner_agent_id ?? "default",
+        user_id: input.user_id ?? "default", task_id: input.task_id ?? "default",
+        name: input.name, description: input.description, content: input.content, content_hash: input.content_hash,
+        manifest_json: JSON.stringify(input.manifest ?? []), storage_dir: input.storage_dir,
+        status: "active", metadata_json: input.metadata_json ?? "{}", created_at_ms: ts, updated_at_ms: ts,
+        mutation_id: mutationId, mutation_payload_hash: payloadHash, mutation_request_hash: input.mutation_request_hash ?? "",
+      };
+      if (this.bm25Encoder) {
+        const sparse = this.bm25Encoder.encodeTexts([input.content]);
+        if (sparse[0]?.length) doc[SPARSE_VECTOR_FIELD] = sparse[0];
       }
-    }
-
-    // 3. 版本唯一性校验
-    const newVersion = head ? head.version + 1 : 1;
-    const existing = await this._queryOneAsync(
-      `skill_id="${this._escape(sid)}" and version=${newVersion} and team_id="${this._escape(tid)}"`,
-    );
-    if (existing) {
-      // 同一版本已存在 → 幂等返回
-      return existing;
-    }
-
-    const ownerForRow = head ? head.owner_agent_id : (input.owner_agent_id ?? "default");
-    const userIdForRow = input.user_id ?? "default";
-    const ts = this.now();
-    const rowId = this.ulid();
-    const storageDir = `skills/${sid}/v${newVersion}`;
-
-    // 4. 构建新行文档
-    const doc: Record<string, unknown> = {
-      id: rowId,
-      skill_id: sid,
-      version: newVersion,
-      is_head: 1,
-      team_id: tid,
-      owner_agent_id: ownerForRow,
-      user_id: userIdForRow,
-      task_id: input.task_id ?? "default",
-      name: input.name,
-      description: input.description,
-      content: input.content,
-      content_hash: input.content_hash,
-      manifest_json: JSON.stringify(input.manifest ?? []),
-      storage_dir: storageDir,
-      status: "active",
-      metadata_json: input.metadata_json ?? "{}",
-      created_at_ms: ts,
-      updated_at_ms: ts,
-    };
-
-    // 5. BM25 稀疏向量编码
-    if (this.bm25Encoder) {
-      const sparse = this.bm25Encoder.encodeTexts([input.content]);
-      if (sparse.length > 0 && sparse[0] && sparse[0].length > 0) {
-        doc[SPARSE_VECTOR_FIELD] = sparse[0];
+      await this.client.upsert(this.skillsCollection, [doc]);
+      return this._docToSkill(doc);
+    });
+    try {
+      // IDs come from this scope and version <= the confirmed publication.
+      // A delayed hint update cannot demote later versions. This is optional
+      // index maintenance, never an authority change or a publication CAS.
+      const candidates = await this.queryAll(`skill_id="${this._escape(sid)}" and team_id="${this._escape(tid)}" and is_head=1 and version<=${committed.version}`);
+      const ids = candidates.filter(doc => doc.id !== committed.row_id).map(doc => String(doc.id));
+      for (let offset = 0; offset < ids.length; offset += 1000) {
+        await this.client.update(this.skillsCollection, { documentIds: ids.slice(offset, offset + 1000), update: { is_head: 0 } });
       }
+    } catch (err) {
+      this.logger?.warn(`${TAG} committed publication retained; head index hint update failed: ${String(err)}`);
     }
+    return committed;
+  }
 
-    // 6. 先 INSERT 新行 (补偿 VDB 无事务：新行先落，旧行后翻)
-    await this.client.upsert(this.skillsCollection, [doc]);
-
-    // 7. CAS 翻旧 head —— 修 2026-09-02 的并发写脏事故。
-    //
-    // 原实现是"读→合并→再 upsert"三步, 中间没锁 —— 单个 extract task 内 LLM 通过
-    // Vercel AI SDK 一次 turn 并发 skill_patch(expected_version=N) N 份, 全都读到
-    // head=vN、全都通过内存 assertVersionFresh、全都到达步骤 6 落新行, 结果 5 行
-    // (skill_id, version=N+1, is_head=1) 一起活着, listSkills(is_head=1) 之后返回
-    // 同一 skill_id N 次。
-    //
-    // 现在改成 VDB /document/update 的服务器侧原子 CAS: filter 精确指定"我期望的
-    // 旧 head"(skill_id + team_id + version=old + is_head=1), 只有第一个到达的
-    // writer 拿到 affectedCount=1, 后到的全部拿 affectedCount=0。后者是 loser,
-    // 立刻 DELETE 步骤 6 刚落下的孤儿新行以还原状态, 并抛 SKILL_VERSION_STALE 让
-    // 上层调用方(skill-versioning 会同时清 COS 目录)与 LLM(拿到错误后携新版本号
-    // 重试)按乐观锁语义处理。
-    if (head) {
-      let affected = 0;
-      try {
-        affected = await this.client.update(this.skillsCollection, {
-          filter:
-            `skill_id="${this._escape(sid)}" and team_id="${this._escape(tid)}" ` +
-            `and version=${head.version} and is_head=1`,
-          update: { is_head: 0 },
-        });
-      } catch (err) {
-        // 网络/VDB 抖动导致 CAS 状态不明 —— 不能贸然当 loser 删自己(万一 CAS 实际
-        // 成功了呢), 也不能贸然当 winner(万一别人先赢了呢)。保留原行为: 记 warn,
-        // 让写路径正常返回, 双 head 由 listSkills 的 version DESC 兜底解决。
-        this.logger?.warn(
-          `${TAG} Head-flip CAS request failed for ${sid} v${head.version}: ` +
-            (err instanceof Error ? err.message : String(err)),
-        );
-        return this._docToSkill(doc);
-      }
-
-      if (affected === 0) {
-        // loser 分支: 我们输了 CAS。步骤 6 刚落下的 v=(head+1) 是"孤儿", 必须清掉
-        // 才能让 listSkills 保持单一 head。DELETE 用 documentIds 走主键定位, 精确
-        // 只删自己那一行, 不会误伤并发 winner 的同版本兄弟行。
-        try {
-          await this.client.deleteDoc(this.skillsCollection, {
-            query: { documentIds: [rowId] },
-          });
-        } catch (delErr) {
-          // 清孤儿失败: 场上会短暂多一行 v=(head+1) 是 is_head=1, 但因为它比 winner
-          // 的时间戳更早, listSkills 按 updated_at_ms DESC 会取到 winner。留 warn,
-          // 供运维/reconciler 兜底真删。
-          this.logger?.warn(
-            `${TAG} Head-flip CAS lost race for ${sid} v${newVersion}, but orphan cleanup failed: ` +
-              (delErr instanceof Error ? delErr.message : String(delErr)),
-          );
-        }
-        throw new SkillStoreError(
-          "SKILL_VERSION_STALE",
-          `head advanced under append(skill_id=${sid}, expected_head_version=${head.version})`,
-        );
-      }
-    }
-
-    return this._docToSkill(doc);
+  async getByMutationId(skillId: string, mutationId: string, teamId = "default"): Promise<Skill | null> {
+    await this._ensureInit();
+    if (this.degraded) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "store degraded");
+    return lookupSkillMutation(this.publicationCoordinator, { skill_id: skillId, team_id: teamId }, mutationId);
   }
 
   async getHead(skillId: string, teamId?: string): Promise<Skill | null> {
@@ -329,26 +275,24 @@ export class TcvdbSkillStore implements ISkillStore {
       ? `skill_id="${this._escape(skillId)}" and version=${version} and team_id="${this._escape(teamId)}"`
       : `skill_id="${this._escape(skillId)}" and version=${version}`;
 
-    return this._queryOneAsync(filter);
+    return (await this.loadPublicationRows(await this.readPublicationPage(filter, 1, 0)))[0] ?? null;
   }
 
   async archiveHead(skillId: string, teamId?: string): Promise<{ archived: boolean }> {
     await this._ensureInit();
-    if (this.degraded) return { archived: false };
-
-    const head = await this._getHeadAsync(skillId, teamId);
+    if (this.degraded) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "store degraded");
+    const head = await this._getHeadAsync(skillId, teamId, { includeArchived: true });
     if (!head) return { archived: false };
-
-    try {
-      await this._updateDocAsync(head.row_id, {
-        status: "archived",
-        updated_at_ms: this.now(),
-      } as Record<string, unknown>);
-      return { archived: true };
-    } catch (err) {
-      this.logger?.warn(`${TAG} archiveHead failed for ${skillId}: ${err instanceof Error ? err.message : String(err)}`);
-      return { archived: false };
+    if (this.publicationCoordinator) {
+      const scope = { skill_id: skillId, team_id: head.team_id };
+      const pointer = await this.publicationCoordinator.getHead(scope);
+      await this.publicationCoordinator.archive(scope, pointer ?? {
+        row_id: head.row_id, version: head.version, mutation_id: head.mutation_id ?? "legacy", status: head.status,
+      }, async () => { /* Candidate immutable; external pointer is status authority. */ }, head);
+    } else {
+      await this._updateDocAsync(head.row_id, { status: "archived", updated_at_ms: this.now() });
     }
+    return { archived: true };
   }
 
   // ── ISkillStore: 查询 ─────────────────────────────────────────────────
@@ -356,81 +300,31 @@ export class TcvdbSkillStore implements ISkillStore {
   async listSkills(opts: ListSkillsOptions): Promise<{ items: Skill[]; total: number }> {
     await this._ensureInit();
     if (this.degraded) return { items: [], total: 0 };
-
-    const conditions: string[] = ["is_head=1"];
+    const conditions = ["is_head=1"];
     if (opts.team_id) conditions.push(`team_id="${this._escape(opts.team_id)}"`);
     if (opts.owner_agent_id) conditions.push(`owner_agent_id="${this._escape(opts.owner_agent_id)}"`);
     if (opts.user_id) conditions.push(`user_id="${this._escape(opts.user_id)}"`);
     if (opts.task_id) conditions.push(`task_id="${this._escape(opts.task_id)}"`);
-
-    const statuses = opts.status?.length ? opts.status : (["active"] as SkillStatus[]);
-    if (statuses.length === 1) {
-      conditions.push(`status="${this._escape(statuses[0])}"`);
-    } else {
-      // VDB 不支持 `IN (...)` 语法，只支持 `OR`；用 `(status="a" or status="b")` 展开。
-      // 之前用 IN 会静默失败（VDB 返回 code=14000），导致 status=["active","archived"] 空结果。
-      conditions.push(
-        `(${statuses.map((s) => `status="${this._escape(s)}"`).join(" or ")})`,
-      );
-    }
-
-    const filter = conditions.join(" and ");
-    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
+    const statuses = opts.status?.length ? opts.status : ["active"];
     const offset = Math.max(opts.offset ?? 0, 0);
-
-    // name_prefix: VDB filter 语法不支持 LIKE / 字符串前缀匹配，
-    // 改为拉取符合其余条件的 head 行后在内存里做前缀过滤再分页。
-    // (head 行数量级小，一次性拉取上限 1000 可接受)
-    if (opts.name_prefix) {
-      const prefix = opts.name_prefix;
-      try {
-        const resp = await this.client.query(this.skillsCollection, {
-          filter,
-          limit: 1000,
-          outputFields: SKILL_OUTPUT_FIELDS,
-          sort: [{ fieldName: "updated_at_ms", direction: "desc" }],
-        });
-        const filtered = (resp.documents ?? [])
-          .map((d) => this._docToSkill(d))
-          .filter((s) => s.name.startsWith(prefix));
-        // 2026-09-02 auto-heal: 前缀过滤完再 dedup, 保证 UI 只看到 winner
-        const deduped = this._autoHealListSkills(filtered);
-        return { items: deduped.slice(offset, offset + limit), total: deduped.length };
-      } catch (err) {
-        this.logger?.warn(`${TAG} listSkills(name_prefix) query failed: ${err instanceof Error ? err.message : String(err)}`);
-        return { items: [], total: 0 };
-      }
-    }
-
-    let total: number;
-    try {
-      total = await this.client.count(this.skillsCollection, filter);
-    } catch {
-      total = 0;
-    }
-
-    let rows: Skill[] = [];
-    try {
-      const resp = await this.client.query(this.skillsCollection, {
-        filter,
-        limit,
-        offset,
-        outputFields: SKILL_OUTPUT_FIELDS,
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
+    const selected: SkillPublicationCandidate[] = [];
+    let total = 0;
+    for (let scanOffset = 0; ; scanOffset += 256) {
+      const response = await this.client.query(this.skillsCollection, {
+        filter: conditions.join(" and "), offset: scanOffset, limit: 256, outputFields: PUBLICATION_LIST_FIELDS,
         sort: [{ fieldName: "updated_at_ms", direction: "desc" }],
       });
-      rows = (resp.documents ?? []).map((d) => this._docToSkill(d));
-    } catch (err) {
-      this.logger?.warn(`${TAG} listSkills query failed: ${err instanceof Error ? err.message : String(err)}`);
+      const docs = response.documents ?? [];
+      const heads = await projectPublishedCandidates(docs.map(doc => this.publicationCandidate(doc)), this.publicationCoordinator, true);
+      for (const head of heads) {
+        if (!statuses.includes(head.status) || (opts.name_prefix && !head.name.startsWith(opts.name_prefix))) continue;
+        if (total >= offset && selected.length < limit) selected.push(head);
+        total++;
+      }
+      if (docs.length < 256) break;
     }
-
-    // 2026-09-02 auto-heal: 应用层 group-by skill_id 挑 winner + fire-and-forget
-    // demote loser。历史脏数据 (同一 skill_id 多行 is_head=1) 在 UI 一次刷新就自愈。
-    // 详见 _autoHealListSkills 注释。
-    const deduped = this._autoHealListSkills(rows);
-    // total 修正: 本页物理行 - 本页去掉的 loser 数。分页跨脏组时略偏, fire-and-forget
-    // 完成 + VDB filter 索引刷新后下次读自动收敛。
-    const adjustedTotal = Math.max(0, total - (rows.length - deduped.length));
-    return { items: deduped, total: adjustedTotal };
+    return { items: await this.loadPublicationRows(selected), total };
   }
 
   async searchSkills(opts: SearchSkillsOptions): Promise<SkillSearchResult[]> {
@@ -442,14 +336,17 @@ export class TcvdbSkillStore implements ISkillStore {
     const mode = opts.mode ?? "bm25";
 
     try {
-      if (mode === "hybrid" && this.bm25Encoder) {
-        return this._searchHybridAsync(opts.query, topK, filter);
+      // TCVDB search has no stable continuation token. Re-run with a bounded
+      // larger candidate set when old/prepared rows occupy the initial topK.
+      for (let candidateLimit = Math.max(topK * 4, 32); ; candidateLimit = Math.min(candidateLimit * 2, 1000)) {
+        const candidates = mode === "hybrid" && this.bm25Encoder
+          ? await this._searchHybridAsync(opts.query, candidateLimit, filter)
+          : mode === "embedding"
+            ? await this._searchEmbeddingAsync(opts.query, candidateLimit, filter)
+            : await this._searchBm25Async(opts.query, candidateLimit, filter);
+        const hits = await this.publishedSearch(candidates);
+        if (hits.length >= topK || candidates.length < candidateLimit || candidateLimit === 1000) return hits.slice(0, topK);
       }
-      if (mode === "embedding") {
-        return this._searchEmbeddingAsync(opts.query, topK, filter);
-      }
-      // bm25 (default)
-      return this._searchBm25Async(opts.query, topK, filter);
     } catch (err) {
       this.logger?.warn(`${TAG} searchSkills failed: ${err instanceof Error ? err.message : String(err)}`);
       return [];
@@ -471,33 +368,22 @@ export class TcvdbSkillStore implements ISkillStore {
     const limit = Math.min(Math.max(pagination?.limit ?? 50, 1), 1000);
     const offset = Math.max(pagination?.offset ?? 0, 0);
 
-    try {
-      const resp = await this.client.query(this.skillsCollection, {
-        filter,
-        limit,
-        offset,
-        outputFields: SKILL_OUTPUT_FIELDS,
-        sort: [{ fieldName: "version", direction: "desc" }],
-      });
-      return (resp.documents ?? []).map((d) => this._docToSkill(d));
-    } catch (err) {
-      this.logger?.warn(`${TAG} listVersions query failed: ${err instanceof Error ? err.message : String(err)}`);
-      return [];
-    }
+    return this.loadPublicationRows(await this.readPublicationPage(filter, limit, offset));
   }
 
   async countVersions(skillId: string, teamId?: string): Promise<number> {
     await this._ensureInit();
     if (this.degraded) return 0;
-
-    const filter = teamId
-      ? `skill_id="${this._escape(skillId)}" and team_id="${this._escape(teamId)}"`
-      : `skill_id="${this._escape(skillId)}"`;
-
-    try {
-      return await this.client.count(this.skillsCollection, filter);
-    } catch {
-      return 0;
+    const filter = `skill_id="${this._escape(skillId)}"` + (teamId ? ` and team_id="${this._escape(teamId)}"` : "");
+    let count = 0;
+    for (let offset = 0; ; offset += 256) {
+      const response = await this.client.query(this.skillsCollection, {
+        filter, offset, limit: 256, outputFields: PUBLICATION_LIST_FIELDS,
+        sort: [{ fieldName: "version", direction: "desc" }],
+      });
+      const docs = response.documents ?? [];
+      count += (await projectPublishedCandidates(docs.map(doc => this.publicationCandidate(doc)), this.publicationCoordinator)).length;
+      if (docs.length < 256) return count;
     }
   }
 
@@ -506,62 +392,73 @@ export class TcvdbSkillStore implements ISkillStore {
   async findExpiredVersions(cutoffMs: number): Promise<ExpiredVersionMeta[]> {
     await this._ensureInit();
     if (this.degraded) return [];
-
-    try {
-      const resp = await this.client.query(this.skillsCollection, {
-        filter: `is_head=0 and status="active" and created_at_ms<${cutoffMs}`,
-        limit: 10000,
-        outputFields: ["skill_id", "version", "is_head", "status", "storage_dir", "created_at_ms"],
-        // VDB 要求 sort 字段为 uint64；skill_id 是 string 不可排序（code 15143）。
-        // 用 created_at_ms 升序（先清最老的），符合 TTL 清理语义。
-        sort: [{ fieldName: "created_at_ms", direction: "asc" }],
-      });
-      return (resp.documents ?? []).map((d) => ({
-        skill_id: d.skill_id as string,
-        version: d.version as number,
-        is_head: (d.is_head as number) === 1,
-        status: d.status as SkillStatus,
-        storage_dir: d.storage_dir as string,
-        created_at_ms: d.created_at_ms as number,
-      }));
-    } catch (err) {
-      this.logger?.warn(`${TAG} findExpiredVersions failed: ${err instanceof Error ? err.message : String(err)}`);
-      return [];
-    }
+    const rows = await this.publishedRows(await this.queryAll(`created_at_ms<${cutoffMs}`));
+    return rows.filter(row => !row.is_head && row.status === "active" && row.created_at_ms < cutoffMs);
   }
 
   async deleteVersion(skillId: string, version: number): Promise<boolean> {
     await this._ensureInit();
-    if (this.degraded) return false;
-
-    try {
-      const filter = `skill_id="${this._escape(skillId)}" and version=${version} and is_head=0`;
-      const affected = await this.client.deleteDoc(this.skillsCollection, { query: { filter } });
-      return affected > 0;
-    } catch (err) {
-      this.logger?.warn(`${TAG} deleteVersion failed: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
-    }
+    if (this.degraded) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "store degraded");
+    const row = await this.getByVersion(skillId, version);
+    if (!row || row.is_head) return false;
+    return (await this.client.deleteDoc(this.skillsCollection, { query: { documentIds: [row.row_id] } })) > 0;
   }
 
-  /**
-   * 物理删除同 skill_id 下的所有版本行。`SkillCore.delete` 走此路径。
-   * 权限校验由调用方 SkillCore 负责；本方法只按 (skill_id, team_id) 一次 deleteDoc。
-   */
+  async getDeletionReceipt(skillId: string, teamId?: string): Promise<SkillDeletionReceipt | null> {
+    await this._ensureInit();
+    if (this.degraded) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "store degraded");
+    if (!this.publicationCoordinator?.getDeletionReceipt) throw new SkillStoreError("SKILL_PUBLICATION_COORDINATOR_REQUIRED", "durable deletion recovery is unavailable");
+    return this.publicationCoordinator.getDeletionReceipt({ skill_id: skillId, team_id: teamId });
+  }
+
+  async deleteWithReceipt(request: SkillDeletionRequest, cleanup: SkillDeletionCleanup, options?: { complete?: boolean }): Promise<SkillDeletionResult> {
+    await this._ensureInit();
+    if (this.degraded) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "store degraded");
+    const coordinator = this.publicationCoordinator;
+    if (!coordinator?.deleteWithReceipt || !coordinator.getDeletionReceipt) throw new SkillStoreError("SKILL_PUBLICATION_COORDINATOR_REQUIRED", "durable deletion recovery is unavailable");
+    const head = await this._getHeadAsync(request.scope.skill_id, request.scope.team_id, { includeArchived: true });
+    const retired = head ? null : await coordinator.getDeletionReceipt(request.scope);
+    if (!head && !retired) throw new SkillStoreError("SKILL_NOT_FOUND");
+    if ((head?.owner_agent_id ?? retired?.owner_agent_id) !== request.owner_agent_id) throw new SkillStoreError("SKILL_NOT_OWNER");
+    const verified = { ...request, ...(head ? { previous_head: head } : {}) };
+    return coordinator.deleteWithReceipt(verified, guard => collectSkillDeletionTargets(this, verified, guard), async (receipt, guard) => {
+      let deleted = 0;
+      for (let offset = 0; offset < receipt.targets.length; offset += 256) {
+        await guard();
+        const ids = receipt.targets.slice(offset, offset + 256).map(target => target.row_id);
+        // TCVDB's primary-key deletion has no owner predicate. Validate any
+        // remaining immutable rows before issuing the exact frozen IDs.
+        const current = await this.client.query(this.skillsCollection, { documentIds: ids, limit: ids.length,
+          outputFields: ["id", "skill_id", "team_id", "owner_agent_id"] });
+        if ((current.documents ?? []).some(doc => doc.skill_id !== receipt.scope.skill_id || doc.team_id !== receipt.scope.team_id || doc.owner_agent_id !== receipt.owner_agent_id)) {
+          throw new SkillStoreError("SKILL_NOT_OWNER", "deletion target ownership changed");
+        }
+        await guard();
+        deleted += await this.client.deleteDoc(this.skillsCollection, { query: { documentIds: ids } });
+      }
+      await guard();
+      await cleanup(receipt, guard);
+      return deleted;
+    }, options);
+  }
+
   async deleteAllVersions(skillId: string, teamId?: string): Promise<number> {
     await this._ensureInit();
-    if (this.degraded) return 0;
-
-    try {
-      const filter = teamId
-        ? `skill_id="${this._escape(skillId)}" and team_id="${this._escape(teamId)}"`
-        : `skill_id="${this._escape(skillId)}"`;
-      const affected = await this.client.deleteDoc(this.skillsCollection, { query: { filter } });
-      return affected;
-    } catch (err) {
-      this.logger?.warn(`${TAG} deleteAllVersions failed for ${skillId}: ${err instanceof Error ? err.message : String(err)}`);
-      return 0;
+    if (this.degraded) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "store degraded");
+    const baseFilter = `skill_id="${this._escape(skillId)}"`;
+    const docs = teamId ? [] : await this.queryAll(baseFilter);
+    const teams = teamId ? [teamId] : [...new Set(docs.map(doc => String(doc.team_id)))];
+    let count = 0;
+    for (const tid of teams) {
+      const head = await this.getHeadIncludingArchived(skillId, tid);
+      const retired = head ? null : await this.getDeletionReceipt(skillId, tid);
+      if (!head && !retired) continue;
+      const expected = head ? { row_id: head.row_id, version: head.version, mutation_id: head.mutation_id ?? `legacy:${head.row_id}`, status: head.status } : retired!.original_head;
+      const result = await this.deleteWithReceipt({ scope: { skill_id: skillId, team_id: tid }, owner_agent_id: head?.owner_agent_id ?? retired!.owner_agent_id,
+        expected_head: expected, ...(head ? { previous_head: head } : {}) }, async () => {}, { complete: false });
+      count += result.deleted_rows;
     }
+    return count;
   }
 
   // ─── Private: Init ────────────────────────────────────────────────────
@@ -648,131 +545,100 @@ export class TcvdbSkillStore implements ISkillStore {
    * 查 head 行。默认强制 `status="active"`；`includeArchived=true` 时不加 status 过滤，
    * 供 `getHeadIncludingArchived` 使用（archived head 的幂等回读 / 补偿任务）。
    *
-   * 2026-09-02 read-time auto-heal: 从 limit=1 提升到 100, 侦测同一 skill_id
-   * 多 head 脏数据 (append-race 遗留), 应用层挑 winner + fire-and-forget demote
-   * 其他 loser。参见 _pickHeadAndAutoHeal 注释。
+   * Controlled skills resolve by exact authoritative row ID. Legacy candidates
+   * are projected through receipts before version ordering; reads never mutate
+   * candidate rows or elect a winner using timestamps.
    */
   private async _getHeadAsync(
     skillId: string,
     teamId?: string,
     opts?: { includeArchived?: boolean },
   ): Promise<Skill | null> {
-    const statusClause = opts?.includeArchived ? "" : ' and status="active"';
-    const filter = teamId
-      ? `skill_id="${this._escape(skillId)}" and team_id="${this._escape(teamId)}" and is_head=1${statusClause}`
-      : `skill_id="${this._escape(skillId)}" and is_head=1${statusClause}`;
+    if (teamId && this.publicationCoordinator) {
+      const pointer = await this.publicationCoordinator.getHead({ skill_id: skillId, team_id: teamId });
+      if (pointer === null) return null;
+      if (pointer) {
+        const resp = await this.client.query(this.skillsCollection, { documentIds: [pointer.row_id], limit: 1, outputFields: SKILL_OUTPUT_FIELDS });
+        const doc = resp.documents?.[0];
+        if (!doc || doc.skill_id !== skillId || doc.team_id !== teamId) throw new SkillStoreError("SKILL_PUBLICATION_UNKNOWN", "authoritative head row unavailable");
+        const row = { ...this._docToSkill(doc), is_head: true, status: pointer.status ?? (doc.status as SkillStatus) };
+        return !opts?.includeArchived && row.status !== "active" ? null : row;
+      }
+    }
+    const filter = `skill_id="${this._escape(skillId)}" and is_head=1` + (teamId ? ` and team_id="${this._escape(teamId)}"` : "");
+    const rows = await this.publishedRows(await this.queryAll(filter));
+    return rows.filter(row => row.is_head && (opts?.includeArchived || row.status === "active"))
+      .sort((a, b) => b.version - a.version || b.updated_at_ms - a.updated_at_ms || a.row_id.localeCompare(b.row_id))[0] ?? null;
+  }
 
-    try {
+  private async queryAll(filter: string): Promise<Record<string, unknown>[]> {
+    const docs: Record<string, unknown>[] = [];
+    for (let offset = 0; ; offset += 1000) {
       const resp = await this.client.query(this.skillsCollection, {
-        filter,
-        // clean skill 只有 1 行；脏 skill 生产实际观察最大 5 行，100 是防御性上限。
-        // 顺带保证下面 tiebreaker 在极端脏数据下仍有确定 winner。
-        limit: 100,
-        outputFields: SKILL_OUTPUT_FIELDS,
+        filter, offset, limit: 1000, outputFields: SKILL_OUTPUT_FIELDS,
+        sort: [{ fieldName: "created_at_ms", direction: "asc" }],
       });
-      const rows = (resp.documents ?? []).map((d) => this._docToSkill(d));
-      return this._pickHeadAndAutoHeal(rows);
-    } catch (err) {
-      this.logger?.warn(`${TAG} getHead failed: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+      const page = resp.documents ?? [];
+      docs.push(...page);
+      if (page.length < 1000) return docs;
     }
   }
 
+  private publicationCandidate(doc: Record<string, unknown>): SkillPublicationCandidate & { name: string } {
+    return {
+      row_id: String(doc.id ?? doc.row_id), skill_id: String(doc.skill_id), team_id: String(doc.team_id),
+      version: Number(doc.version), is_head: doc.is_head === 1, status: (doc.status as SkillStatus) ?? "active",
+      mutation_id: typeof doc.mutation_id === "string" ? doc.mutation_id : undefined, name: String(doc.name ?? ""),
+    };
+  }
 
-  // ─── Read-time auto-heal (2026-09-02) ────────────────────────────────
-  // 处理"同 skill_id 多 head is_head=1"的历史脏数据（append-race 遗留）。
-  // 每次读 head / list 时侦测 + 挑 winner + fire-and-forget demote loser。
-  // - winner 选择完全确定性: version DESC → updated_at_ms DESC → row_id ASC。
-  //   最后一层 row_id 保证并发 reader 挑同一个 winner, 彼此的 demote 集合
-  //   不打架, 收敛无歧义。
-  // - demote 走 documentIds 精确定位, 不受 filter 表达式在时间戳并列 / VDB
-  //   filter-index 异步刷新的影响。
-  // - 失败(网络/VDB 抖动)只 warn, 主流程返回 winner 不受阻; 下次读会再检测
-  //   再尝试, 幂等收敛。
-  //
-  // TTL 兜底: loser 变成 (v=N, is_head=0), 后续版本推进 → v=N 落出
-  // KEEP_RECENT 保护窗 + 时间过 cutoff 时, deleteVersion(sid, N) 一次性删掉
-  // 所有 (skill_id=X, version=N, is_head=0) 行(winner 那时也已 demote), 彻底
-  // 收敛。极端场景 (skill 从此不动) loser 停在磁盘上, 但不进任何读视图。
+  private async readPublicationPage(filter: string, limit: number, offset: number): Promise<SkillPublicationCandidate[]> {
+    const selected: SkillPublicationCandidate[] = [];
+    let visible = 0;
+    for (let scanOffset = 0; ; scanOffset += 256) {
+      const response = await this.client.query(this.skillsCollection, {
+        filter, offset: scanOffset, limit: 256, outputFields: PUBLICATION_LIST_FIELDS,
+        sort: [{ fieldName: "version", direction: "desc" }],
+      });
+      const docs = response.documents ?? [];
+      for (let index = 0; index < docs.length;) {
+        const size = visible < offset ? 16 : Math.min(16, limit - selected.length);
+        const candidates = await projectPublishedCandidates(docs.slice(index, index + size).map(doc => this.publicationCandidate(doc)), this.publicationCoordinator);
+        index += size;
+        for (const candidate of candidates) {
+          if (visible++ >= offset) selected.push(candidate);
+          if (selected.length === limit) return selected;
+        }
+      }
+      if (docs.length < 256) return selected;
+    }
+  }
 
-  /**
-   * 从 is_head=1 候选行里挑 winner, 并 fire-and-forget demote 其他行。
-   * 输入通常来自 filter 为 `is_head=1 and ...` 的 query 结果。
-   * 空输入返回 null; 单行输入直接返回, 不触发 update。
-   */
-  private _pickHeadAndAutoHeal(rows: Skill[]): Skill | null {
-    if (rows.length === 0) return null;
-    if (rows.length === 1) return rows[0];
-
-    const sorted = [...rows].sort((a, b) => {
-      if (a.version !== b.version) return b.version - a.version;
-      if (a.updated_at_ms !== b.updated_at_ms) return b.updated_at_ms - a.updated_at_ms;
-      return a.row_id < b.row_id ? -1 : a.row_id > b.row_id ? 1 : 0;
+  private async loadPublicationRows(candidates: SkillPublicationCandidate[]): Promise<Skill[]> {
+    if (!candidates.length) return [];
+    const response = await this.client.query(this.skillsCollection, {
+      documentIds: candidates.map(row => row.row_id), limit: candidates.length, outputFields: SKILL_OUTPUT_FIELDS,
     });
-    const winner = sorted[0]!;
-    const loserRowIds = sorted.slice(1).map((r) => r.row_id).filter((id) => !!id);
-
-    this.logger?.warn(
-      `${TAG} dirty-head auto-heal: skill_id=${winner.skill_id} keeps row_id=${winner.row_id} ` +
-        `v${winner.version} ts=${winner.updated_at_ms}, demoting ${loserRowIds.length} loser(s)`,
-    );
-
-    if (loserRowIds.length > 0) {
-      // fire-and-forget: 主读路径不等 demote 完成; 失败只 warn, 下次读再补。
-      this.client
-        .update(this.skillsCollection, {
-          documentIds: loserRowIds,
-          update: { is_head: 0 },
-        })
-        .catch((err) => {
-          this.logger?.warn(
-            `${TAG} auto-heal demote failed for skill_id=${winner.skill_id}: ` +
-              (err instanceof Error ? err.message : String(err)),
-          );
-        });
-    }
-
-    return winner;
+    const rows = new Map((response.documents ?? []).map(doc => [String(doc.id), this._docToSkill(doc)]));
+    return candidates.flatMap(candidate => {
+      const row = rows.get(candidate.row_id);
+      return row ? [{ ...row, is_head: candidate.is_head, status: candidate.status }] : [];
+    });
   }
 
-  /**
-   * 对 listSkills 结果做 group-by skill_id + 每组挑 winner。
-   * 供 listSkills 修正返回 items 与 total 用。
-   */
-  private _autoHealListSkills(rows: Skill[]): Skill[] {
-    if (rows.length <= 1) return rows;
-    const grouped = new Map<string, Skill[]>();
-    for (const r of rows) {
-      const arr = grouped.get(r.skill_id);
-      if (arr) arr.push(r);
-      else grouped.set(r.skill_id, [r]);
-    }
-    // 快速路径: 完全 clean 时避免多余循环
-    if (grouped.size === rows.length) return rows;
-
-    const winners: Skill[] = [];
-    for (const group of grouped.values()) {
-      const w = this._pickHeadAndAutoHeal(group);
-      if (w) winners.push(w);
-    }
-    return winners;
+  private async publishedRows(docs: Record<string, unknown>[]): Promise<Skill[]> {
+    return projectPublishedCandidates(docs.map(doc => this._docToSkill(doc)), this.publicationCoordinator);
   }
 
-  /** 按 filter 取一条 */
-  private async _queryOneAsync(filter: string): Promise<Skill | null> {
-    try {
-      const resp = await this.client.query(this.skillsCollection, {
-        filter,
-        limit: 1,
-        outputFields: SKILL_OUTPUT_FIELDS,
-      });
-      return resp.documents && resp.documents.length > 0
-        ? this._docToSkill(resp.documents[0])
-        : null;
-    } catch (err) {
-      this.logger?.warn(`${TAG} queryOne failed: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+  private async publishedSearch(hits: SkillSearchResult[]): Promise<SkillSearchResult[]> {
+    const published = await projectPublishedCandidates(hits.map(hit => hit.skill), this.publicationCoordinator, true);
+    const byId = new Map(published.map(row => [row.row_id, row]));
+    const result: SkillSearchResult[] = [];
+    for (const hit of hits) {
+      const skill = byId.get(hit.skill.row_id);
+      if (skill?.is_head && skill.status === "active") result.push({ ...hit, skill });
     }
+    return result;
   }
 
   // ─── Private: Write helpers ───────────────────────────────────────────
@@ -823,21 +689,9 @@ export class TcvdbSkillStore implements ISkillStore {
       `team_id="${this._escape(teamId)}" and owner_agent_id="${this._escape(ownerAgentId)}" ` +
       `and name="${this._escape(name)}" and is_head=1 and status="active"`;
 
-    try {
-      const resp = await this.client.query(this.skillsCollection, {
-        filter,
-        limit: 1,
-        outputFields: ["skill_id"],
-      });
-      if (resp.documents && resp.documents.length > 0) {
-        const dupId = resp.documents[0].skill_id as string;
-        if (dupId !== excludeSkillId) {
-          throw new SkillStoreError("SKILL_NAME_DUPLICATE", `name '${name}' already exists for agent in team`);
-        }
-      }
-    } catch (err) {
-      if (err instanceof SkillStoreError) throw err;
-      this.logger?.warn(`${TAG} name uniqueness check failed: ${err instanceof Error ? err.message : String(err)}`);
+    const rows = await this.publishedRows(await this.queryAll(filter));
+    if (rows.some(row => row.is_head && row.status === "active" && row.skill_id !== excludeSkillId)) {
+      throw new SkillStoreError("SKILL_NAME_DUPLICATE", `name '${name}' already exists for agent in team`);
     }
   }
 
@@ -921,12 +775,12 @@ export class TcvdbSkillStore implements ISkillStore {
       ann: [{
         fieldName: "content",
         data: [queryText],
-        limit: topK * 2,
+        limit: Math.min(topK * 2, 1000),
       }],
       match: [{
         fieldName: SPARSE_VECTOR_FIELD,
         data: [sparseVec],
-        limit: topK * 2,
+        limit: Math.min(topK * 2, 1000),
       }],
       rerank: {
         method: "rrf",
@@ -972,6 +826,9 @@ export class TcvdbSkillStore implements ISkillStore {
     } catch { /* ignore */ }
 
     return {
+      mutation_id: typeof doc.mutation_id === "string" ? doc.mutation_id : undefined,
+      mutation_payload_hash: typeof doc.mutation_payload_hash === "string" ? doc.mutation_payload_hash : undefined,
+      mutation_request_hash: typeof doc.mutation_request_hash === "string" ? doc.mutation_request_hash : undefined,
       row_id: (doc.id ?? doc.row_id) as string,
       skill_id: doc.skill_id as string,
       version: (doc.version as number) ?? 0,
@@ -996,6 +853,9 @@ export class TcvdbSkillStore implements ISkillStore {
   /** Skill → VDB doc (用于 update 时重写) */
   private _skillToDoc(skill: Skill): Record<string, unknown> {
     return {
+      mutation_id: skill.mutation_id,
+      mutation_payload_hash: skill.mutation_payload_hash,
+      mutation_request_hash: skill.mutation_request_hash,
       id: skill.row_id,
       skill_id: skill.skill_id,
       version: skill.version,

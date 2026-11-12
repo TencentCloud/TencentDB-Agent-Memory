@@ -42,10 +42,10 @@ export interface WireConversationAddDeps {
 
   /**
    * 保留字段用于跟老签名兼容 (wireConversationAddHandler 内部不使用 extractor,
-   * 真正的抽取由 SkillWorkerPool 的 resolveExtractor 现取)。gateway 侧当前
-   * 塞了一个 noop 占位。
+   * 真正的抽取由 SkillWorkerPool 的 resolveExtractor 懒取)。旧调用可继续传入，
+   * 新的 restructure 恢复路径无需构造 LLM 或 noop extractor 占位。
    */
-  extractor: ISkillExtractor;
+  extractor?: ISkillExtractor;
 
   logger: ExtractorLogger;
 

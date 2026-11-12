@@ -55,52 +55,39 @@ export interface SessionMeta {
   last_archived_at_ms?: number;
 }
 
-/** _tasks.json 单个 task 条目（§4.3）。 */
-export interface SkillTaskEntry {
+/** Shared actor identity and durable retry diagnostics for both task kinds. */
+export interface SkillTaskBase {
   task_id: string;
-  session_id: string;
   user_id: string;
   team_id: string;
   agent_id: string;
   space_id: string;
   task_ref_id?: string;
+  enqueued_at_ms: number;
+  /** Legacy extraction counts permanent failures only; restructure counts all bounded retries. */
+  retry_count?: number;
+  last_error?: string;
+}
+
+/** Missing kind deliberately means the legacy archive extraction task. */
+export interface SkillExtractTaskEntry extends SkillTaskBase {
+  kind?: "extract";
+  session_id: string;
   archive_key: string;
   archived_at_ms: number;
-  enqueued_at_ms: number;
-  /**
-   * direct-trigger (`/v3/skill/extract`) 独占：给 extractor prompt 注入的
-   * "主 Agent 抽取提示"。conversation/add 路径不写。Worker 消费时透传给
-   * `ISkillExtractor.extract({ reason })`。
-   */
   reason?: string;
-  /**
-   * direct-trigger 独占：extractor LLM 迭代上限。conversation/add 路径不写。
-   * Worker 消费时透传成 `extractor.extract({ options: { max_iterations } })`。
-   */
   max_iterations?: number;
-  /**
-   * 累计 **permanent** 失败次数（B 类：400/422/JSON parse/schema）。
-   * A 类 transient (401/403/429/5xx/网络/timeout) 不计数，避免和 B 类混淆。
-   * 达到 Worker 的 `permanentMaxRetries` 阈值（默认 3）后 task 会被移到
-   * `_tasks_dlq.json`（见下方 dlqKey）。
-   */
-  retry_count?: number;
-  /**
-   * 最近一次失败的 error.message（Worker 侧截断到 <=1024 字符），只用于
-   * 排查；对 Worker 调度逻辑无影响。
-   */
-  last_error?: string;
-  /**
-   * 抽取模式;仅在归档时 Handler 侧显式收到 body.strict_mode:true 时才写入
-   * 'strict'。默认路径 (老 client / conversation-add 阈值归档)不写此字段,
-   * Worker 消费时 head.mode === undefined,透传给 SkillExtractor 也是 undefined,
-   * 恒走 SKILL_REVIEW_PROMPT (v2 宽松) — 老 task 反序列化零影响。
-   *
-   * 冷启动 / 批量导入 (agents/asset-import.ts) 会传 strict_mode:true → 落
-   * mode:'strict' → SkillExtractor 用 SKILL_REVIEW_PROMPT_STRICT (v1 严格 gate)。
-   */
-  mode?: 'strict';
+  mode?: "strict";
 }
+
+export interface SkillRestructureTaskEntry extends SkillTaskBase {
+  kind: "restructure";
+  operation_id: string;
+  created_at_ms: number;
+  session_id?: string;
+}
+
+export type SkillTaskEntry = SkillExtractTaskEntry | SkillRestructureTaskEntry;
 
 /** _tasks.json 整体结构。 */
 export interface AgentTasksDoc {
@@ -116,10 +103,10 @@ export interface AgentTasksDoc {
  * DLQ 只落盘不做端点：人工用 `cat` / `mv` 救回来，或者 grafana 告警脚本直接
  * scan 文件。当前不做 TTL / 大小限制（每 agent 一份文件，量大时用户自己处理）。
  */
-export interface SkillDeadTaskEntry extends SkillTaskEntry {
+export type SkillDeadTaskEntry = SkillTaskEntry & {
   /** DLQ 追加时的 wall clock 时间戳。 */
   dead_lettered_at_ms: number;
-}
+};
 
 /** `_tasks_dlq.json` 整体结构。 */
 export interface AgentDeadTasksDoc {
@@ -303,8 +290,8 @@ export class SkillBufferStorage {
 
   // ── agent _tasks_dlq.json（死信队列） ─────────────────────────────────────
   //
-  // DLQ 只被 Worker 追加（且 Worker 已持 extract-lock，同一 agent 只有一个写者），
-  // 因此不需要 tasks-mutex 保护——但读改写仍要求先 read 再 write，避免旧内容被截。
+  // Worker holds tasks-mutex while appending DLQ and then removing the original
+  // task. This storage helper does not acquire locks itself; callers own them.
 
   async readDlq(agent: AgentTuple): Promise<AgentDeadTasksDoc> {
     const raw = await this.storage.readFile(this.dlqKey(agent));
@@ -322,10 +309,16 @@ export class SkillBufferStorage {
     }
   }
 
-  async appendDlq(agent: AgentTuple, dead: SkillDeadTaskEntry): Promise<void> {
+  async appendDlq(agent: AgentTuple, dead: SkillDeadTaskEntry, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const doc = await this.readDlq(agent);
+    signal?.throwIfAborted();
+    // A prior DLQ write may have committed while removal of the original task
+    // failed. Retrying that transfer must not create another dead-letter entry.
+    if (doc.tasks.some(task => task.task_id === dead.task_id)) return;
     doc.tasks.push(dead);
     doc.updated_at_ms = dead.dead_lettered_at_ms;
+    signal?.throwIfAborted();
     await this.storage.writeFile(this.dlqKey(agent), JSON.stringify(doc));
   }
 

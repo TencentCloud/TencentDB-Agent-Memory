@@ -79,6 +79,9 @@ import type {
   ExtractorLLMRunner,
 } from "./skill/index.js";
 import type { Skill } from "./skill/types.js";
+import { SkillRestructureService } from "./skill/skill-restructure-service.js";
+import { SqliteSkillStateStore } from "./skill/skill-state-store.js";
+import { SkillCoreError } from "./skill/skill-core.js";
 
 const TAG = "[memory-tdai] [core]";
 
@@ -90,9 +93,9 @@ const TAG = "[memory-tdai] [core]";
  * 契约与 `SkillVersioningOptions.onSkillCreated` / `SkillCoreOptions.onSkillArchived`
  * / `SkillCoreOptions.onSkillAccessed` 完全一致（详见 skill-versioning.ts 与
  * skill-core.ts 的 doc）：
- *   - onSkillCreated：v1 首创前置 await，抛异常 = create 失败
+ *   - onSkillCreated：v1 提交后 await；登记失败保留提交和资源，支持幂等修复
  *   - onSkillAccessed：fire-and-forget，抛异常 SkillCore 内部吞掉
- *   - onSkillArchived：fire-and-forget，抛异常 SkillCore 内部吞掉
+ *   - onSkillArchived：删除清理等待钩子完成，异常保留待修复状态
  *
  * 存在的必要性（standalone / OpenClaw 模式）：
  *   service 模式下 gateway/server.ts:resolveSkillCore 已经挂了同名钩子；
@@ -112,7 +115,7 @@ export interface SkillAssetHooks {
     description: string;
   }) => Promise<void>;
   onSkillAccessed?: (skill: Skill) => void;
-  onSkillArchived?: (params: { skill_id: string; team_id?: string }) => void;
+  onSkillArchived?: (params: { skill_id: string; team_id?: string }) => void | Promise<void>;
 }
 
 // ============================
@@ -128,6 +131,8 @@ export interface TdaiCoreOptions {
   sessionFilter?: SessionFilter;
   /** Plugin instance ID for metric reporting. */
   instanceId?: string;
+  /** Stable skill tenant context; defaults to the constructor's instanceId, not later pipeline context. */
+  skillInstanceId?: string;
   /** StorageAdapter for file operations (COS/local). When absent, modules fall back to fs. */
   storage?: StorageAdapter;
   /**
@@ -141,6 +146,8 @@ export interface TdaiCoreOptions {
    * （零耦合：OpenClaw 无 MetadataService 场景仍可安全构造）。
    */
   skillAssetHooks?: SkillAssetHooks;
+  /** Admission gate for new versions published by private skill drafts; receipt repair bypasses it. */
+  beforeSkillPublish?: () => Promise<void>;
 }
 
 // ============================
@@ -187,12 +194,15 @@ export class TdaiCore {
   // gated on cfg.skill?.enabled and resolveSkillConfig's degradation matrix.
   private skillCore?: SkillCore;
   private skillExtractor?: SkillExtractor;
+  private skillRestructureService?: SkillRestructureService;
+  private readonly skillInstanceId?: string;
   private resolvedSkillConfig?: ResolvedSkillConfig;
   /**
    * 可选：skill 生命周期钩子，用来把 create/access/archive 同步到上层 asset 注册表。
    * 见 `SkillAssetHooks` 的 doc。undefined = 不挂钩子（既有 standalone 老行为）。
    */
   private skillAssetHooks?: SkillAssetHooks;
+  private readonly beforeSkillPublish?: () => Promise<void>;
   /**
    * B1 fix: in-flight guard for `ensureSkillModuleWired()`. The original guard
    * was a sync `if (this.skillCore) return`, but assignment to `skillCore`
@@ -233,8 +243,11 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
+    // Pipeline request context may later change instanceId; persistent skill keys must not follow it.
+    this.skillInstanceId = opts.skillInstanceId ?? opts.instanceId;
     this.storage = opts.storage;
     this.skillAssetHooks = opts.skillAssetHooks;
+    this.beforeSkillPublish = opts.beforeSkillPublish;
   }
 
   // ============================
@@ -563,6 +576,10 @@ export class TdaiCore {
     return this.skillExtractor;
   }
 
+  getSkillRestructureService(): SkillRestructureService | undefined {
+    return this.skillRestructureService;
+  }
+
   /** The resolved skill config (with degradation matrix). undefined → skill not constructed. */
   getResolvedSkillConfig(): ResolvedSkillConfig | undefined {
     return this.resolvedSkillConfig;
@@ -868,8 +885,10 @@ export class TdaiCore {
       const resolverLogger = {
         info: (m: string) => this.logger.info(m),
         warn: (m: string) => this.logger.warn(m),
+        error: (m: string) => this.logger.error(m),
       };
       const resolved = resolveSkillConfig(this.cfg.skill, probe, resolverLogger);
+      if (!resolved) return;
       this.resolvedSkillConfig = resolved;
 
       // Open the underlying DatabaseSync (raw handle escape hatch — see
@@ -881,7 +900,7 @@ export class TdaiCore {
       };
       if (typeof rawDbCarrier.getRawDb !== "function") {
         this.logger.warn(
-          `${TAG} Skill wiring skipped: vectorStore does not expose getRawDb() (only SQLite-backed VectorStore is supported in MVP)`,
+          `${TAG} Embedded skill wiring requires SQLite getRawDb(); Gateway resolves remote skill stores separately`,
         );
         return;
       }
@@ -914,7 +933,7 @@ export class TdaiCore {
         onSkillCreated: assetHooks?.onSkillCreated,
       });
 
-      this.skillCore = new SkillCore({
+      const skillCore = new SkillCore({
         store: skillStore,
         resources: skillResources,
         versioning: skillVersioning,
@@ -924,6 +943,26 @@ export class TdaiCore {
         maxNonHeadVersions: resolved.maxNonHeadVersions,
         onSkillAccessed: assetHooks?.onSkillAccessed,
         onSkillArchived: assetHooks?.onSkillArchived,
+      });
+
+      const state = new SqliteSkillStateStore(db);
+      await state.init();
+      const restructure = new SkillRestructureService({
+        core: skillCore,
+        storage: this.storage,
+        state,
+        namespace: `embedded:${this.skillInstanceId ?? "local"}`,
+        config: resolved.restructure,
+        beforePublish: this.beforeSkillPublish,
+        runner: async () => {
+          const runner = this.buildSkillLlmRunner();
+          if (!runner) throw new SkillCoreError("LLM_UNAVAILABLE", "LLM is not configured for skill restructuring");
+          return runner;
+        },
+        ensureAsset: async skill => {
+          await assetHooks?.onSkillCreated?.({ skill_id: skill.skill_id, team_id: skill.team_id,
+            agent_id: skill.owner_agent_id, user_id: skill.user_id, name: skill.name, description: skill.description });
+        },
       });
 
       // ── Extraction wiring (queue + worker + optional single-tenant extractor) ──
@@ -960,8 +999,9 @@ export class TdaiCore {
         }
         if (llmRunner) {
           this.skillExtractor = new SkillExtractor({
-            core: this.skillCore,
+            core: skillCore,
             runner: llmRunner,
+            draftPublisher: resolved.restructure?.enabled === false ? undefined : restructure,
             systemPrompt: SKILL_REVIEW_PROMPT,
             // 冷启动/批量导入 (asset-import) 会在请求 body 传 strict_mode:true,
             // 经 SkillTaskEntry.mode 一路带到这里的 extract({mode:'strict'})。
@@ -982,6 +1022,8 @@ export class TdaiCore {
         }
       }
 
+      this.skillRestructureService = restructure;
+      this.skillCore = skillCore;
       this.logger.info(
         `${TAG} Skill module wired (v2): store=${resolved.storeBackend}, content=${resolved.contentBackend}, ` +
           `extraction=${resolved.extraction.enabled ? (this.skillExtractor ? "on" : "noop") : "off"}, ` +
@@ -993,6 +1035,7 @@ export class TdaiCore {
       );
       this.skillCore = undefined;
       this.skillExtractor = undefined;
+      this.skillRestructureService = undefined;
     }
   }
 
@@ -1021,12 +1064,12 @@ export class TdaiCore {
     // Construct the StandaloneLLMRunner with tools eligible by default.
     // Per-call SkillExtractor passes its own `tools` dict + enableTools=true,
     // which the runner honors over its own setting (see standalone/llm-runner.ts).
-    const runtimeLlm = this.resolveRuntimeLlm();
+    const runtimeLlm = resolveStandaloneLlmForRuntime(cfg, this.skillInstanceId);
     const runner = new StandaloneLLMRunner({
       config: {
         baseUrl: runtimeLlm.baseUrl,
         apiKey: runtimeLlm.apiKey,
-        model: runtimeLlm.model,
+        model: this.resolvedSkillConfig?.extraction.model ?? runtimeLlm.model,
         maxTokens: runtimeLlm.maxTokens,
         timeoutMs: runtimeLlm.timeoutMs,
         stream: runtimeLlm.stream,

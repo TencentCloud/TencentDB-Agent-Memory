@@ -14,13 +14,13 @@
  * 本文件改名为 `skill-store.ts`。
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 
 import { randomBase62 } from "../../../utils/short-id.js";
-import { SKILLS_DDL, SKILL_FTS_DDL, SKILL_VEC_DDL_TEMPLATE, FTS_CONTENT_MAX } from "../../skill/skill-store-ddl.js";
+import { SKILLS_DDL, SKILL_TOMBSTONES_DDL, SKILL_MUTATION_RECEIPTS_DDL, SKILL_FTS_DDL, SKILL_VEC_DDL_TEMPLATE, FTS_CONTENT_MAX } from "../../skill/skill-store-ddl.js";
 import { buildFtsQuery, tokenizeForFts } from "../tokenize.js";
 import type { ISkillStore, ExpiredVersionMeta, SkillStoreCapabilities, SkillSearchResult } from "../../skill/skill-store.interface.js";
-import { SkillStoreError } from "../../skill/skill-store.interface.js";
+import { SkillStoreError, assertSkillExpectedVersion, assertSkillMutationMatch, skillPayloadHash } from "../../skill/skill-store.interface.js";
 import type {
   AppendVersionInput,
   ListSkillsOptions,
@@ -69,7 +69,10 @@ function defaultUlid(): string {
   return randomBase62(12);
 }
 
-interface SkillRowRaw {
+interface SkillRowRaw extends Record<string, SQLOutputValue> {
+  mutation_id: string | null;
+  mutation_payload_hash: string | null;
+  mutation_request_hash: string | null;
   row_id: string;
   skill_id: string;
   version: number;
@@ -102,6 +105,9 @@ function toSkill(raw: SkillRowRaw): Skill {
     manifest = [];
   }
   return {
+    mutation_id: raw.mutation_id ?? undefined,
+    mutation_payload_hash: raw.mutation_payload_hash ?? undefined,
+    mutation_request_hash: raw.mutation_request_hash ?? undefined,
     row_id: raw.row_id,
     skill_id: raw.skill_id,
     version: raw.version,
@@ -147,6 +153,19 @@ export class SqliteSkillStore implements ISkillStore {
   /** 创建表与索引。幂等。同时迁移旧索引与 FTS schema。 */
   init(): void {
     this.db.exec(SKILLS_DDL);
+    const columns = this.db.prepare("PRAGMA table_info(skills)").all() as Array<{ name: string }>;
+    for (const column of ["mutation_id", "mutation_payload_hash", "mutation_request_hash"]) {
+      if (!columns.some(c => c.name === column)) this.db.exec(`ALTER TABLE skills ADD COLUMN ${column} TEXT`);
+    }
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_skills_mutation ON skills(team_id, skill_id, mutation_id) WHERE mutation_id IS NOT NULL");
+    this.db.exec(SKILL_MUTATION_RECEIPTS_DDL);
+    this.db.exec(SKILL_TOMBSTONES_DDL);
+    // Backfill any version-column receipts from an earlier schema. Subsequent
+    // starts read only missing receipts, and never rewrite caller metadata.
+    const unrecorded = this.db.prepare(`SELECT s.* FROM skills s
+      LEFT JOIN skill_mutation_receipts r ON r.team_id=s.team_id AND r.skill_id=s.skill_id AND r.mutation_id=s.mutation_id
+      WHERE s.mutation_id IS NOT NULL AND r.mutation_id IS NULL`).all() as SkillRowRaw[];
+    for (const row of unrecorded) this.recordMutationReceipt(toSkill(row));
     // 迁移：删除旧版 (team_id, name) 唯一索引（v2 重构后改为 team_id + owner_agent_id + name）
     this.db.exec("DROP INDEX IF EXISTS uniq_skills_team_name_head");
     this.db.exec(SKILL_FTS_DDL);
@@ -266,44 +285,56 @@ export class SqliteSkillStore implements ISkillStore {
   // ────────────────────────────────────────────────────────────────────
   //  appendVersion
   //
-  //  注意：store 不再做 content_hash 的幂等检查 —— 这一层只管"写一行新版本"。
-  //  幂等语义（content + manifest 都没变 → 不写新版本）由 skill-versioning 在
-  //  上层判断，因为只有它同时知道 content_hash 与新 manifest_json。
+  //  Package no-op checks belong to versioning; durable mutation replay and
+  //  expected-version concurrency checks belong to this transaction.
   // ────────────────────────────────────────────────────────────────────
   async appendVersion(input: AppendVersionInput): Promise<Skill> {
     const tid = input.team_id ?? "default";
-    const head = await this.getHead(input.skill_id, tid);
-
-    // [4] 同 team 同 agent 同 name 已 active head（且不是同一 skill_id 的更新） → 重名
-    if (!head) {
-      const oid = input.owner_agent_id ?? "default";
-      const dupRaw = this.db
-        .prepare(
-          "SELECT * FROM skills WHERE team_id=? AND owner_agent_id=? AND name=? AND is_head=1 AND status='active' LIMIT 1",
-        )
-        .get(tid, oid, input.name) as SkillRowRaw | undefined;
-      if (dupRaw) {
-        throw new SkillStoreError("SKILL_NAME_DUPLICATE", `name '${input.name}' already exists for agent in team`);
-      }
-    } else {
-      // 已有同 skill_id 的历史 → name 不可变
-      if (head.name !== input.name) {
-        throw new SkillStoreError("SKILL_NAME_DUPLICATE", "name change is not allowed across versions");
-      }
-    }
-
-    const newVersion = head ? head.version + 1 : 1;
-    const ownerForRow = head ? head.owner_agent_id : (input.owner_agent_id ?? "default");
-    // user_id 记录的是本次操作者，而非首次创建者。后续版本取 input.user_id。
-    const userIdForRow = input.user_id ?? "default";
-    const ts = this.now();
-    const newRowId = this.ulid();
-
-    // 事务：旧 head 翻 0 → INSERT 新行 → 同步 fts5
-    // node:sqlite 暂无 db.transaction() helper，使用 BEGIN/COMMIT 手写。
-    // 必须保持 synchronous（不要在中间 await），与 sqlite-transaction-guard 同思路。
+    // No await between BEGIN and COMMIT: head and receipt are read under the
+    // same SQLite write lock as the insert, rather than a stale preflight read.
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      if (input.mutation_id) {
+        const replay = this.findMutationReceipt(input.skill_id, input.mutation_id, tid);
+        if (replay) {
+          const result = assertSkillMutationMatch(replay, input);
+          this.db.exec("COMMIT");
+          return result;
+        }
+      }
+      if (this.db.prepare("SELECT 1 FROM skill_tombstones WHERE team_id=? AND skill_id=?").get(tid, input.skill_id)) {
+        throw new SkillStoreError("SKILL_VERSION_STALE", "deleted skill IDs cannot be recreated");
+      }
+      const rawHead = this.db.prepare("SELECT * FROM skills WHERE skill_id=? AND team_id=? AND is_head=1 LIMIT 1")
+        .get(input.skill_id, tid) as SkillRowRaw | undefined;
+      const head = rawHead ? toSkill(rawHead) : null;
+      assertSkillExpectedVersion(input, head);
+
+      // [4] 同 team 同 agent 同 name 已 active head（且不是同一 skill_id 的更新） → 重名
+      if (!head) {
+        const oid = input.owner_agent_id ?? "default";
+        const dupRaw = this.db
+          .prepare(
+            "SELECT * FROM skills WHERE team_id=? AND owner_agent_id=? AND name=? AND is_head=1 AND status='active' LIMIT 1",
+          )
+          .get(tid, oid, input.name) as SkillRowRaw | undefined;
+        if (dupRaw) {
+          throw new SkillStoreError("SKILL_NAME_DUPLICATE", `name '${input.name}' already exists for agent in team`);
+        }
+      } else {
+        // 已有同 skill_id 的历史 → name 不可变
+        if (head.name !== input.name) {
+          throw new SkillStoreError("SKILL_NAME_DUPLICATE", "name change is not allowed across versions");
+        }
+      }
+
+      const newVersion = head ? head.version + 1 : 1;
+      const ownerForRow = head ? head.owner_agent_id : (input.owner_agent_id ?? "default");
+      // user_id 记录的是本次操作者，而非首次创建者。后续版本取 input.user_id。
+      const userIdForRow = input.user_id ?? "default";
+      const ts = this.now();
+      const newRowId = this.ulid();
+
       if (head) {
         this.db
           .prepare("UPDATE skills SET is_head=0 WHERE skill_id=? AND version=?")
@@ -316,8 +347,9 @@ export class SqliteSkillStore implements ISkillStore {
             row_id, skill_id, version, is_head,
             user_id, owner_agent_id, team_id, task_id,
             name, description, content, content_hash, manifest_json, storage_dir,
-            status, metadata_json, created_at_ms, updated_at_ms
-          ) VALUES (?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?,?,?,?)`,
+            status, metadata_json, created_at_ms, updated_at_ms,
+            mutation_id, mutation_payload_hash, mutation_request_hash
+          ) VALUES (?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?)`,
         )
         .run(
           newRowId,
@@ -338,6 +370,9 @@ export class SqliteSkillStore implements ISkillStore {
           input.metadata_json ?? "{}",
           ts,
           ts,
+          input.mutation_id ?? null,
+          input.mutation_id ? skillPayloadHash(input) : null,
+          input.mutation_request_hash ?? null,
         );
 
       // FTS 同步：删除该 skill_id 的所有旧索引行 → 仅插入新 head
@@ -356,25 +391,39 @@ export class SqliteSkillStore implements ISkillStore {
         )
         .run(ftsName, ftsDescription, ftsContentTokenized, input.skill_id, tid, ownerForRow, input.task_id ?? "default", userIdForRow);
 
+      const inserted = this.db.prepare("SELECT * FROM skills WHERE row_id=?").get(newRowId) as SkillRowRaw;
+      const result = toSkill(inserted);
+      this.recordMutationReceipt(result);
       this.db.exec("COMMIT");
+      return result;
     } catch (e) {
-      try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be rolled back */ }
       throw e;
     }
-
-    // 取回新行（事务外读取，节省持锁时间）
-    const inserted = this.db
-      .prepare("SELECT * FROM skills WHERE row_id=?")
-      .get(newRowId) as SkillRowRaw;
-    return toSkill(inserted);
   }
 
   // ────────────────────────────────────────────────────────────────────
   //  archiveHead
   // ────────────────────────────────────────────────────────────────────
+  async getByMutationId(skillId: string, mutationId: string, teamId = "default"): Promise<Skill | null> {
+    return this.findMutationReceipt(skillId, mutationId, teamId);
+  }
+
+  private findMutationReceipt(skillId: string, mutationId: string, teamId: string): Skill | null {
+    const receipt = this.db.prepare("SELECT skill_json FROM skill_mutation_receipts WHERE skill_id=? AND team_id=? AND mutation_id=?")
+      .get(skillId, teamId, mutationId) as { skill_json: string } | undefined;
+    return receipt ? JSON.parse(receipt.skill_json) as Skill : null;
+  }
+
+  private recordMutationReceipt(row: Skill): void {
+    if (!row.mutation_id) return;
+    this.db.prepare("INSERT INTO skill_mutation_receipts(team_id,skill_id,mutation_id,skill_json) VALUES (?,?,?,?)")
+      .run(row.team_id, row.skill_id, row.mutation_id, JSON.stringify(row));
+  }
+
   async archiveHead(skillId: string, teamId?: string): Promise<{ archived: boolean }> {
     const where = teamId ? "skill_id=? AND team_id=? AND is_head=1" : "skill_id=? AND is_head=1";
-    const args: unknown[] = teamId ? [this.now(), skillId, teamId] : [this.now(), skillId];
+    const args: SQLInputValue[] = teamId ? [this.now(), skillId, teamId] : [this.now(), skillId];
     const r = this.db
       .prepare(`UPDATE skills SET status='archived', updated_at_ms=? WHERE ${where}`)
       .run(...args);
@@ -488,7 +537,7 @@ export class SqliteSkillStore implements ISkillStore {
     const offset = Math.max(opts.offset ?? 0, 0);
 
     const where: string[] = ["is_head=1"];
-    const args: unknown[] = [];
+    const args: SQLInputValue[] = [];
 
     // 四个 ID：传了就过滤，不传不限制
     if (opts.team_id) {
@@ -659,25 +708,27 @@ export class SqliteSkillStore implements ISkillStore {
    */
   async deleteAllVersions(skillId: string, teamId?: string): Promise<number> {
     const where = teamId ? "skill_id=? AND team_id=?" : "skill_id=?";
-    const args: unknown[] = teamId ? [skillId, teamId] : [skillId];
-    const r = this.db.prepare(`DELETE FROM skills WHERE ${where}`).run(...args);
-    const changes = r.changes ?? 0;
-    // 仅当主表真的删掉了行时才 DELETE 附属表 —— 避免跨 team 校验失败时误清 fts
-    if (changes > 0) {
-      try {
-        this.db.prepare("DELETE FROM skill_fts WHERE skill_id=?").run(skillId);
-      } catch {
-        // fts 可能已被 archiveHead 清过，二次删除幂等
-      }
-      if (this.vecAvailable) {
-        try {
-          this.db.prepare("DELETE FROM skill_vec WHERE skill_id=?").run(skillId);
-        } catch {
-          /* non-fatal */
+    const args: SQLInputValue[] = teamId ? [skillId, teamId] : [skillId];
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // Persist the deletion boundary in the same transaction as row removal.
+      // A mismatched team selects no rows and cannot tombstone another tenant.
+      this.db.prepare(`INSERT OR IGNORE INTO skill_tombstones(team_id,skill_id)
+        SELECT DISTINCT team_id,skill_id FROM skills WHERE ${where}`).run(...args);
+      const r = this.db.prepare(`DELETE FROM skills WHERE ${where}`).run(...args);
+      const changes = Number(r.changes ?? 0);
+      if (changes > 0) {
+        try { this.db.prepare("DELETE FROM skill_fts WHERE skill_id=?").run(skillId); } catch { /* optional index */ }
+        if (this.vecAvailable) {
+          try { this.db.prepare("DELETE FROM skill_vec WHERE skill_id=?").run(skillId); } catch { /* optional index */ }
         }
       }
+      this.db.exec("COMMIT");
+      return changes;
+    } catch (err) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction may already have rolled back */ }
+      throw err;
     }
-    return changes;
   }
 
   // ────────────────────────────────────────────────────────────────────

@@ -1,5 +1,11 @@
 # Changelog — @tencentdb-agent-memory/memory-sdk-ts
 
+## Unreleased — 2026-10-23
+
+### Added
+
+- `V3SkillClient.restructure()` and `restructureGet()` submit semantic package restructuring and query its operation status. Requests retain the caller's stable `request_id` and expected source version; responses describe operations rather than pretending publication is already complete. Candidate package and operation DTOs are exported from `v3`.
+
 ## Unreleased — 2026-09-20
 
 ### Added

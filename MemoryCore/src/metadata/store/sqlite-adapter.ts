@@ -71,7 +71,8 @@ import type {
 } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
-import { DuplicateUserKeyError } from "./interface.js";
+import { DuplicateUserKeyError, type IMetadataStore } from "./interface.js";
+import { SqliteSkillStateStore, type AtomicSkillStateStore } from "../../core/skill/skill-state-store.js";
 
 const require = createRequire(import.meta.url);
 function requireNodeSqlite(): typeof import("node:sqlite") {
@@ -106,6 +107,16 @@ export class SqliteMetadataStore implements IMetadataStore {
   private db!: DatabaseSync;
   private readonly dbPath: string;
   private initialized = false;
+  private skillStateStore?: Promise<AtomicSkillStateStore>;
+
+  getSkillStateStore(): Promise<AtomicSkillStateStore> {
+    this.init();
+    return this.skillStateStore ??= (async () => {
+      const state = new SqliteSkillStateStore(this.db);
+      await state.init();
+      return state;
+    })().catch(error => { this.skillStateStore = undefined; throw error; });
+  }
 
   /** @param dbPath 文件路径或 ":memory:"。 */
   constructor(dbPath: string) {
@@ -126,6 +137,7 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   close(): void {
+    this.skillStateStore = undefined;
     if (this.initialized) {
       this.db.close();
       this.initialized = false;

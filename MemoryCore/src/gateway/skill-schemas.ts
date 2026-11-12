@@ -102,6 +102,45 @@ export const updateRequestSchema = z.object({
   content: z.string().min(1),
 }).superRefine(refineAgentNeedsTeam);
 
+const restructureRequestIdSchema = z.string().min(1).max(256)
+  .refine(value => !!value.trim() && !/[\x00-\x1f]/.test(value), "request_id must be a non-empty stable intent without control characters");
+
+export const skillPackageCandidateSchema = z.object({
+  name: z.string().min(1).max(64),
+  // An explicit draft may exceed ordinary CRUD body/resource thresholds; the
+  // semantic snapshot budgets and HTTP body limit remain authoritative.
+  content: z.string().min(1),
+  resources: z.array(skillResourcePayloadSchema.strict()).max(4096),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+const restructureSourceSchema = z.object({
+  skill_id: z.string().min(1),
+  expected_version: z.number().int().min(1),
+}).strict();
+
+/** Strict alternatives prevent Zod from silently stripping an ambiguous branch. */
+export const restructureRequestSchema = z.union([
+  z.object({
+    ...idFieldsShape,
+    request_id: restructureRequestIdSchema,
+    skill_id: z.string().min(1),
+    expected_version: z.number().int().min(1),
+    reason: z.string().max(2000).optional(),
+  }).strict(),
+  z.object({
+    ...idFieldsShape,
+    request_id: restructureRequestIdSchema,
+    candidate: skillPackageCandidateSchema,
+    source: restructureSourceSchema.optional(),
+  }).strict(),
+]).superRefine(refineAgentNeedsTeam);
+
+export const restructureGetRequestSchema = z.object({
+  ...idFieldsShape,
+  operation_id: z.string().min(1).max(128),
+}).strict().superRefine(refineAgentNeedsTeam);
+
 export const patchRequestSchema = z.object({
   ...idFieldsShape,
   skill_id: z.string().min(1),
@@ -295,6 +334,8 @@ export const conversationAddRequestSchema = z.object({
 
 export type CreateRequest = z.infer<typeof createRequestSchema>;
 export type UpdateRequest = z.infer<typeof updateRequestSchema>;
+export type RestructureRequest = z.infer<typeof restructureRequestSchema>;
+export type RestructureGetRequest = z.infer<typeof restructureGetRequestSchema>;
 export type PatchRequest = z.infer<typeof patchRequestSchema>;
 export type DeleteRequest = z.infer<typeof deleteRequestSchema>;
 export type GetRequest = z.infer<typeof getRequestSchema>;
