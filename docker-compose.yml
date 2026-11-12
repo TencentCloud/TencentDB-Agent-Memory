@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # TDAI Memory Core - 核心API服务
+  memory-core:
+    image: agentmemory/memory-core:latest
+    container_name: tdai-memory-core
+    restart: unless-stopped
+    ports:
+      - "8420:8420"
+    volumes:
+      - tdai-core-data:/data/tdai-memory
+      - tdai-config:/data/config
+    environment:
+      - TDAI_GATEWAY_HOST=0.0.0.0
+      - TDAI_GATEWAY_PORT=8420
+      - TDAI_DATA_DIR=/data/tdai-memory
+      - TDAI_GATEWAY_CONFIG=/data/config/tdai-gateway.yaml
+    networks:
+      - tdai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8420/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # TDAI Memory Hub - Web管理界面
+  memory-hub:
+    image: agentmemory/memory-hub:latest
+    container_name: tdai-memory-hub
+    restart: unless-stopped
+    ports:
+      - "8125:8125"
+      - "8424:8424"
+    volumes:
+      - tdai-hub-data:/data/knowledge
+    environment:
+      # 基础配置
+      - REMOTE_INSTANCE_KEY=local
+      - REMOTE_INSTANCE_ID=default
+      - REMOTE_INSTANCE_URL=http://memory-core:8420
+      - REMOTE_INSTANCE_NAME=default
+
+      # 网络配置
+      - PANEL_PORT=8125
+      - KNOWLEDGE_PORT=8424
+      - KNOWLEDGE_DATA_DIR=/data/knowledge
+      - KNOWLEDGE_DB_PATH=/data/knowledge/knowledge.db
+      - KNOWLEDGE_PUBLIC_BASE_URL=http://host.docker.internal:8424/v3
+
+      # 同步配置 - 关键修复：默认启用同步
+      - KNOWLEDGE_LLM_BINDING_SYNC=1
+
+      # LLM配置（通过环境变量或.env文件配置）
+      - LLM_MODE=${LLM_MODE:-custom}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:?set in .env}
+      - LLM_MODEL=${LLM_MODEL:?set in .env}
+      - LLM_PROVIDER=${LLM_PROVIDER:-custom}
+      - LLM_PROTOCOL=${LLM_PROTOCOL:-openai}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-32768}
+      - LLM_TIMEOUT_MS=${LLM_TIMEOUT_MS:-1200000}
+
+      # 其他配置
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+      - TDAI_AGENT_TEMPLATE_DIR=/data/knowledge/agent-templates
+    networks:
+      - tdai-network
+    depends_on:
+      memory-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8125/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # TDAI Proxy - 代理服务
+  memory-proxy:
+    image: agentmemory/memory-proxy:latest
+    container_name: tdai-proxy
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    networks:
+      - tdai-network
+    depends_on:
+      - memory-core
+      - memory-hub
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  tdai-network:
+    driver: bridge
+    name: tdai-memory-stack
+
+volumes:
+  tdai-core-data:
+    name: tdai-memory-core-data
+  tdai-hub-data:
+    name: tdai-panel-data
+  tdai-config:
+    name: tdai-config-data
