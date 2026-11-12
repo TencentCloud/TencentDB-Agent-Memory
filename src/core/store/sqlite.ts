@@ -495,6 +495,28 @@ export class VectorStore implements IMemoryStore {
     return this.degraded;
   }
 
+  /**
+   * End a leftover transaction before a public read operation.
+   *
+   * In WAL mode, a read transaction that already established a snapshot
+   * does not see later commits made by another connection. Ending that
+   * transaction allows the next read to acquire a fresh snapshot. This is
+   * a defensive recovery mechanism, not a confirmed root cause of #987.
+   *
+   * VectorStore owns its transactions; public reads must run outside an
+   * active write. ROLLBACK would discard pending writes in such a transaction.
+   * With no transaction it throws "no transaction is active", caught below.
+   *
+   * Background: https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/987
+   */
+  private ensureNoStaleTransaction(): void {
+    try {
+      this.db.exec("ROLLBACK");
+    } catch {
+      // "no transaction is active" — expected on the happy path
+    }
+  }
+
 
   /**
    * Load sqlite-vec extension and initialize database schema.
@@ -1167,6 +1189,7 @@ export class VectorStore implements IMemoryStore {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       // Over-retrieve to compensate for legacy zero-vector placeholders that
       // may still exist in the vec0 table.  New zero vectors are no longer
@@ -1396,6 +1419,7 @@ export class VectorStore implements IMemoryStore {
    */
   countL1(): number {
     if (this.degraded) return 0;
+    this.ensureNoStaleTransaction();
     try {
       const row = this.db
         .prepare("SELECT COUNT(*) AS cnt FROM l1_records")
@@ -1423,6 +1447,7 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L1-query] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       const { sessionKey, sessionId, updatedAfter } = filter ?? {};
 
@@ -1618,6 +1643,7 @@ export class VectorStore implements IMemoryStore {
       if (this.degraded) this.logger?.warn(`${TAG} [L0-search] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       // Over-retrieve to compensate for legacy zero-vector placeholders that
       // may still exist in the vec0 table.  New zero vectors are no longer
@@ -1803,6 +1829,7 @@ export class VectorStore implements IMemoryStore {
    */
   countL0(): number {
     if (this.degraded) return 0;
+    this.ensureNoStaleTransaction();
     try {
       const row = this.db
         .prepare("SELECT COUNT(*) AS cnt FROM l0_conversations")
@@ -1825,6 +1852,7 @@ export class VectorStore implements IMemoryStore {
    */
   getAllL1Texts(): Array<{ record_id: string; content: string; updated_time: string }> {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.db
         .prepare("SELECT record_id, content, updated_time FROM l1_records")
@@ -1843,6 +1871,7 @@ export class VectorStore implements IMemoryStore {
    */
   getAllL0Texts(): Array<{ record_id: string; message_text: string; recorded_at: string }> {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.db
         .prepare("SELECT record_id, message_text, recorded_at FROM l0_conversations")
@@ -1964,6 +1993,7 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L0-query] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       // Query newest-first (DESC) with LIMIT, then reverse to chronological order
       let rows: Array<Record<string, unknown>>;
@@ -2014,6 +2044,7 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L0-query-grouped] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       const rows = this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
 
@@ -2067,6 +2098,7 @@ export class VectorStore implements IMemoryStore {
    */
   queryL1RecordsCursor(afterId: string, pageSize: number): L1RecordRow[] {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.stmtL1QueryMigrationCursor.all(afterId, pageSize) as unknown as L1RecordRow[];
     } catch (err) {
@@ -2084,6 +2116,7 @@ export class VectorStore implements IMemoryStore {
    */
   queryL0RecordsCursor(afterId: string, pageSize: number): L0RecordRow[] {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.stmtL0QueryMigrationCursor.all(afterId, pageSize) as unknown as L0RecordRow[];
     } catch (err) {
@@ -2115,6 +2148,7 @@ export class VectorStore implements IMemoryStore {
    */
   searchL1Fts(ftsQuery: string, limit = 20): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
+    this.ensureNoStaleTransaction();
     try {
       const rows = this.stmtL1FtsSearch.all(ftsQuery, limit) as Array<{
         record_id: string;
@@ -2164,6 +2198,7 @@ export class VectorStore implements IMemoryStore {
    */
   searchL0Fts(ftsQuery: string, limit = VectorStore.FTS_DEFAULT_LIMIT): L0FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
+    this.ensureNoStaleTransaction();
     try {
       const rows = this.stmtL0FtsSearch.all(ftsQuery, limit) as Array<{
         record_id: string;
