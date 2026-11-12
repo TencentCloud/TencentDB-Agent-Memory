@@ -34,6 +34,7 @@ import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
+import { summarizeTurnProviderCacheUsage } from "./src/core/report/provider-cache-usage.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 
 // Core abstractions (host-neutral)
@@ -721,6 +722,10 @@ export default function register(api: OpenClawPluginApi) {
         if (sessionKey) pendingRecallCache.delete(sessionKey);
 
         if (instanceId) {
+          const llmUsage = summarizeTurnProviderCacheUsage(
+            messages,
+            cachedPrompt?.messageCount,
+          );
           report("agent_turn", {
             sessionKey: resolvedSessionKey,
             userPrompt: originalUserText ?? null,
@@ -736,6 +741,14 @@ export default function register(api: OpenClawPluginApi) {
             })),
             l0CapturedCount: captureResult.l0RecordedCount,
             l0VectorsWritten: captureResult.l0VectorsWritten,
+            llmCallCount: llmUsage?.callCount ?? null,
+            llmUncachedInputTokens: llmUsage?.uncachedInputTokens ?? null,
+            llmCacheReadTokens: llmUsage?.cacheReadTokens ?? null,
+            llmCacheWriteTokens: llmUsage?.cacheWriteTokens ?? null,
+            llmCacheMissTokens: llmUsage?.cacheMissTokens ?? null,
+            llmPromptTokens: llmUsage?.promptTokens ?? null,
+            llmCacheHitRate: llmUsage?.cacheHitRate ?? null,
+            llmProviderCacheUsage: llmUsage?.providers ?? [],
             captureDurationMs: captureMs,
             totalDurationMs: Date.now() - startMs,
           });
