@@ -197,3 +197,24 @@ export interface BatchDeleteResult {
   deleted_ids: string[];
   failed: Array<{ id: string; reason: string }>;
 }
+
+/**
+ * Clamp list-pagination inputs: limit is an integer in [1,100]
+ * (default 20), offset an integer ≥ 0 (default 0). Non-integers are
+ * floored; non-numeric / non-finite values fall back to the defaults —
+ * unclamped values (1e9, negatives, fractions) previously passed
+ * straight through to the DB layer.
+ */
+export function clampListPagination(body: { limit?: unknown; offset?: unknown } | undefined): { limit: number; offset: number } {
+  const rawLimit = body?.limit;
+  const rawOffset = body?.offset;
+  const limit =
+    typeof rawLimit === "number" && Number.isFinite(rawLimit)
+      ? Math.min(100, Math.max(1, Math.floor(rawLimit)))
+      : 20;
+  const offset =
+    typeof rawOffset === "number" && Number.isFinite(rawOffset)
+      ? Math.max(0, Math.floor(rawOffset))
+      : 0;
+  return { limit, offset };
+}
