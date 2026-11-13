@@ -1,6 +1,23 @@
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Context } from "hono";
 
-import { isAllowed, parseAccessKeys, presentedKeys } from "../accessKeys.js";
+import { accessKeyMiddleware, isAllowed, parseAccessKeys, presentedKeys } from "../accessKeys.js";
+
+/** Minimal Hono context carrying only the fields accessKeyMiddleware reads. */
+function invoke(mw: ReturnType<typeof accessKeyMiddleware>, path: string, headers = new Headers()): Promise<number> {
+  let status = 200;
+  const c = {
+    req: { path, raw: { headers } },
+    json: (_body: unknown, code: number) => {
+      status = code;
+      return new Response(null, { status: code });
+    },
+  } as unknown as Context;
+  return mw(c, async () => {}).then(() => status);
+}
 
 describe("parseAccessKeys", () => {
   it("strips blank lines and comments", () => {
@@ -61,5 +78,45 @@ describe("isAllowed", () => {
 
   it("does not match on a prefix", () => {
     expect(isAllowed(["sec"], ["secret"])).toBe(false);
+  });
+});
+
+describe("accessKeyMiddleware", () => {
+  it("lets /health through and keeps the last good keys when the keys file disappears", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tam-access-keys-"));
+    const file = join(dir, "keys.txt");
+    writeFileSync(file, "secret\n");
+    try {
+      const mw = accessKeyMiddleware(file);
+      const withKey = new Headers({ authorization: "Bearer secret" });
+      expect(await invoke(mw, "/health")).toBe(200);
+      expect(await invoke(mw, "/v3/echo")).toBe(401);
+      expect(await invoke(mw, "/v3/echo", withKey)).toBe(200);
+
+      // statSync now throws; the middleware must keep serving with the last loaded keys.
+      rmSync(file);
+      expect(await invoke(mw, "/v3/echo", withKey)).toBe(200);
+      expect(await invoke(mw, "/v3/echo")).toBe(401);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reloads keys when the file mtime changes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tam-access-keys-"));
+    const file = join(dir, "keys.txt");
+    writeFileSync(file, "old-key\n");
+    try {
+      const mw = accessKeyMiddleware(file);
+      expect(await invoke(mw, "/v3/echo", new Headers({ authorization: "Bearer old-key" }))).toBe(200);
+
+      writeFileSync(file, "new-key\n");
+      const later = new Date(Date.now() + 2000);
+      utimesSync(file, later, later);
+      expect(await invoke(mw, "/v3/echo", new Headers({ authorization: "Bearer new-key" }))).toBe(200);
+      expect(await invoke(mw, "/v3/echo", new Headers({ authorization: "Bearer old-key" }))).toBe(401);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
