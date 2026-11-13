@@ -55,13 +55,46 @@ describe("maskResponseModel", () => {
   });
 });
 
+/** Emit each part as its own chunk so the transform sees a split event. */
+function chunkedStream(parts: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index < parts.length) {
+        controller.enqueue(encoder.encode(parts[index]));
+        index += 1;
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
 describe("createSseModelMaskStream", () => {
-  it("rewrites model fields in SSE data lines", async () => {
+  it("rewrites model fields and preserves SSE framing for a single chunk", async () => {
     const sse = 'data: {"model":"upstream-1"}\n\ndata: [DONE]\n\n';
     const stream = new Blob([sse]).stream()
       .pipeThrough(createSseModelMaskStream("client-model"));
     const out = await new Response(stream).text();
-    expect(out).toContain('"model":"client-model"');
-    expect(out).toContain("data: [DONE]");
+    expect(out).toBe('data: {"model":"client-model"}\n\ndata: [DONE]\n\n');
+  });
+
+  it("reassembles a data line split across chunks before rewriting", async () => {
+    const stream = chunkedStream([
+      'data: {"mod',
+      'el":"upstream-1"}\n\ndata: [DONE]\n\n',
+    ]).pipeThrough(createSseModelMaskStream("client-model"));
+    const out = await new Response(stream).text();
+    expect(out).toBe('data: {"model":"client-model"}\n\ndata: [DONE]\n\n');
+  });
+
+  it("keeps CRLF event boundaries while reassembling across chunks", async () => {
+    const stream = chunkedStream([
+      'data: {"model":"up',
+      'stream-1"}\r\n\r\ndata: [DONE]\r\n\r\n',
+    ]).pipeThrough(createSseModelMaskStream("client-model"));
+    const out = await new Response(stream).text();
+    expect(out).toBe('data: {"model":"client-model"}\r\n\r\ndata: [DONE]\r\n\r\n');
   });
 });
