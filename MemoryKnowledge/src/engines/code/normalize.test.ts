@@ -19,6 +19,14 @@ describe("normalizeRepoUrl", () => {
     expect(normalizeRepoUrl("gitlab.example.com/ns/repo.git"))
       .toBe("gitlab.example.com/ns/repo");
   });
+
+  it("pins current behaviour for SSH ports, embedded credentials and trailing slashes", () => {
+    // These are quirks of the default-branch normalizer, not changes from this PR.
+    // Asserting them makes any future fix (and its effect on source keys) visible.
+    expect(normalizeRepoUrl("ssh://git@host:2222/ns/repo.git")).toBe("host/2222/ns/repo");
+    expect(normalizeRepoUrl("https://user:pass@host/ns/repo.git")).toBe("user:pass@host/ns/repo");
+    expect(normalizeRepoUrl("git@host:ns/repo/")).toBe("host/ns/repo/");
+  });
 });
 
 describe("sourceKey / parseSourceKey", () => {
