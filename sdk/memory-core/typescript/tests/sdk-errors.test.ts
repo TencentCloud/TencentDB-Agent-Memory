@@ -31,5 +31,8 @@ describe("TDAMError", () => {
     const err = new TDAMError(500, "internal", "");
     expect(err.details).toBeUndefined();
     expect(err.requestId).toBe("");
+    // Unlike the Python SDK, the TypeScript SDK keeps the empty (request_id=)
+    // segment. Pin it explicitly so the two SDKs do not drift silently.
+    expect(err.message).toBe("[500] internal (request_id=)");
   });
 });
