@@ -20,9 +20,15 @@ def test_tdam_error_exposes_fields():
 
 
 def test_tdam_error_preserves_conflict_details():
-    err = TDAMError(40901, "version stale", "req-1", {"current_version": 7})
-    assert err.details == {"current_version": 7}
+    src = {"current_version": 7}
+    err = TDAMError(40901, "version stale", "req-1", src)
+    assert err.details == src
     assert isinstance(err.details, dict)
+    # errors.py builds dict(details), so later edits by the caller must not
+    # mutate details held by an already-raised exception.
+    assert err.details is not src
+    src["current_version"] = 99
+    assert err.details == {"current_version": 7}
 
 
 def test_tdam_error_string_without_request_id():
