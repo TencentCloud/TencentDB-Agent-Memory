@@ -4,6 +4,10 @@
  */
 import type { OffloadClientConfig, RecentMessage, Logger } from "./types.js";
 import type { OffloadApiClient } from "./offload-api-client.js";
+import {
+  TurnAdvancementLedger,
+  type TurnAdvancementRecord,
+} from "../offload/turn-advancement-ledger.js";
 import { estimateAllTokens, estimateMessageTokens } from "./token-estimator.js";
 
 const DEFAULT_CONTEXT_WINDOW = 128000;
@@ -11,6 +15,18 @@ const DEFAULT_CONTEXT_WINDOW = 128000;
 const COMPACT_TARGET_RATIO = 0.5;
 /** When truncating a single large tool_result, keep at most this many chars */
 const TOOL_RESULT_TRUNCATE_CHARS = 2000;
+
+export interface OffloadSessionState {
+  lastAccessMs: number;
+  lastKnownTotalTokens: number;
+  lastKnownMsgCount: number;
+  lastL15PromptHash: string;
+  cachedPrompt?: string;
+  cachedRecentMessages: RecentMessage[];
+  cachedRecentContext?: string;
+}
+
+export type OffloadSessionCache = Map<string, OffloadSessionState>;
 
 // ─── Message role helpers (handle multiple formats) ─────────────────────────
 
@@ -64,15 +80,8 @@ function truncateToolResult(msg: any, maxChars: number): any {
 
 export class OffloadContextEngine {
   /** Per-session state cache. */
-  private sessions = new Map<string, {
-    lastAccessMs: number;  // ← NEW: track last access time for cleanup
-    lastKnownTotalTokens: number;
-    lastKnownMsgCount: number;
-    lastL15PromptHash: string;
-    cachedPrompt?: string;
-    cachedRecentMessages: RecentMessage[];
-    cachedRecentContext?: string;
-  }>();
+  private sessions: OffloadSessionCache;
+  private turnLedger?: TurnAdvancementLedger;
 
   /** Get or create per-session state. */
   private getSession(sessionKey: string) {
@@ -132,14 +141,32 @@ export class OffloadContextEngine {
     private client: OffloadApiClient,
     private config: OffloadClientConfig,
     private logger: Logger,
-  ) {}
+    options?: {
+      stateRoot?: string;
+      sessions?: OffloadSessionCache;
+    },
+  ) {
+    this.sessions = options?.sessions ?? new Map();
+    this.turnLedger = options?.stateRoot ? new TurnAdvancementLedger(options.stateRoot) : undefined;
+  }
 
   get info() {
-    return {
+    const info = {
       id: "memory-tencentdb",
       name: "Offload Client Context Engine",
       version: "2.0.0",
       ownsCompaction: true,
+    };
+    return {
+      ...info,
+      ...(this.turnLedger
+        ? {
+            transcriptSemantics: {
+              currentTurnFence: "before-current-turn-entry-v1" as const,
+              turnAdvancementIdempotency: "atomic-idempotent-v1" as const,
+            },
+          }
+        : {}),
     };
   }
 
@@ -164,6 +191,17 @@ export class OffloadContextEngine {
     isHeartbeat?: boolean;
   }) {
     return { ingested: true };
+  }
+
+  async commitTurn(record: TurnAdvancementRecord) {
+    if (!this.turnLedger) {
+      throw new Error("[offload-client] durable turn ledger is not configured");
+    }
+    const result = await this.turnLedger.commit(record);
+    this.logger.debug?.(
+      `[offload-client] commitTurn: status=${result.status}, session=${record.sessionId}, messages=${record.messages.length}`,
+    );
+    return result;
   }
 
   /**
