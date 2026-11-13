@@ -35,6 +35,11 @@ describe("dirForType", () => {
     expect(dirForType("custom_type")).toBe("custom_type");
   });
 
+  it("normalizes case and surrounding whitespace before lookup", () => {
+    expect(dirForType("Entity")).toBe("entities");
+    expect(dirForType("  ENTITY  ")).toBe("entities");
+  });
+
   it("routes unsafe values to other", () => {
     expect(dirForType("../escape")).toBe("other");
     expect(dirForType("has/slash")).toBe("other");
@@ -51,5 +56,10 @@ describe("dirForType", () => {
 describe("pageRelPath", () => {
   it("builds a wiki-relative markdown path", () => {
     expect(pageRelPath("entity", "Redis Cluster")).toBe("wiki/entities/redis-cluster.md");
+  });
+
+  it("keeps an empty slug for a blank title", () => {
+    // slugify("") is "", so the path currently ends in ".md" with no stem.
+    expect(pageRelPath("entity", "")).toBe("wiki/entities/.md");
   });
 });
