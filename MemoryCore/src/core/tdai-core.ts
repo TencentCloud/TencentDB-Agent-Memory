@@ -82,6 +82,17 @@ import type { Skill } from "./skill/types.js";
 
 const TAG = "[memory-tdai] [core]";
 
+/** Retain credit from completed groups when a later part of L2 fails. */
+export class L2ExtractionError extends Error {
+  readonly creditUsed: number;
+
+  constructor(cause: unknown, creditUsed: number) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "L2ExtractionError";
+    this.creditUsed = creditUsed;
+  }
+}
+
 /**
  * Skill 生命周期钩子的注入点。用于把 skill 的 create/access/archive 事件同步到
  * 上层的资产注册表（`meta_assets` + `meta_agent_fixed_assets`），实现「skill 创建
@@ -1170,7 +1181,12 @@ export class TdaiCore {
       executionContext,
       checkpointLock,
     });
-    const runnerResult = await runner(sessionKey, cursor);
+    let runnerResult: Awaited<ReturnType<typeof runner>>;
+    try {
+      runnerResult = await runner(sessionKey, cursor);
+    } catch (err) {
+      throw new L2ExtractionError(err, (llmRunner as any)?.accumulatedCredit ?? 0);
+    }
     const creditUsed: number = (llmRunner as any)?.accumulatedCredit ?? 0;
     // L2 runner returns undefined when no new L1 records, or { skipped: true } on empty extraction
     const skipped = (runnerResult === undefined && creditUsed === 0) || (runnerResult?.skipped === true);
