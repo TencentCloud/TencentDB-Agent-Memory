@@ -50,7 +50,7 @@ export default function AgentGrid({
   countsLoading,
   mountedCounts,
   currentUser,
-  isAdmin: _isAdmin,
+  isAdmin,
   canSeeAllAgents,
   onCreateAgent,
   onEditAgent,
@@ -63,7 +63,7 @@ export default function AgentGrid({
   countsLoading: boolean;
   mountedCounts: Record<string, AgentMountedCounts>;
   currentUser: string;
-  /** 保留接口兼容；admin 不再有特殊权限。 */
+  /** system_admin（全局 admin）：与内核 agent delete/archive 的 admin 旁路对齐。 */
   isAdmin: boolean;
   /** 是否有权限看到 team 内全部 agent（admin / team admin）。普通用户只能看到自己的，无需 Owner 筛选。 */
   canSeeAllAgents: boolean;
@@ -109,13 +109,27 @@ export default function AgentGrid({
     });
   }, [agents, keyword, ownerFilter]);
 
+  // 内核 agent/update 仍是 owner-only（无任何 admin 旁路），编辑入口不给
+  // system_admin —— 传 false，避免"能点必 403"。
+  // 已知遗留错位：canManageAsset 对 team admin 也返回 true，而内核 update 不放行
+  // team admin，其编辑他人 agent 时保存仍会 403；属 #1321 之外的存量问题。
   function canEdit(agent: StoreAgent): boolean {
-    // admin 与 member 一致：只能操作自己 owner 的 agent（不再有全局 admin 特权）。
     return canManageAsset(
       { owner_user_id: agent.owner_user_id, team_id: agent.team_id },
       activeTeam,
       currentUser,
       false,
+    );
+  }
+
+  // 删除走 delete-cascade：内核 deleteAgentsForCaller/archiveAgentForCaller 已放行
+  // owner / team admin / system_admin，前端与内核权限面对齐。
+  function canDelete(agent: StoreAgent): boolean {
+    return canManageAsset(
+      { owner_user_id: agent.owner_user_id, team_id: agent.team_id },
+      activeTeam,
+      currentUser,
+      isAdmin,
     );
   }
 
@@ -276,6 +290,7 @@ export default function AgentGrid({
         <div className="_memory-agents-card-grid">
           {filteredAgents.map((agent) => {
             const editable = canEdit(agent);
+            const deletable = canDelete(agent);
             return (
               <div
                 key={agent.agent_id}
@@ -295,9 +310,9 @@ export default function AgentGrid({
                 <div className="_memory-agents-card-actions">
                   <Button
                     type="text"
-                    disabled={!editable}
+                    disabled={!deletable}
                     onClick={() => onDeleteAgent(agent)}
-                    title={editable ? t('agentGrid.card.delete.tooltip.can') : t('agentGrid.card.delete.tooltip.cannot')}
+                    title={deletable ? t('agentGrid.card.delete.tooltip.can') : t('agentGrid.card.delete.tooltip.cannot')}
                   >
                     <DeleteIcon size={12} /> {t('agentGrid.card.delete')}
                   </Button>
@@ -351,9 +366,9 @@ export default function AgentGrid({
               width: 90,
               fixed: 'right',
               render: (agent: StoreAgent) => {
-                const editable = canEdit(agent);
+                const deletable = canDelete(agent);
                 return (
-                  <Button type="link" disabled={!editable} onClick={() => onDeleteAgent(agent)}>
+                  <Button type="link" disabled={!deletable} onClick={() => onDeleteAgent(agent)}>
                     {t('agentGrid.table.delete')}
                   </Button>
                 );
