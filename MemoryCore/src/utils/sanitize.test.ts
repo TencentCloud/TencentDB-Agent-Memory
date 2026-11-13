@@ -26,7 +26,16 @@ describe("sanitizeText", () => {
   });
 
   it("removes user persona blocks", () => {
-    expect(sanitizeText("<user-persona>persona</user-persona>keep")).toContain("keep");
+    const out = sanitizeText("<user-persona>persona</user-persona>keep");
+    expect(out).toContain("keep");
+    // Without this the assertion also passes when the persona body is left in place.
+    expect(out).not.toContain("persona");
+  });
+
+  it("removes other injected context blocks", () => {
+    const out = sanitizeText("<relevant-scenes>hidden</relevant-scenes>question");
+    expect(out).toContain("question");
+    expect(out).not.toContain("hidden");
   });
 });
 
