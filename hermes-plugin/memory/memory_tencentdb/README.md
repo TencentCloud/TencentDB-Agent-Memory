@@ -287,11 +287,13 @@ aliases:
   preference list (in-tree first, then `$HOME`). If you want to pin a
   specific path, set `MEMORY_TENCENTDB_GATEWAY_CMD` explicitly — it always
   wins over discovery.
-- **Search tools silently missing from the LLM**: `get_tool_schemas()`
-  returns `[]` until either the Gateway is reachable or one of
-  `MEMORY_TENCENTDB_GATEWAY_CMD` / `MEMORY_TENCENTDB_GATEWAY_PORT` is set
-  in the environment. Set the env var so the tools are advertised
-  optimistically at registration time.
+- **Search tools silently missing / "Unknown tool: memory_tencentdb_*"**:
+  `MemoryManager.add_provider()` indexes `get_tool_schemas()` **before**
+  `initialize()`. Older builds returned `[]` until Gateway env was set, so
+  `_tool_to_provider` stayed empty forever and every call hit
+  `Unknown tool`. Current plugin always advertises both schemas; Hermes also
+  re-indexes after `initialize_all()`. If you still see 0 tools registered,
+  restart the gateway / agent process so the fixed plugin is loaded.
 - **"circuit breaker tripped"** warnings: five consecutive Gateway errors
   were observed. Calls are paused for 60 s; check Gateway health and logs.
 - **Capture backlog warnings**: Gateway is slow or hung — `sync_turn` is
