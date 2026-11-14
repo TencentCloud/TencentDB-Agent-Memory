@@ -314,6 +314,36 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
+/**
+ * A request body of `null`, `[]`, `"x"` or `1` parses fine but crashes on
+ * property access (`body.x`) — handlers must reject non-object JSON with
+ * 400 instead of falling into a TypeError → 500.
+ */
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+export function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Upper bound for `limit` on the v1 search routes (plugin tools cap at 20). */
+export const V1_SEARCH_MAX_LIMIT = 100;
+
+/**
+ * Normalize a v1 search `limit`: default 5, integer in [1, V1_SEARCH_MAX_LIMIT].
+ * Without this a client-supplied limit flowed straight into `candidateK = limit * 3`.
+ */
+export function clampV1SearchLimit(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return 5;
+  return Math.min(Math.max(Math.floor(n), 1), V1_SEARCH_MAX_LIMIT);
+}
+
 // ============================
 // Gateway Server
 // ============================
@@ -1375,6 +1405,10 @@ export class TdaiGateway {
    */
   private async handleInstanceDestroy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<{ instance_id?: string }>(req);
+    if (!isPlainObject(body)) {
+      sendJson(res, 400, { code: 400, message: "Request body must be a JSON object" });
+      return;
+    }
     const instanceId = body?.instance_id;
 
     if (!instanceId || typeof instanceId !== "string") {
@@ -1401,6 +1435,10 @@ export class TdaiGateway {
    */
   private async handleInstanceDestroyV3(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<{ instance_id?: string }>(req);
+    if (!isPlainObject(body)) {
+      sendJson(res, 400, { code: 400, message: "Request body must be a JSON object" });
+      return;
+    }
     const instanceId = body?.instance_id;
 
     if (!instanceId || typeof instanceId !== "string") {
@@ -1558,7 +1596,11 @@ export class TdaiGateway {
   private async handleRecall(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<RecallRequest>(req);
 
-    if (!body.query || !body.session_key) {
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
+    if (!isNonEmptyString(body.query) || !isNonEmptyString(body.session_key)) {
       sendError(res, 400, "Missing required fields: query, session_key");
       return;
     }
@@ -1594,7 +1636,15 @@ export class TdaiGateway {
   private async handleCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<CaptureRequest>(req);
 
-    if (!body.user_content || !body.assistant_content || !body.session_key) {
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
+    if (
+      !isNonEmptyString(body.user_content) ||
+      !isNonEmptyString(body.assistant_content) ||
+      !isNonEmptyString(body.session_key)
+    ) {
       sendError(res, 400, "Missing required fields: user_content, assistant_content, session_key");
       return;
     }
@@ -1603,12 +1653,12 @@ export class TdaiGateway {
     const result = await this.core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
-      messages: body.messages ?? [
+      messages: Array.isArray(body.messages) ? body.messages : [
         { role: "user", content: body.user_content },
         { role: "assistant", content: body.assistant_content },
       ],
       sessionKey: body.session_key,
-      sessionId: body.session_id,
+      sessionId: optionalString(body.session_id),
     });
     const elapsed = Date.now() - startMs;
 
@@ -1624,16 +1674,20 @@ export class TdaiGateway {
   private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<MemorySearchRequest>(req);
 
-    if (!body.query) {
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
+    if (!isNonEmptyString(body.query)) {
       sendError(res, 400, "Missing required field: query");
       return;
     }
 
     const result = await this.core.searchMemories({
       query: body.query,
-      limit: body.limit,
-      type: body.type,
-      scene: body.scene,
+      limit: clampV1SearchLimit(body.limit),
+      type: optionalString(body.type),
+      scene: optionalString(body.scene),
     });
 
     const response: MemorySearchResponse = {
@@ -1647,15 +1701,19 @@ export class TdaiGateway {
   private async handleSearchConversations(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<ConversationSearchRequest>(req);
 
-    if (!body.query) {
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
+    if (!isNonEmptyString(body.query)) {
       sendError(res, 400, "Missing required field: query");
       return;
     }
 
     const result = await this.core.searchConversations({
       query: body.query,
-      limit: body.limit,
-      sessionKey: body.session_key,
+      limit: clampV1SearchLimit(body.limit),
+      sessionKey: optionalString(body.session_key),
     });
 
     const response: ConversationSearchResponse = {
@@ -1668,7 +1726,11 @@ export class TdaiGateway {
   private async handleSessionEnd(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<SessionEndRequest>(req);
 
-    if (!body.session_key) {
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
+    if (!isNonEmptyString(body.session_key)) {
       sendError(res, 400, "Missing required field: session_key");
       return;
     }
@@ -1682,6 +1744,10 @@ export class TdaiGateway {
   private async handleSeed(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<SeedRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.data) {
       sendError(res, 400, "Missing required field: data");
       return;
