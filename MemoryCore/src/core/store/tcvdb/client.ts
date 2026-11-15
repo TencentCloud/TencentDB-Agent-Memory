@@ -8,9 +8,43 @@
  */
 
 import fs from "node:fs";
-import { request as undiciRequest, Agent as UndiciAgent } from "undici";
+import { createRequire } from "node:module";
 import type { Dispatcher } from "undici";
 import type { StoreLogger } from "../types.js";
+
+// ── Lazy undici loading + global dispatcher guard ─────────────
+// undici@8 runs `setGlobalDispatcher(new Agent())` at module load when
+// Symbol.for("undici.globalDispatcher.2") is unset (see undici's
+// lib/global.js). That also overwrites the legacy
+// Symbol.for("undici.globalDispatcher.1") slot that Node's built-in fetch
+// reads — silently discarding a pre-configured dispatcher such as Node's
+// EnvHttpProxyAgent (NODE_USE_ENV_PROXY=1), which makes process-wide fetch()
+// bypass HTTP(S)_PROXY.
+//
+// To avoid that side effect for every consumer of this module (including
+// standalone SQLite mode, where the TCVDB client is imported eagerly but never
+// used), load undici lazily on first request. Synchronous CommonJS loading keeps
+// the snapshot and restore in one turn, so another dispatcher update cannot
+// interleave and then be overwritten by a stale snapshot.
+const LEGACY_GLOBAL_DISPATCHER = Symbol.for("undici.globalDispatcher.1");
+const require = createRequire(import.meta.url);
+
+type UndiciModule = typeof import("undici");
+
+let undiciModule: UndiciModule | undefined;
+
+function loadUndici(): UndiciModule {
+  if (!undiciModule) {
+    const g = globalThis as Record<symbol, unknown>;
+    const previousLegacy = g[LEGACY_GLOBAL_DISPATCHER];
+    const mod = require("undici") as UndiciModule;
+    if (previousLegacy !== undefined && g[LEGACY_GLOBAL_DISPATCHER] !== previousLegacy) {
+      g[LEGACY_GLOBAL_DISPATCHER] = previousLegacy;
+    }
+    undiciModule = mod;
+  }
+  return undiciModule;
+}
 
 // ============================
 // Types
@@ -85,8 +119,12 @@ export class TcvdbClient {
   private readonly database: string;
   private readonly timeout: number;
   private readonly logger?: StoreLogger;
-  /** undici dispatcher for HTTPS + custom CA. */
-  private readonly dispatcher?: Dispatcher;
+  /** undici dispatcher for HTTPS + custom CA. Created lazily on first request. */
+  private dispatcher?: Dispatcher;
+  /** Set once dispatcher creation failed, so we don't retry (and re-log) per request. */
+  private dispatcherFailed = false;
+  /** Path to CA certificate PEM file (for HTTPS connections). */
+  private readonly caPemPath?: string;
 
   constructor(config: TcvdbClientConfig, logger?: StoreLogger) {
     // 防御性 normalize：Shark 某些实例的 VdbUrl 可能只返回 `host:port`（缺 scheme），
@@ -105,17 +143,25 @@ export class TcvdbClient {
     // Log connection info at construction time.
     this.logger?.debug?.(`${TAG} url=${this.baseUrl} db=${this.database} timeout=${this.timeout}${this.baseUrl.startsWith("https://") ? ` https=true caPemPath=${config.caPemPath ?? "(none)"}` : ""}`);
 
-    // For HTTPS with a custom CA certificate, create a dedicated undici Agent.
-    // We use undici.request() instead of global fetch because fetch's
-    // `dispatcher` option is unreliable across Node versions.
-    if (this.baseUrl.startsWith("https://") && config.caPemPath) {
-      try {
-        const ca = fs.readFileSync(config.caPemPath, "utf-8");
-        this.dispatcher = new UndiciAgent({ connect: { ca } });
-        this.logger?.debug?.(`${TAG} HTTPS enabled with CA from ${config.caPemPath}`);
-      } catch (err) {
-        this.logger?.error(`${TAG} Failed to load CA PEM from ${config.caPemPath}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    this.caPemPath = config.caPemPath;
+  }
+
+  /**
+   * Lazily create the dedicated undici Agent for HTTPS + custom CA on first
+   * request (undici is only loaded at that point — see loadUndici above).
+   * We use undici.request() instead of global fetch because fetch's
+   * `dispatcher` option is unreliable across Node versions.
+   */
+  private ensureDispatcher(UndiciAgent: UndiciModule["Agent"]): void {
+    if (this.dispatcher || this.dispatcherFailed) return;
+    if (!(this.baseUrl.startsWith("https://") && this.caPemPath)) return;
+    try {
+      const ca = fs.readFileSync(this.caPemPath, "utf-8");
+      this.dispatcher = new UndiciAgent({ connect: { ca } });
+      this.logger?.debug?.(`${TAG} HTTPS enabled with CA from ${this.caPemPath}`);
+    } catch (err) {
+      this.dispatcherFailed = true;
+      this.logger?.error(`${TAG} Failed to load CA PEM from ${this.caPemPath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -126,6 +172,9 @@ export class TcvdbClient {
    * Handles auth, timeout, retries (5xx/timeout), and error unwrapping.
    */
   async request<T = ApiResponse>(path: string, body: Record<string, unknown>): Promise<T> {
+    const { request: undiciRequest, Agent: UndiciAgent } = loadUndici();
+    this.ensureDispatcher(UndiciAgent);
+
     let lastError: Error | undefined;
     const t0 = performance.now();
 
