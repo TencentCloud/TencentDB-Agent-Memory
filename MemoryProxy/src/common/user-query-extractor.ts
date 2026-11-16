@@ -141,6 +141,8 @@ export function extractUserQueryText(raw: string): string {
     "persisted-output", "persisted_output",
     "tool_use_error", "tool-use-error",
     "tool_result", "tool-result",
+    // dsh injects a loaded skill's full instructions as a user-role metadata block.
+    "skill_content",
     // The proxy may prepend L1 recall inside a user-role message. It is
     // context for the model, not text typed by the user.
     "tdai_recalled_l1_memories",
