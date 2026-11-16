@@ -3691,4 +3691,9 @@ export class VectorStore implements IMemoryStore {
       );
     }
   }
+
+  /** Whether close() has been called (see IMemoryStore.isClosed). */
+  isClosed(): boolean {
+    return this.closed;
+  }
 }
