@@ -8,6 +8,29 @@ It is "transparent" to both the client and the upstream model — it changes no 
 
 ## Where it fits
 
+### Dynamic topic sessions (Hermes / custom clients)
+
+For OpenAI chat and Anthropic requests, send the current topic's unique ID on
+**every request**, for example `"metadata": { "session_id": "topic-42" }`.
+The proxy uses it for conversation routing, session initialization, injection,
+and write-back, as well as identity inspection. Top-level and `metadata`
+fields `session_id`/`sessionId`, `conversation_id`/`conversationId`, and
+`thread_id`/`threadId` are accepted; blank and non-string values are ignored.
+
+Existing conversation headers (including parent-conversation routing) take
+precedence. Remove fixed session/conversation headers when using dynamic body
+metadata, or they will override it. Keep the ID stable within a topic and
+different across topics; a per-request random ID breaks continuity.
+
+Static Hermes `extra_headers` / `extra_body` configuration cannot supply the
+current session. Use a client request middleware that receives the current
+session ID, scopes the change to your configured Proxy endpoint, and sets
+`request.metadata.session_id`. The reporter verified Hermes' `llm_request`
+middleware on their deployment; `pre_api_request` did not allow rewriting.
+See the [integration report](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1764#issuecomment-6350968243).
+Proxy support alone does not install that client middleware. If the client
+cannot send a dynamic ID, use its memory plugin for multi-topic sessions.
+
 ```text
 Coding agent (Claude Code / CodeBuddy / ...)
         │  OpenAI / Anthropic protocol (unchanged)

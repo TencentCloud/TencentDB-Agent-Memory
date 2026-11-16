@@ -4,9 +4,11 @@
  * Shared between handler.ts and anthropicHandler.ts.
  */
 import type { Context } from "hono";
+import { extractBodySessionId } from "../identity.js";
 
 /**
- * Extract conversation ID from request headers. Returns null if no valid ID found.
+ * Extract conversation ID from headers, then request-body metadata.
+ * Returns null if no valid ID is found. Existing header precedence is preserved.
  *
  * ── subagent 会话归一（2026-09-20，修复 WorkBuddy 压缩后无限弹表单循环）──
  * WorkBuddy 助理派生并行 subagent 时，每个 subagent 用**独立的新 x-conversation-id**，
@@ -24,7 +26,7 @@ import type { Context } from "hono";
  *   subagent : x-conversation-id=01a0bcff..  x-parent-conversation-id=888a1848.. purpose=subagent:general-purpose type=team
  *   → subagent.parent === 主会话.conv，故用 parent 归一到主会话身份。
  */
-export function resolveConversationId(c: Context): string | null {
+export function resolveConversationId(c: Context, body?: Record<string, unknown>): string | null {
   // subagent 优先用 parent-conversation-id 归一到父（主）会话身份。
   const parentId = c.req.header("x-parent-conversation-id");
   if (parentId && parentId.length > 0) return parentId;
@@ -37,7 +39,7 @@ export function resolveConversationId(c: Context): string | null {
     c.req.header("x-chat-id") ??
     c.req.header("x-thread-id") ??
     null;
-  return id && id.length > 0 ? id : null;
+  return id && id.length > 0 ? id : body ? extractBodySessionId(body) : null;
 }
 
 /** Check whether the messages look like a fresh conversation (at most 1 user message, no assistant/tool). */

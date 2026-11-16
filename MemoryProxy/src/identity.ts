@@ -138,6 +138,12 @@ export function extractClientIdentity(
     headers["x-request-session"] ??
     null;
 
+  // OpenAI-compatible clients can expose request-level routing metadata even
+  // when their static extra headers cannot contain a dynamic session ID.
+  if (!sessionId && body) {
+    sessionId = extractBodySessionId(body);
+  }
+
   // Enterprise WeChat ID
   let wechatWorkId: string | null =
     headers["x-wechat-work-id"] ??
@@ -305,6 +311,31 @@ function extractUserInfoFromBody(body: Record<string, unknown>): UserInfoFromPro
     sessionIdFromPrompt,
     planId,
   };
+}
+
+export function extractBodySessionId(body: Record<string, unknown>): string | null {
+  const metadata =
+    body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+      ? body.metadata as Record<string, unknown>
+      : {};
+  const candidates = [
+    body.session_id,
+    body.sessionId,
+    body.conversation_id,
+    body.conversationId,
+    body.thread_id,
+    body.threadId,
+    metadata.session_id,
+    metadata.sessionId,
+    metadata.conversation_id,
+    metadata.conversationId,
+    metadata.thread_id,
+    metadata.threadId,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function extractField(text: string, pattern: RegExp): string | null {

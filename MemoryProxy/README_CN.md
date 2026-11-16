@@ -1,5 +1,24 @@
 # MemoryProxy
 
+## Hermes / 自定义客户端的动态话题会话
+
+OpenAI chat 和 Anthropic 请求均可在**每次请求**中传入当前话题的唯一 ID，
+例如 `"metadata": { "session_id": "topic-42" }`。代理将其用于会话路由、
+初始化、记忆注入和回写，同时用于身份检查。支持顶层及 `metadata` 中的
+`session_id`/`sessionId`、`conversation_id`/`conversationId`、`thread_id`/`threadId`；
+空白或非字符串值会被忽略。
+
+已有会话请求头（含父会话归一规则）优先。使用动态 body 字段时应移除固定的
+session/conversation 请求头，否则仍会被固定值覆盖。同一话题的 ID 应保持稳定，
+不同话题使用不同 ID；不要每次请求随机生成新 ID。
+
+Hermes 的静态 `extra_headers` / `extra_body` 配置不能提供当前会话 ID。
+需要在客户端请求中间件中取得当前 session ID，仅对配置的 Proxy 端点设置
+`request.metadata.session_id`。报告者已在其部署中验证 `llm_request` middleware
+可完成注入，`pre_api_request` 不能改写请求，详见
+[实测反馈](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1764#issuecomment-6350968243)。
+代理升级不会自动安装客户端中间件；客户端不能动态传入 ID 时，多话题场景请使用其记忆插件。
+
 MemoryProxy 是一个**透明的 LLM 请求代理**：把编码 Agent（Claude Code / CodeBuddy 等）原本直连大模型的请求，改为先经过它中转。它在转发前后自动完成会话初始化、记忆注入、对话回流等动作，让 Agent **无需改动一行代码**就能用上 [MemoryCore](../MemoryCore/README_CN.md) 提供的团队记忆、Skill 和 Knowledge。
 
 对客户端和上游模型来说，它是“透明”的——不改变任何协议，原样转发 OpenAI `/v1/chat/completions` 和 Anthropic `/v1/messages`，只是在中转的这一进一出里，顺手做了这些事：**会话初始化、上下文注入、对话回流、鉴权与用量上报**。
