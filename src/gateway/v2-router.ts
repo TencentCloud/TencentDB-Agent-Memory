@@ -21,6 +21,7 @@ import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/ty
 import type { EmbeddingService } from "../core/store/embedding.js";
 import type { StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
+import { clampSceneSummary } from "../core/scene/scene-summary.js";
 import type { Logger } from "../core/types.js";
 import type { IStateBackend } from "../core/state/types.js";
 import type { PipelineWorker } from "../services/pipeline-worker.js";
@@ -925,6 +926,10 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
   const parsed = scenarioWriteRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
   const { path, content, summary } = parsed.data;
+  // This route writes META directly, bypassing L2 entirely. Apply the same
+  // summary cap as the extraction path so the injected system prompt cannot
+  // be inflated through the API.
+  const boundedSummary = summary === undefined ? undefined : clampSceneSummary(summary);
 
   const storage = deps.getStorage();
   if (!storage) return errorEnvelope(503, "Storage not available", requestId);
@@ -951,7 +956,7 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
 
     // Update fields
     metaFields["updated"] = now;
-    if (summary !== undefined) metaFields["summary"] = summary;
+    if (boundedSummary !== undefined) metaFields["summary"] = boundedSummary;
 
     const newMeta = Object.entries(metaFields).map(([k, v]) => `${k}: ${v}`).join("\n");
     finalContent = `-----META-START-----\n${newMeta}\n-----META-END-----\n\n${content}`;
@@ -961,7 +966,7 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
       `created: ${now}`,
       `updated: ${now}`,
     ];
-    if (summary !== undefined) metaLines.push(`summary: ${summary}`);
+    if (boundedSummary !== undefined) metaLines.push(`summary: ${boundedSummary}`);
     finalContent = `-----META-START-----\n${metaLines.join("\n")}\n-----META-END-----\n\n${content}`;
   }
 

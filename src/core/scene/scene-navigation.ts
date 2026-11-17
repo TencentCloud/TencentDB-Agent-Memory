@@ -7,6 +7,7 @@
 
 import path from "node:path";
 import type { SceneIndexEntry } from "./scene-index.js";
+import { clampSceneSummary } from "./scene-summary.js";
 
 const NAV_HEADER = "---\n## 🗺️ Scene Navigation (Scene Index)";
 
@@ -56,7 +57,11 @@ export function generateSceneNavigation(entries: SceneIndexEntry[], dataDir?: st
     }
     const pathLine = `### Path: ${scenePath}`;
     const heatLine = `**热度**: ${e.heat}${heatEmoji(e.heat)}${e.updated ? ` | **更新**: ${e.updated}` : ""}`;
-    const summaryLine = `Summary: ${e.summary}`;
+    // Read-side guard: this block is injected into the system prompt on every
+    // session start, so summaries are clamped here as well. L2 already caps
+    // them on write, but this covers legacy scene_index.json entries and the
+    // ones written directly through `POST /v2/scenario/write`.
+    const summaryLine = `Summary: ${clampSceneSummary(e.summary)}`;
     return `${pathLine}\n${heatLine}\n${summaryLine}`;
   });
 
