@@ -254,6 +254,27 @@ export async function parseJsonBody<T>(
     const chunks: Buffer[] = [];
     let received = 0;
     let aborted = false;
+    let completed = false;
+
+    // Errors/aborts on `req` do NOT propagate through .pipe() — with a zlib
+    // stream in the chain, source's 'error'/'end' listeners never see them
+    // and this promise would hang forever. Forward them explicitly.
+    if (source !== req) {
+      const fail = (err: Error) => {
+        if (aborted || completed) return;
+        aborted = true;
+        req.unpipe(source as NodeJS.ReadableStream & NodeJS.WritableStream);
+        (source as unknown as { destroy: () => void }).destroy();
+        reject(err);
+      };
+      req.on("error", (err) => fail(err instanceof Error ? err : new Error("Request aborted")));
+      req.on("aborted", () => fail(new Error("Request aborted")));
+      req.on("close", () => {
+        // 'close' also fires after a fully-consumed request; only an
+        // incomplete body stream dying early is an abort.
+        if (!req.readableEnded) fail(new Error("Request aborted"));
+      });
+    }
 
     source.on("data", (chunk: Buffer) => {
       if (aborted) return;
@@ -272,6 +293,7 @@ export async function parseJsonBody<T>(
     });
     source.on("end", () => {
       if (aborted) return;
+      completed = true;
       try {
         const body = Buffer.concat(chunks).toString("utf-8");
         resolve(JSON.parse(body) as T);
