@@ -348,6 +348,7 @@ export class TdaiGateway {
 
   // ── COS: global shared client singleton + per-instance StorageAdapter cache ──
   private sharedCosClient: import("../integrations/cos/cos-backend.js").SharedCosClient | null = null;
+  private sharedCosInitPromise: Promise<void> | null = null;
   private cosStorageCache: Map<string, StorageAdapter> | null = null;
 
   // ── Metadata (v3): shared store pool + per-instance MetadataService ──
@@ -2821,10 +2822,31 @@ export class TdaiGateway {
   private async initSharedCosClient(maxRetries = 3): Promise<void> {
     if (this.sharedCosClient) return;
     if (!this.configProvider) return;
+    // In-flight dedupe: concurrent lazy callers (pipeline tasks +
+    // /v3/session/add) share the same init attempt instead of each
+    // constructing a SharedCosClient + credential provider and racing.
+    // A concurrent caller simply awaits the in-flight attempt; its own
+    // maxRetries arg is ignored for that attempt.
+    if (this.sharedCosInitPromise) {
+      await this.sharedCosInitPromise;
+      return;
+    }
+    this.sharedCosInitPromise = this.doInitSharedCosClient(maxRetries);
+    try {
+      await this.sharedCosInitPromise;
+    } finally {
+      this.sharedCosInitPromise = null;
+    }
+  }
 
+  private async doInitSharedCosClient(maxRetries: number): Promise<void> {
+    // Guaranteed non-null by initSharedCosClient's early return; capture
+    // once so the type narrows for the credential-fetcher closure below.
+    const configProvider = this.configProvider;
+    if (!configProvider) return;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const cosConfig = await this.configProvider.resolveCos();
+        const cosConfig = await configProvider.resolveCos();
         if (!cosConfig?.cosUrl) {
           this.logger.warn(`${TAG} COS config unavailable from Shark (attempt ${attempt}/${maxRetries})`);
           if (attempt < maxRetries) {
@@ -2845,7 +2867,6 @@ export class TdaiGateway {
         const internalDomain = isInternalDomain ? endpointDomain : `cos-internal.${region}.tencentcos.cn`;
         const cosEndpointDomain = this.config.cos.domain || internalDomain;
 
-        const configProvider = this.configProvider;
         const credentialProvider = new CachedCredentialProvider({
           fetcher: async () => {
             const fresh = await configProvider.resolveCos();
