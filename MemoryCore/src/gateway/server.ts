@@ -498,7 +498,7 @@ export class TdaiGateway {
         })
         .catch((err) => {
           this.analyticsChClientInstance = null;
-          this.logger.warn?.("[analytics-ch] init failed:", (err as Error).message);
+          this.logger.warn?.(`[analytics-ch] init failed: ${(err as Error).message}`);
         });
     }
 
