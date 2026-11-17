@@ -856,11 +856,19 @@ export class TdaiGateway {
   private async doStop(): Promise<void> {
     this.logger.info("Shutting down gateway...");
 
-    // 优雅关闭 OTel SDK（flush 剩余 Span/Log）
-    try {
-      await shutdownOTelSDK();
-    } catch {
-      // Best-effort shutdown，不影响主流程
+    // 1. Stop accepting new connections FIRST — otherwise requests arriving
+    //    mid-shutdown (or in-flight keep-alive requests) would hit stores and
+    //    pools that are already closing below. The close promise resolves
+    //    once in-flight requests drain; it is awaited with a bound after the
+    //    workers/stores are down.
+    let serverClosed: Promise<void> | null = null;
+    const httpServer = this.server;
+    if (httpServer) {
+      serverClosed = new Promise<void>((resolve) => {
+        httpServer.close(() => resolve());
+      });
+      // Drop idle keep-alive sockets right away; in-flight requests keep running.
+      httpServer.closeIdleConnections?.();
     }
 
     // Stop integrated services first
@@ -882,6 +890,22 @@ export class TdaiGateway {
       await this.timerScanner.stop();
       this.logger.info("Timer Scanner stopped");
     }
+
+    // 2. Drain in-flight requests BEFORE closing any store/pool/backend —
+    //    bounded at 10s, then force-close stragglers. Requests still in
+    //    flight after this point would hit closed stores.
+    if (serverClosed && httpServer) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 10_000);
+      });
+      await Promise.race([serverClosed, expired]);
+      clearTimeout(timer);
+      httpServer.closeAllConnections?.();
+    }
+
+    // 3. Workers stopped and HTTP drained — now safe to close data-plane
+    //    backends and pools.
     if (this.stateBackend) {
       await this.stateBackend.destroy?.();
       this.logger.info("State Backend closed");
@@ -905,13 +929,15 @@ export class TdaiGateway {
       this.logger.info?.("Analytics CH client closed");
     }
 
-    if (this.server) {
-      await new Promise<void>((resolve) => {
-        this.server!.close(() => resolve());
-      });
-    }
-
     await this.core.destroy();
+
+    // 4. 优雅关闭 OTel SDK（flush 剩余 Span/Log）—— LAST, so spans/logs
+    //    emitted by the shutdown sequence itself are still exported.
+    try {
+      await shutdownOTelSDK();
+    } catch {
+      // Best-effort shutdown，不影响主流程
+    }
     this.logger.info("Gateway stopped");
   }
 
