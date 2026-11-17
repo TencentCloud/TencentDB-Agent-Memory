@@ -1278,10 +1278,12 @@ export class TdaiGateway {
     if (!expected) return "ok"; // auth disabled — default behaviour
 
     const header = req.headers["authorization"];
-    if (typeof header !== "string" || !header.startsWith("Bearer ")) {
+    // RFC 7235: the auth scheme is case-insensitive ("bearer x" is valid).
+    const m = typeof header === "string" ? /^Bearer\s+(.+)$/i.exec(header) : null;
+    if (!m) {
       return "missing";
     }
-    const provided = header.slice("Bearer ".length).trim();
+    const provided = m[1].trim();
     if (!provided || !safeEqual(provided, expected)) {
       return "invalid";
     }
