@@ -27,10 +27,26 @@ const SENSITIVE_KEYS = new Set([
 const MAX_LOG_FIELD_CHARS = 300;
 const MAX_LOG_JSON_CHARS = 1200;
 
-function maskSecret(value: string): string {
-  if (!value) return '';
-  if (value.length <= 8) return `${value}…`;
-  return `${value.slice(0, 8)}…`;
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+const NORMALIZED_SENSITIVE_KEYS = new Set([...SENSITIVE_KEYS].map(normalizeKey));
+/** 以这些后缀结尾的字段一律视为凭据（如 new_password、accessToken、x-tdai-user-key）。 */
+const SENSITIVE_KEY_SUFFIXES = ['password', 'passwd', 'secret', 'token', 'apikey', 'userkey', 'secretkey', 'accesskey', 'privatekey'];
+
+export function isSensitiveLogKey(key: string): boolean {
+  const n = normalizeKey(key);
+  if (!n) return false;
+  return NORMALIZED_SENSITIVE_KEYS.has(n) || SENSITIVE_KEY_SUFFIXES.some((s) => n.endsWith(s));
+}
+
+/** 密码与短值完全脱敏；长密钥保留 8 位前缀便于排查是哪把 key。 */
+function maskSecret(key: string, raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length <= 16 || /pass(word|wd)/.test(normalizeKey(key))) {
+    return '[redacted]';
+  }
+  return `${raw.slice(0, 8)}…`;
 }
 
 function truncateString(value: string): string {
@@ -38,7 +54,7 @@ function truncateString(value: string): string {
   return `${value.slice(0, MAX_LOG_FIELD_CHARS)}…[truncated ${value.length - MAX_LOG_FIELD_CHARS} chars]`;
 }
 
-function sanitizeMetaBody(value: unknown, depth = 0): unknown {
+export function sanitizeMetaBody(value: unknown, depth = 0): unknown {
   if (depth > 8) return '[max_depth]';
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return truncateString(value);
@@ -46,8 +62,8 @@ function sanitizeMetaBody(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return value.map((item) => sanitizeMetaBody(item, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (SENSITIVE_KEYS.has(key.toLowerCase())) {
-      out[key] = typeof raw === 'string' && raw.length > 0 ? maskSecret(raw) : '[redacted]';
+    if (isSensitiveLogKey(key)) {
+      out[key] = maskSecret(key, raw);
       continue;
     }
     out[key] = sanitizeMetaBody(raw, depth + 1);
