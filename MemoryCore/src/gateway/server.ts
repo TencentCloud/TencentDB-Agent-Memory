@@ -60,6 +60,7 @@ import { TracedTaskExecutor } from "../core/report/traced-task-executor.js";
 import { StorePool } from "../core/store/store-pool.js";
 import { validateAndNormalizeRaw, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
+import { makeSeedOutputDir } from "./seed-output-dir.js";
 import type { SeedProgress } from "../core/seed/types.js";
 import { handleV2Route, errorEnvelope, makeRequestId } from "./v2-router.js";
 import type { V2RouterDeps } from "./v2-router.js";
@@ -1711,13 +1712,9 @@ export class TdaiGateway {
       `${input.totalRounds} round(s), ${input.totalMessages} message(s)`,
     );
 
-    // Resolve output directory: use gateway's data dir with a timestamped subfolder
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const ts =
-      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
-      `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const outputDir = `${this.config.data.baseDir}/seed-${ts}`;
+    // Resolve output directory: use gateway's data dir with a timestamped
+    // subfolder; uuid suffix keeps same-second concurrent seeds isolated.
+    const outputDir = makeSeedOutputDir(this.config.data.baseDir);
 
     // Merge config overrides if provided
     // Start with the base memory config + inject llm config from gateway settings
