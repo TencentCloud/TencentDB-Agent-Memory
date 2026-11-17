@@ -110,7 +110,24 @@ export class PanelAuthService {
   private readonly sessions: MemorySessionStore;
   private readonly identities: FileIdentityStore;
   private readonly providers = new AuthProviderRegistry();
-  private readonly consumedPendingWoa = new Set<string>();
+  /** token → expiry (from the decoded pending payload); pruned on add. */
+  private readonly consumedPendingWoa = new Map<string, number>();
+
+  private consumePendingWoa(token: string, expiresAt: number): void {
+    this.pruneConsumedPendingWoa();
+    this.consumedPendingWoa.set(token, expiresAt);
+  }
+
+  private unconsumePendingWoa(token: string): void {
+    this.consumedPendingWoa.delete(token);
+  }
+
+  private pruneConsumedPendingWoa(): void {
+    const now = Date.now();
+    for (const [t, exp] of this.consumedPendingWoa) {
+      if (exp <= now) this.consumedPendingWoa.delete(t);
+    }
+  }
 
   constructor(dependencies: PanelAuthDependencies) {
     const { config, instances, metaKernel, logger } = dependencies;
@@ -346,14 +363,24 @@ export class PanelAuthService {
     if (!userKey) {
       throw new PanelAuthError('INVALID_USER_KEY', 'user_key is required', 400);
     }
-    const resolved = await this.provisionIdentity({
-      instanceId: pending.instanceId,
-      identity: pending.identity,
-      requestId: input.requestId,
-      username: input.username?.trim() || undefined,
-      customUserKey: userKey,
-    });
-    this.consumedPendingWoa.add(input.token);
+    // Mark consumed BEFORE provisioning — otherwise two concurrent submits
+    // of the same pending token both pass getPendingWoaLogin and each
+    // provision an identity. If provisioning fails, un-consume so the user
+    // can retry.
+    this.consumePendingWoa(input.token, pending.expiresAt);
+    let resolved: Awaited<ReturnType<typeof this.provisionIdentity>>;
+    try {
+      resolved = await this.provisionIdentity({
+        instanceId: pending.instanceId,
+        identity: pending.identity,
+        requestId: input.requestId,
+        username: input.username?.trim() || undefined,
+        customUserKey: userKey,
+      });
+    } catch (err) {
+      this.unconsumePendingWoa(input.token);
+      throw err;
+    }
     const session = this.sessions.create({
       instanceId: pending.instanceId,
       coreUserId: resolved.coreUserId,
@@ -475,7 +502,14 @@ export class PanelAuthService {
    * 进程重启后失效，且刷新页面会立刻重建 pending）。
    */
   dismissPendingWoaLogin(token: string | undefined): void {
-    if (token) this.consumedPendingWoa.add(token);
+    if (!token) return;
+    // Prefer the token's own expiry; undecodable tokens get a 5-min tombstone.
+    let expiresAt = Date.now() + 5 * 60 * 1000;
+    try {
+      const parsed = JSON.parse(decryptSecret(token, this.config.sessionSecret)) as { expiresAt?: unknown };
+      if (typeof parsed?.expiresAt === 'number') expiresAt = parsed.expiresAt;
+    } catch { /* keep default */ }
+    this.consumePendingWoa(token, expiresAt);
   }
 
   async bindWoaIdentity(
