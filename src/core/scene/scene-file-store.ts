@@ -63,9 +63,16 @@ export async function writeSceneFileIfUnchanged(
       opts.logger?.debug?.(`${TAG} write skipped (concurrent modification): ${file}`);
       return false;
     }
-    const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
-    await fs.default.writeFile(tmpPath, nextRaw, "utf-8");
-    await fs.default.rename(tmpPath, absPath);
+    const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    try {
+      await fs.default.writeFile(tmpPath, nextRaw, "utf-8");
+      await fs.default.rename(tmpPath, absPath);
+    } catch (writeErr) {
+      // A half-written temp file must not pile up in scene_blocks/ when the
+      // rename fails (or the process dies right after the write).
+      await fs.default.unlink(tmpPath).catch(() => undefined);
+      throw writeErr;
+    }
     return true;
   } catch (err) {
     opts.logger?.warn(

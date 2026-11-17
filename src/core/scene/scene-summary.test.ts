@@ -149,6 +149,27 @@ describe("clampSceneSummary", () => {
       assertWithinLimits(clampSceneSummary(s));
     }
   });
+
+  it("stays bounded on a pathological oversized summary", () => {
+    // A scene file is written by the model, so a punctuation-free block of
+    // tens of KB is reachable. Cutting one code point at a time while
+    // re-measuring the whole string is O(n²) (≈30s at 50k chars), which would
+    // stall the L2 round; the budget pre-slice keeps this in the millisecond
+    // range.
+    const huge = "用".repeat(200_000);
+    const startedAt = Date.now();
+    const out = clampSceneSummary(huge);
+    const elapsedMs = Date.now() - startedAt;
+
+    assertWithinLimits(out);
+    expect(out.endsWith("…")).toBe(true);
+    expect(elapsedMs).toBeLessThan(2_000);
+  });
+
+  it("degrades to an empty string instead of throwing on degenerate limits", () => {
+    expect(clampSceneSummary("abcdef", { maxWordEquivalent: 0, maxChars: 0 })).toBe("");
+    expect(() => clampSceneSummary("用用用", { maxWordEquivalent: 1, maxChars: 2 })).not.toThrow();
+  });
 });
 
 describe("clampSummaryInSceneFile", () => {

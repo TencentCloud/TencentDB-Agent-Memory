@@ -158,9 +158,20 @@ function greedyFit(units: string[], limits: SceneSummaryLimits): string {
   return acc;
 }
 
-/** Hard fallback: drop trailing code points until the text fits. */
+/**
+ * Hard fallback: drop trailing code points until the text fits.
+ *
+ * The input is pre-sliced to the character budget first: `clampSceneSummary`
+ * only calls this when the text is over budget, and a scene file is written by
+ * the model, so `body` can be tens of KB of punctuation-free text. Re-measuring
+ * the full string on every pop would be O(n²) (measured: 2k chars ≈ 47ms,
+ * 50k chars ≈ tens of seconds) and would stall the L2 round; slicing first
+ * bounds the loop to `maxChars` iterations, since the budget never exceeds it.
+ */
 function cutToFit(body: string, limits: SceneSummaryLimits): string {
+  const budget = Math.max(0, limits.maxChars);
   const chars = Array.from(body);
+  if (chars.length > budget) chars.length = budget;
   while (chars.length > 0 && !fits(chars.join(""), limits)) {
     chars.pop();
   }
