@@ -6,7 +6,9 @@
  * 安全防护（002 §4-5）：
  *   - R1 git hooks：clone/fetch 本就不拉取远端 .git/hooks（hooks 为本地态），故不额外
  *     配置 core.hooksPath（加固版 git 会拒绝该配置，需 allowUnsafeHooksPath）。
- *   - R2 SSRF：HTTPS 与 SSH 均做内网/环回地址黑名单（对齐项目 security_rules）。
+ *   - R2 SSRF：HTTPS 与 SSH 均做内网/环回地址校验（对齐项目 security_rules）。
+ *     validate() 同步拦截字面量（含整数/十六进制/八进制/IPv4-mapped IPv6 变形），
+ *     fetch()/sync() 额外 await validateResolved() 做 DNS 解析，拒绝解析到私网的域名。
  *   - Bug 修复（方案 A）：增量 sync 的 git clean 排除 .codegraph/，避免删掉 codegraph 索引库。
  *
  * SSH 支持（2026-10-10）：协议白名单从 https-only 放开到 https + ssh(`git@` / `ssh://`)；
@@ -16,6 +18,7 @@
 import simpleGit, { CleanOptions, ResetMode, type SimpleGit } from "simple-git";
 import type { ISourceFetcher, FetchResult, SourceType, GitFetchOptions } from "./types.js";
 import { isSshUrl, parseSshHost, buildSshCommand } from "./ssh-options.js";
+import { isPrivateHostLiteral, resolveAndCheckHost } from "./ssrf-guard.js";
 
 /**
  * 放行 `GIT_SSH_COMMAND`（simple-git ≥3.36 的 CVE 防护要求显式声明）。
@@ -126,18 +129,6 @@ export function isSshAuthError(raw: string): boolean {
 }
 
 /**
- * 内网 / 环回 / link-local 地址黑名单（标准网段）：
- *   - 10. / 172.16-31. / 192.168.  → RFC1918 私有网段
- *   - 169.254.                     → link-local（含云元数据 169.254.169.254）
- *   - 127. / 0. / localhost / ::1  → 环回
- *   - fe80:                        → IPv6 link-local
- *
- * 该黑名单可通过环境变量 KNOWLEDGE_SSRF_CHECK=off 关闭（见 GitSourceFetcher 构造）。
- */
-const PRIVATE_ADDR_RE =
-  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|localhost$|::1$|fe80:)/i;
-
-/**
  * 读取 SSRF 私网黑名单开关。默认开启；
  * 当 KNOWLEDGE_SSRF_CHECK 为 off/false/0/no（大小写不敏感）时关闭。
  */
@@ -179,13 +170,32 @@ export class GitSourceFetcher implements ISourceFetcher {
       throw new Error(`invalid repo_url: cannot parse host from ${sourceUrl}`);
     }
     // R2: SSRF 防护 —— 禁止指向内网 / 环回地址（可经 KNOWLEDGE_SSRF_CHECK=off 关闭）。
+    // 同步快速路径：拦截字面量（含整数/十六进制/八进制变形与 IPv4-mapped IPv6）。
+    // DNS 解析放到 validateResolved()（fetch/sync 中 await），避免改动 ISourceFetcher 接口。
     if (this.ssrfCheck && this.isPrivateAddress(host)) {
       throw new Error(`repo_url must not point to private/loopback address: ${host}`);
     }
   }
 
+  /**
+   * 异步 SSRF 深检：解析域名，拒绝解析到私网/环回地址的 host。
+   * 仅当 ssrfCheck 开启时执行；fetch/sync 在 validate() 之后调用。
+   */
+  private async validateResolved(sourceUrl: string): Promise<void> {
+    if (!this.ssrfCheck) return;
+    const host = this.extractHost(sourceUrl);
+    if (!host) return; // validate() 已拦截空 host
+    const result = await resolveAndCheckHost(host);
+    if (result.blocked) {
+      throw new Error(
+        `repo_url host "${host}" is not allowed (${result.reason ?? "private/loopback address"})`,
+      );
+    }
+  }
+
   async fetch(sourceUrl: string, branch: string, localPath: string, opts?: GitFetchOptions): Promise<FetchResult> {
     this.validate(sourceUrl);
+    await this.validateResolved(sourceUrl);
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
     // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
     // （加固版 git 会拒绝该配置：需 allowUnsafeHooksPath）。
@@ -243,6 +253,7 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   async sync(sourceUrl: string, branch: string, localPath: string, opts?: GitFetchOptions): Promise<FetchResult> {
     this.validate(sourceUrl);
+    await this.validateResolved(sourceUrl);
     // ★ 增量同步同样要带 SSH 私钥：`git fetch origin` 走的还是 ssh 传输，
     //   缺 GIT_SSH_COMMAND 会因为拿不到 key 而认证失败。
     const git = this.gitFor(sourceUrl, localPath, opts); // baseDir = 已存在的仓库目录
@@ -316,6 +327,6 @@ export class GitSourceFetcher implements ISourceFetcher {
   }
 
   private isPrivateAddress(host: string): boolean {
-    return PRIVATE_ADDR_RE.test(host);
+    return isPrivateHostLiteral(host);
   }
 }
