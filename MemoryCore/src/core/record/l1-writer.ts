@@ -22,6 +22,7 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
+import { timestampsForWrite } from "./l1-timestamps.js";
 
 // ============================
 // Types
@@ -132,7 +133,11 @@ export interface DedupDecision {
   merged_type?: MemoryType;
   /** Priority after merge (for update/merge) */
   merged_priority?: number;
-  /** Union of all related timestamps (for update/merge) */
+  /**
+   * Selected target records' existing timestamps (for update/merge).
+   * Populated in code by applyDedupProvenance and unioned with `now` in writeMemory —
+   * never taken from model output.
+   */
   merged_timestamps?: string[];
 }
 
@@ -150,12 +155,53 @@ export function generateMemoryId(): string {
 }
 
 /**
+ * Independent safety hardening (`target_ids` guard):
+ * `merge` / `update` may delete existing records, so require at least one
+ * non-blank target ID. Blank target IDs are stripped; when none remain,
+ * fall back to `store` with the original extracted memory (no `merged_content`,
+ * no target deletes).
+ *
+ * Pool membership for listed targets is checked upstream in `applyDedupProvenance`.
+ * This is a last-line guard when `writeMemory` is called with a raw decision.
+ */
+export function normalizeDedupDecisionForWrite(
+  decision: DedupDecision,
+  _memory?: ExtractedMemory,
+): DedupDecision {
+  if (decision.action !== "merge" && decision.action !== "update") {
+    return decision;
+  }
+
+  const listedTargets = [
+    ...new Set(decision.target_ids.map((id) => id.trim()).filter((id) => id !== "")),
+  ];
+  if (listedTargets.length === 0) {
+    return { record_id: decision.record_id, action: "store", target_ids: [] };
+  }
+
+  const mergedContent =
+    typeof decision.merged_content === "string" && decision.merged_content.trim() !== ""
+      ? decision.merged_content
+      : undefined;
+
+  const targetsUnchanged =
+    listedTargets.length === decision.target_ids.length &&
+    listedTargets.every((id, idx) => id === decision.target_ids[idx]);
+
+  return targetsUnchanged && mergedContent === decision.merged_content
+    ? decision
+    : { ...decision, target_ids: listedTargets, merged_content: mergedContent };
+}
+
+/**
  * Write a memory record according to the dedup decision.
  *
- * - store: append new record
- * - update: remove target records + append updated record
- * - merge: remove target records + append merged record
+ * - store: append new record with `[now]`
+ * - update: remove target records + append updated record with `union(target.timestamps, [now])`
+ * - merge: remove target records + append merged record with `union(target.timestamps, [now])`
  * - skip: do nothing
+ *
+ * Merge/update without targets is coerced to store so existing records are not deleted.
  *
  * v3: supports multi-target removal for update/merge.
  * v3.1: optional VectorStore + EmbeddingService for dual-write (JSONL + vector).
@@ -179,7 +225,15 @@ export async function writeMemory(params: {
   /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
   storage?: StorageAdapter;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  const { memory, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  const incomingDecision = params.decision;
+  const decision = normalizeDedupDecisionForWrite(incomingDecision, memory);
+
+  if (decision.action !== incomingDecision.action) {
+    logger?.warn?.(
+      `${TAG} Falling back to store for ${incomingDecision.record_id} (${incomingDecision.action} → store)`,
+    );
+  }
 
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
@@ -206,17 +260,24 @@ export async function writeMemory(params: {
   let finalTimestamps: string[];
 
   if (decision.action === "merge" || decision.action === "update") {
-    finalContent = decision.merged_content ?? memory.content;
+    finalContent =
+      decision.merged_content && decision.merged_content.trim() !== ""
+        ? decision.merged_content
+        : memory.content;
     finalType = decision.merged_type ?? memory.type;
     finalPriority = decision.merged_priority ?? memory.priority;
-    finalTimestamps = decision.merged_timestamps ?? [now];
   } else {
     // store
     finalContent = memory.content;
     finalType = memory.type;
     finalPriority = memory.priority;
-    finalTimestamps = [now];
   }
+
+  finalTimestamps = timestampsForWrite({
+    action: decision.action,
+    mergedTimestamps: decision.merged_timestamps,
+    nowIso: now,
+  });
 
   const record: MemoryRecord = {
     id: decision.record_id || generateMemoryId(),
