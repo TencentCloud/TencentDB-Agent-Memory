@@ -363,20 +363,6 @@ export async function runCodexPipeline(
     stageIdentity(c, body, "codex");
   }
 
-  // ── DEBUG: dump request_user_input tool schema once so we can see codex's
-  //           expected arguments shape and fix our fake form. Remove after fix.
-  try {
-    const tools = Array.isArray(body.tools) ? body.tools : [];
-    const rui = tools.find(
-      (t: any) => t?.type === "function" && t?.name === "request_user_input" ||
-                  t?.function?.name === "request_user_input" ||
-                  t?.name === "request_user_input",
-    );
-    if (rui) {
-      console.log("[codex-debug] request_user_input tool schema:", JSON.stringify(rui));
-    }
-  } catch {}
-
   // ── 4. Classify request ────────────────────────────────────────────────────
   const requestKind = classifyCodexRequest(body, path, headers);
   const isAuxiliary = requestKind === "auxiliary";
