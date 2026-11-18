@@ -1,6 +1,6 @@
 # Agents
 
-Memory Proxy 目前适配了 7 类 AI Agent 客户端，各自协议、会话初始化方式、注入逻辑差异显著。
+Memory Proxy 目前适配了 7 类 AI Agent 客户端，各自协议、会话初始化方式、注入逻辑差异显著。另有通用 **`skills`** 透传路径（任意 OpenAI 兼容客户端 / 自研 SDK），走 Proxy 通用 catch-all 路由 + `defaultAdapter`，详见 [skills/](./skills/)。
 
 > 🛠 **想接入一个新的 AI Agent 客户端（未在下表中）？**
 > 阅读 [**新客户端二开适配指南 →**](./adapter-agent-development.md)
@@ -87,6 +87,7 @@ cp -r agents ~/agents
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
 | [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
 | [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
+| [skills](./skills/) | OpenAI Chat Completions（兜底 `defaultAdapter`） | Header 预选（或伪装 codebuddy） | N/A | N/A | N/A | ✅ (header 缺失时静默透传) |
 
 ---
 
@@ -140,6 +141,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | dsh | 配置文件 | `~/.dsh/settings.yaml` + `.credentials.yaml` | YAML 环境变量引用 |
 | Hermes | 配置文件 | `~/.hermes/config.yaml` | YAML `api_key` + headers |
 | OpenClaw | 配置文件 | `~/.openclaw/openclaw.json` | JSON `apiKey` + headers |
+| [skills](./skills/) | 通用 OpenAI SDK baseURL | `<client-base-url>` / env `OPENAI_BASE_URL` | `apiKey`（Proxy user_key） |
 
 ---
 
