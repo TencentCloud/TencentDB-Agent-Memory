@@ -7,6 +7,7 @@
  */
 
 import type { RecallResult } from "./hooks/recall.js";
+import { escapeXmlTags } from "./sanitize.js";
 
 interface L1Item {
   id: string;
@@ -50,7 +51,11 @@ function formatL1Memories(items: L1Item[]): string | undefined {
 
   for (const item of items) {
     const typeTag = item.type ? `[${item.type}]` : "";
-    lines.push(`- ${typeTag} ${item.content}`);
+    // Escape injected-section boundaries in memory content. Without this, a
+    // crafted memory (from LLM extraction, panel edit, or import) containing
+    // `</relevant-memories>` could break out of this section and be interpreted
+    // as a system-level instruction on a future recall (stored prompt injection).
+    lines.push(`- ${typeTag} ${escapeXmlTags(item.content)}`);
   }
 
   lines.push("");
@@ -71,7 +76,9 @@ function formatSystemContext(
   // Persona (L3)
   if (persona) {
     parts.push("<user-persona>");
-    parts.push(persona);
+    // Persona is derived from conversation via the LLM; escape any injected
+    // section boundary so it cannot close `<user-persona>` prematurely.
+    parts.push(escapeXmlTags(persona));
     parts.push("</user-persona>");
   }
 
