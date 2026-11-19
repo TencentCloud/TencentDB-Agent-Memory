@@ -17,13 +17,17 @@ export function extractWords(text: string): Set<string> {
     for (const w of latinWords) words.add(w);
   }
 
-  // CJK characters (each char as a "word", plus 2-gram)
-  const cjkChars = text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g);
-  if (cjkChars) {
-    for (const c of cjkChars) words.add(c);
-    // 2-grams for better matching
-    for (let i = 0; i < cjkChars.length - 1; i++) {
-      words.add(cjkChars[i] + cjkChars[i + 1]);
+  // CJK characters (each char as a "word", plus 2-grams within a contiguous run).
+  // Grouping by run keeps bigrams from being built across punctuation or latin
+  // text: matching a flat character array would produce tokens such as "好世"
+  // for "你好，世界", which never occur as adjacent characters in the source.
+  const cjkRuns = text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+/g);
+  if (cjkRuns) {
+    for (const run of cjkRuns) {
+      for (const c of run) words.add(c);
+      for (let i = 0; i < run.length - 1; i++) {
+        words.add(run.slice(i, i + 2));
+      }
     }
   }
 
