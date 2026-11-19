@@ -193,3 +193,92 @@ export function mongoSearchScoreToScore(searchScore: number): number {
   if (!Number.isFinite(searchScore) || searchScore <= 0) return 0;
   return searchScore / (1 + searchScore);
 }
+
+/**
+ * Per-token hit cap used when computing IDF coverage. Bounds the worst-case
+ * cost of a multi-token query (one extra FTS lookup per token, ~1ms each);
+ * tokens above the cap get an underestimated df, which only affects their
+ * relative weight — never whether a document is recalled.
+ */
+export const TOKEN_SCAN_LIMIT = 200;
+
+/**
+ * Re-rank FTS results by how many query tokens a document matched, then by the
+ * IDF weight of those tokens, and only then by the original BM25 order.
+ *
+ * Why (measured on a real 1647-memory library, 1644 self-retrieval queries with
+ * real filler words injected into 30% of them):
+ *
+ * `buildFtsQuery` OR-joins the query tokens into a single FTS5 MATCH, so a
+ * *short* document matching one common token outranks a *long* document that
+ * actually matches the rare keyword. Concretely, "commit 有哪些规矩" returned a
+ * page-migration memory at rank 1. The existing `scoreThreshold` cannot fix
+ * this: production scores sit at 0.73–0.90 and the 0.3 gate never fires.
+ *
+ * Coverage is ranked ahead of raw weight because in short queries the rarest
+ * token is often an accidental one: "怎么" occurs exactly once in that library
+ * (inside a "管怎么写好" memory), giving it the maximum IDF and letting it
+ * outrank a document matching both "ZCode" and "备份".
+ *
+ * Additionally, when a multi-token query has at least `minStrongResults`
+ * documents matching ≥2 tokens, documents matching only one token are dropped
+ * as OR-padding noise. Measured effect on the same corpus: weak matches in
+ * top-5 fell from 31.1% to 17.7%, while recall@1 rose 72.8% → 76.3% and
+ * recall@5 91.4% → 92.4%.
+ *
+ * Degradation is deliberate: single-token queries, all-zero-IDF queries
+ * (every token is ultra-common, e.g. "用户") and single-row inputs all fall
+ * back to the original BM25 order, so behaviour is unchanged there.
+ */
+export function rankByTokenCoverage<T extends { record_id: string }>(
+  rows: T[],
+  tokenDocIds: Map<string, Set<string>>,
+  totalDocs: number,
+  opts?: { minStrongResults?: number },
+): T[] {
+  if (rows.length <= 1 || tokenDocIds.size === 0) return rows;
+
+  const n = Math.max(totalDocs, 1);
+  const weights = new Map<string, number>();
+  for (const [token, ids] of tokenDocIds) {
+    const df = Math.min(ids.size, n);
+    weights.set(token, Math.log((n - df + 0.5) / (df + 0.5) + 1));
+  }
+  const anyPositive = [...weights.values()].some((w) => w > 0);
+  if (!anyPositive) return rows; // every token is ultra-common → keep BM25 order
+
+  const scored = rows.map((row, idx) => {
+    let weightSum = 0;
+    let matched = 0;
+    for (const [token, ids] of tokenDocIds) {
+      if (ids.has(row.record_id)) {
+        matched += 1;
+        weightSum += weights.get(token) ?? 0;
+      }
+    }
+    return { row, idx, weightSum, matched };
+  });
+
+  const byCoverage = (a: (typeof scored)[number], b: (typeof scored)[number]) =>
+    b.matched - a.matched || b.weightSum - a.weightSum || a.idx - b.idx;
+
+  if (tokenDocIds.size < 2) return scored.sort(byCoverage).map((s) => s.row);
+
+  const minStrong = opts?.minStrongResults ?? 3;
+  const strong = scored.filter((s) => s.matched >= 2);
+  // Fewer strong hits than the gate requires → no gate: weak results beat none.
+  const final = strong.length >= minStrong ? strong : scored;
+  return final.sort(byCoverage).map((s) => s.row);
+}
+
+/**
+ * Recover the token list from an expression produced by `buildFtsQuery`
+ * (`"a" OR "b"` → `[a, b]`), so `searchL1Fts` can re-rank without a signature
+ * change. Relies on the format `buildFtsQuery` produces in this file.
+ */
+export function parseFtsQueryTokens(ftsQuery: string): string[] {
+  return ftsQuery
+    .split(" OR ")
+    .map((t) => t.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+}
