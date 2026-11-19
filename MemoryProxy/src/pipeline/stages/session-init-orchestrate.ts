@@ -103,6 +103,11 @@ export interface SessionInitOrchestrateInput {
   /** L2b recovery 时是否传 messages 给 store (openai/anthropic 传 body.messages, codex/wb 传 []) */
   recoveryMessages: Array<Record<string, unknown>>;
   /**
+   * false 时只尝试从 store / L2b / history 恢复终态，不进入会发送交互表单的
+   * handleSessionInit 状态机。供不能渲染 fake ask tool_call 的客户端使用。
+   */
+  allowStateMachine?: boolean;
+  /**
    * anthropic 独有: requestKind === "fork" 且 recover 未命中终态时短路 passthrough。
    * 传入的函数在 store.getOrRecover 后, isTerminalState 判断前被调用;
    * 若返回非 null 就直接用返回的 initResult 短路 (跳过 recover/state-machine 分支)。
@@ -196,6 +201,17 @@ export async function stageSessionInitOrchestrate(
       justRegistered: needsPrewarm,
       ...applied,
     } as SessionInitResult;
+  } else if (input.allowStateMachine === false) {
+    // 客户端不能弹表单时仍可恢复已有绑定；未恢复则继续透传，由下游按缺失
+    // sessionInfo 安全跳过身份相关能力，而不是把整个记忆域判为不可用。
+    initResult = {
+      intercepted: false,
+      sessionInfo: null,
+      agentDetail: undefined,
+      taskDetail: undefined,
+      bypassed: false,
+      justRegistered: false,
+    };
   } else {
     wentThroughStateMachine = true;
     const synthesizedMessages = input.synthesizeMessages();
