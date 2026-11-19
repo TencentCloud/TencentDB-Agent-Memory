@@ -25,7 +25,7 @@ import './style.css';
 type MainTab = 'quick' | 'practice' | 'commands';
 type QuickTab = 'download' | 'ide' | 'history';
 type PracticeId = 'team' | 'personal';
-type ManualIdeId = 'claude' | 'codebuddy' | 'codex' | 'workbuddy' | 'dsh' | 'hermes' | 'openclaw';
+type ManualIdeId = 'claude' | 'codebuddy' | 'codex' | 'workbuddy' | 'dsh' | 'hermes' | 'openclaw' | 'pi';
 type ProxyMode = 'default' | 'analyse';
 
 interface PracticeStep {
@@ -146,6 +146,15 @@ const MANUAL_IDES: ManualIde[] = [
       'guide.manual.note.openclaw.1',
       'guide.manual.note.openclaw.2',
     ],
+  },
+  {
+    id: 'pi',
+    name: 'Pi',
+    file: '~/.pi/agent/extensions/',
+    protocol: 'OpenAI Chat + 扩展路由',
+    config: (base, instanceId, mode, model) =>
+      `# 1) 载入 Pi 扩展（仓库内 MemoryCore/pi-plugin）\n#    全局安装：把该目录软链或复制到 ~/.pi/agent/extensions/\n#    临时试用：启动时用 -e 指定目录\n\n# 2) 设置环境变量\nexport TDAI_PROXY_URL=${base}\nexport TDAI_SPACE_ID=${instanceId}\nexport TDAI_TEAM_ID=<team-id>\nexport TDAI_AGENT_ID=<agent-id>\nexport TDAI_USER_KEY=${KEY_PLACEHOLDER}\nexport TDAI_MODEL=${model}\n\n# 3) 启动\npi --provider tdai --model ${model}\n\n# 接入地址（base URL 必须带 /v1）\n${proxyEndpoint(base, 'pi', instanceId, mode)}/v1`,
+    notes: ['guide.manual.note.pi.0', 'guide.manual.note.pi.1'],
   },
 ];
 
