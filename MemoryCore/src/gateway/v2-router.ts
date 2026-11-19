@@ -27,6 +27,7 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
 import type { MemoryRecord } from "../core/record/l1-writer.js";
+import { detectContentLanguage } from "../core/record/l1-language.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 
 // ── Zod schemas (validated types + defaults) ──
@@ -1089,7 +1090,7 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
     priority: record.priority ?? 50,
     scene_name: background !== undefined ? background : (record.scene_name ?? ""),
     source_message_ids: [],
-    metadata: parseMetadataJson(record.metadata_json),
+    metadata: { ...parseMetadataJson(record.metadata_json), lang: detectContentLanguage(content) },
     timestamps: record.timestamp_str ? [record.timestamp_str] : [],
     createdAt: record.created_time,
     updatedAt: now,
