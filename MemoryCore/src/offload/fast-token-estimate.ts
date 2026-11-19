@@ -18,9 +18,11 @@ import { fileURLToPath } from "url";
 const CJK_START = 0x4E00;
 const CJK_END = 0x9FFF;
 let _cjkTable: Uint8Array | null = null;
+let _cjkTableLoaded = false;
 
 function loadCjkTable(): Uint8Array | null {
-  if (_cjkTable) return _cjkTable;
+  if (_cjkTableLoaded) return _cjkTable; // 模块级仅加载一次，避免热路径同步 I/O
+  _cjkTableLoaded = true;
   try {
     // Try multiple paths for the CJK table
     const paths = [
@@ -94,15 +96,18 @@ export function fastEstimateTokens(text: string): number {
 
   const n = text.length;
   const cjkTable = loadCjkTable();
+  // 一次性把整段文本展开为码点数组，消除主循环与所有内层扫描的重复 charCodeAt 调用（主导性能杠杆）
+  const cps = new Uint32Array(n);
+  for (let s = 0; s < n; s++) cps[s] = text.charCodeAt(s);
   let tokens = 0.0;
   let i = 0;
 
   // Pre-scan: detect if text is non-English Latin (French, Spanish, etc.)
   let accentCount = 0;
   let latinCount = 0;
-  const sampleEnd = Math.min(n, 50000);
+  const sampleEnd = n < 50000 ? n : 50000;
   for (let s = 0; s < sampleEnd; s++) {
-    const cp = text.charCodeAt(s);
+    const cp = cps[s];
     if (cp >= 0x80 && cp <= 0x024F &&
         ((cp >= 0x00C0 && cp <= 0x00FF && cp !== 0x00D7 && cp !== 0x00F7) || (cp >= 0x0100 && cp <= 0x024F))) {
       accentCount++;
@@ -114,15 +119,15 @@ export function fastEstimateTokens(text: string): number {
   const isNonEnglishLatin = latinCount > 100 && accentCount > latinCount * 0.005;
 
   while (i < n) {
-    const cp = text.charCodeAt(i);
+    const cp = cps[i];
 
     // ── Latin word ──
     if (isLatinLetter(cp)) {
       let j = i + 1;
       while (j < n) {
-        const c = text.charCodeAt(j);
+        const c = cps[j];
         if (isLatinLetter(c)) { j++; }
-        else if (c === 0x27 && j + 1 < n && isLatinLetter(text.charCodeAt(j + 1))) { j += 2; }
+        else if (c === 0x27 && j + 1 < n && isLatinLetter(cps[j + 1])) { j += 2; }
         else { break; }
       }
       const wl = j - i;
@@ -131,14 +136,14 @@ export function fastEstimateTokens(text: string): number {
       let hasAccent = false;
       if (isNonEnglishLatin) {
         for (let k = i; k < j; k++) {
-          if (text.charCodeAt(k) >= 0x80) { hasAccent = true; break; }
+          if (cps[k] >= 0x80) { hasAccent = true; break; }
         }
         if (!hasAccent) {
           // Check nearby window
           const lo = Math.max(0, i - 100);
           const hi = Math.min(n, j + 100);
           for (let k = lo; k < hi; k++) {
-            const cc = text.charCodeAt(k);
+            const cc = cps[k];
             if (cc >= 0x00C0 && cc <= 0x024F && cc !== 0x00D7 && cc !== 0x00F7) {
               hasAccent = true; break;
             }
@@ -174,8 +179,8 @@ export function fastEstimateTokens(text: string): number {
       } else {
         segTokens += 1.3;
       }
-      while (j < n && isCjkHan(text.charCodeAt(j))) {
-        const cp2 = text.charCodeAt(j);
+      while (j < n && isCjkHan(cps[j])) {
+        const cp2 = cps[j];
         if (cjkTable && cp2 >= CJK_START && cp2 <= CJK_END) {
           segTokens += cjkTable[cp2 - CJK_START];
         } else {
@@ -195,7 +200,7 @@ export function fastEstimateTokens(text: string): number {
     // ── Japanese Kana ──
     if (isKana(cp)) {
       let j = i + 1;
-      while (j < n && isKana(text.charCodeAt(j))) j++;
+      while (j < n && isKana(cps[j])) j++;
       const run = j - i;
       if (run === 1) tokens += 1.0;
       else if (run === 2) tokens += 1.6;
@@ -217,7 +222,7 @@ export function fastEstimateTokens(text: string): number {
     // ── Cyrillic (Russian etc.) ──
     if (isCyrillic(cp)) {
       let j = i + 1;
-      while (j < n && isCyrillic(text.charCodeAt(j))) j++;
+      while (j < n && isCyrillic(cps[j])) j++;
       tokens += (j - i) * 0.55;
       i = j;
       continue;
@@ -226,7 +231,7 @@ export function fastEstimateTokens(text: string): number {
     // ── Arabic ──
     if (isArabic(cp)) {
       let j = i + 1;
-      while (j < n && isArabic(text.charCodeAt(j))) j++;
+      while (j < n && isArabic(cps[j])) j++;
       tokens += (j - i) * 0.82;
       i = j;
       continue;
@@ -235,7 +240,7 @@ export function fastEstimateTokens(text: string): number {
     // ── Greek ──
     if (isGreek(cp)) {
       let j = i + 1;
-      while (j < n && isGreek(text.charCodeAt(j))) j++;
+      while (j < n && isGreek(cps[j])) j++;
       tokens += (j - i) * 0.85;
       i = j;
       continue;
@@ -248,12 +253,12 @@ export function fastEstimateTokens(text: string): number {
       let commas = 0;
       let dots = 0;
       while (j < n) {
-        const c = text.charCodeAt(j);
+        const c = cps[j];
         if (c >= 0x30 && c <= 0x39) { digits++; j++; }
-        else if (c === 0x2C && j + 1 < n && text.charCodeAt(j + 1) >= 0x30 && text.charCodeAt(j + 1) <= 0x39) {
+        else if (c === 0x2C && j + 1 < n && cps[j + 1] >= 0x30 && cps[j + 1] <= 0x39) {
           commas++; j += 2; digits++;
         }
-        else if (c === 0x2E && j + 1 < n && text.charCodeAt(j + 1) >= 0x30 && text.charCodeAt(j + 1) <= 0x39) {
+        else if (c === 0x2E && j + 1 < n && cps[j + 1] >= 0x30 && cps[j + 1] <= 0x39) {
           dots++; j += 2; digits++;
         }
         else { break; }
