@@ -11,6 +11,7 @@
 
 import { tool, jsonSchema } from "ai";
 import type { StorageAdapter } from "../../core/storage/adapter.js";
+import { capReadContent } from "./read-cap.js";
 
 const TAG = "[memory-tdai] [storage-tools]";
 
@@ -78,7 +79,7 @@ export function createStorageTools(
             return JSON.stringify({ error: `File not found: ${args.path}` });
           }
           logger?.debug?.(`${TAG} read: "${args.path}" → ${content.length} chars`);
-          return content;
+          return capReadContent(content);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logger?.warn(`${TAG} read failed (key=${key}): ${msg}`);
