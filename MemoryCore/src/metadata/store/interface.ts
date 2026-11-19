@@ -218,10 +218,11 @@ export interface IMetadataStore {
   // 用户级 session 默认配置: 一个 user_id 至多一行(表 / collection 的主键 =
   // user_id)。详见 types.ts::UserSessionDefaultEntity 与
   // MemoryProxy/docs/design/2026-10-10-user-session-default-design.md。
-  getUserSessionDefault(userId: string): MaybePromise<UserSessionDefaultEntity | null>;
+  getUserSessionDefault(userId: string, workspaceId?: string): MaybePromise<UserSessionDefaultEntity | null>;
+  listUserSessionDefaults(userId: string): MaybePromise<UserSessionDefaultEntity[]>;
   upsertUserSessionDefault(input: UpsertUserSessionDefaultInput): MaybePromise<UserSessionDefaultEntity>;
   /** 返回被删除的行数:1 表示存在被删,0 表示本来就不存在。幂等。 */
-  deleteUserSessionDefault(userId: string): MaybePromise<number>;
+  deleteUserSessionDefault(userId: string, workspaceId?: string): MaybePromise<number>;
 
   // ── InstanceUpstreamConfig (v2 模型组) ──
   //

@@ -115,6 +115,7 @@ export async function handleSessionInit(
   userKey?: string,
   spaceId?: string,
   presetIdentity?: PresetIdentity,
+  workspaceId: string = "",
 ): Promise<SessionInitResult> {
   if (agentSource === "claude-code") {
     return ccHandle(
@@ -133,6 +134,8 @@ export async function handleSessionInit(
       userKey,
       spaceId,
       presetIdentity,
+      agentSource,
+      workspaceId,
     );
   }
   // 同上：整个 reqCtx 透传给 CB 状态机。codexHandler 会把 body.input[] 塞在
@@ -147,6 +150,7 @@ export async function handleSessionInit(
     spaceId,
     presetIdentity,
     agentSource,
+    workspaceId,
   );
 
   // WorkBuddy 客户端复用 CB 状态机（uninitialized → pending_team → pending_agent_task

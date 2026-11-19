@@ -33,6 +33,32 @@ function hideKnowledgeServiceUser(data: unknown): void {
   }
 }
 
+/**
+ * 上游分组 / 抽取配置的响应里 api_key 是**明文**（内核内部接口语义）。
+ * 面板必须脱敏后再下发浏览器：只保留前 6 后 4，中间打点。
+ * 原样透传会导致具备面板登录态的人直接拿到上游供应商密钥。
+ */
+function maskUpstreamSecret(value: unknown): string {
+  if (typeof value !== 'string' || value === '') return '';
+  if (value.length <= 12) return '•'.repeat(Math.min(value.length, 8));
+  return `${value.slice(0, 6)}••••${value.slice(-4)}`;
+}
+
+function maskUpstreamSecrets(data: unknown): void {
+  if (!data || typeof data !== 'object') return;
+  const root = data as Record<string, unknown>;
+  if (typeof root.api_key === 'string') root.api_key = maskUpstreamSecret(root.api_key);
+  if (Array.isArray(root.items)) {
+    for (const item of root.items) {
+      if (item && typeof item === 'object' && typeof (item as Record<string, unknown>).api_key === 'string') {
+        (item as Record<string, unknown>).api_key = maskUpstreamSecret(
+          (item as Record<string, unknown>).api_key as string,
+        );
+      }
+    }
+  }
+}
+
 function readAction(path: string): string {
   const marker = '/meta/';
   const idx = path.indexOf(marker);
@@ -202,6 +228,11 @@ export function registerMetaProxyRoutes(api: Hono, deps: PanelDeps): void {
     }
 
     const envelope = await deps.metaKernel.invoke(action, body, ctx);
+
+    // 上游配置明文密钥不下发浏览器
+    if (action.startsWith('instance-upstream/') && envelope.code === 0) {
+      maskUpstreamSecrets(envelope.data);
+    }
 
     // team-member/add 成功后，为默认 Agent 复制模板资产（best-effort，异步不阻塞响应）
     if (action === 'team-member/add' && envelope.code === 0) {
