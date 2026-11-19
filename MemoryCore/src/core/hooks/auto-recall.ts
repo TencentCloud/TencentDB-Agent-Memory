@@ -18,7 +18,7 @@ import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/tokenize.js";
 import { hasClientEmbedding, type EmbeddingService, type EmbeddingCallOptions } from "../store/embedding.js";
-import { sanitizeText } from "../../utils/sanitize.js";
+import { sanitizeText, escapeXmlTags } from "../../utils/sanitize.js";
 import path from "node:path";
 import { scopeProfileStorageView, type StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
@@ -268,7 +268,10 @@ async function performAutoRecallCore(params: {
   //   so it doesn't bust the system prompt cache.
   const stableParts: string[] = [];
   if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+    // Escape injected-section boundaries defensively at read time. Persona is
+    // generated content that may also be edited/imported, so do not rely solely
+    // on the escaping applied during generation.
+    stableParts.push(`<user-persona>\n${escapeXmlTags(personaContent)}\n</user-persona>`);
   }
   if (sceneNavigation) {
     stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
@@ -277,8 +280,12 @@ async function performAutoRecallCore(params: {
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
+    // Memory content originates from LLM extraction / panel edits / imports.
+    // Escape our section boundaries so a crafted `</relevant-memories>` tag in
+    // a stored memory cannot break out and inject a system-level instruction.
+    const safeLines = memoryLines.map((line) => escapeXmlTags(line));
     prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${safeLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
