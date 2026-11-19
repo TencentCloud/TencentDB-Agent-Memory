@@ -20,9 +20,9 @@ import '../styles/code-sources-panel.css';
 
 const { scrollable } = Table.addons;
 
-export default function CodeSourcesPanel() {
+export default function CodeSourcesPanel(team: Parameters<typeof useCodeSources>[0]) {
   const { t } = useTranslation();
-  const code = useCodeSources();
+  const code = useCodeSources(team);
 
   const {
     // context

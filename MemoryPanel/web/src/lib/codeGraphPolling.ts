@@ -94,6 +94,8 @@ export function applyPollOutcome(
 }
 
 export interface PollDeps {
+  /** Cancel remaining requests and ready callbacks when the owning view leaves. */
+  signal?: AbortSignal;
   /** 查询单张图的详情（真实实现是 knowledgeApi.code.get）。 */
   get: (codeGraphId: string) => Promise<CodeGraphDetail>;
   /** 到达 ready 时的登记动作（真实实现是 registerMeta + 刷新列表）。 */
@@ -113,8 +115,10 @@ export async function pollOnce(
   const outcome: PollOutcome = { remove: [], updates: [] };
 
   for (const item of items) {
+    if (deps.signal?.aborted) break;
     try {
       const detail = await deps.get(item.code_graph_id);
+      if (deps.signal?.aborted) break;
       if (detail.status === 'ready') {
         // 先记录移除，再执行登记动作：登记失败也不能让已 ready 的图继续被轮询
         // （基线的 registerMeta 失败同样会移除条目）

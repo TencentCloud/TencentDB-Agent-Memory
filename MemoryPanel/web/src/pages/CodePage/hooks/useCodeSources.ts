@@ -2,7 +2,7 @@
  * useCodeSources —— Code 资产页的全部状态与数据逻辑。
  * 组件层只保留 JSX 渲染，状态 / 数据逻辑集中在此。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   knowledgeApi,
@@ -17,13 +17,23 @@ import {
   pollOnce,
   reconcileTracked,
 } from '@/lib/codeGraphPolling';
-import { useTeams, useAgents } from '@/services';
+import { useAgents, type useTeams } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
 import { isValidGitUrl, isSshGitUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
-export function useCodeSources() {
+type CodeTeam = Pick<ReturnType<typeof useTeams>, 'activeTeamId' | 'activeTeam'>;
+
+export function useCodeSources({ activeTeamId, activeTeam }: CodeTeam) {
   const { t } = useTranslation();
+  // CodePage keys this hook's owner by team. Invalidate pending completions on
+  // unmount, including switches away and back to the same team ID.
+  const lifetime = useRef(new AbortController());
+  useLayoutEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => controller.abort();
+  }, []);
   const [sources, setSources] = useState<CodeGraphDetail[]>([]);
   const [loading, setLoading] = useState(false);
   // 默认展示 Agent 资产（fixed），避免用户误以为自己的资产在「团队资产」里
@@ -70,7 +80,6 @@ export function useCodeSources() {
     repo: string;
     branch: string;
   } | null>(null);
-  const { activeTeamId, activeTeam } = useTeams();
   const auth = readAuth();
   const currentUser = auth?.user_id ?? '';
   // 固定资产 tab 只列自己 owner 的 agent（与 ChatMemory / Skills 面板一致，
@@ -98,14 +107,18 @@ export function useCodeSources() {
   }, [teamAgents, agentFilter]);
 
   const fetchFixedBindings = useCallback(async () => {
+    const { signal } = lifetime.current;
+    if (signal.aborted) return;
     if (!agentFilter) {
       setFixedBoundIds(new Set());
       return;
     }
     try {
       const items = await knowledgeApi.code.agentFixed(agentFilter);
+      if (signal.aborted) return;
       setFixedBoundIds(new Set(items.map((it) => it.knowledge_id)));
     } catch (e: unknown) {
+      if (signal.aborted) return;
       tea.notify.error((e instanceof Error ? e.message : String(e)) || t('code.notify.loadFixedFailed'));
       setFixedBoundIds(new Set());
     }
@@ -178,6 +191,8 @@ export function useCodeSources() {
   const fetchSeqRef = useRef(0);
 
   const fetchSources = useCallback(async () => {
+    const { signal } = lifetime.current;
+    if (signal.aborted) return;
     if (!activeTeamId) {
       setSources([]);
       setLoading(false);
@@ -192,29 +207,25 @@ export function useCodeSources() {
       // 资产统一为团队维度（visibility=team），无 private/我的资产概念。
       // fixed tab 也是拿全量 team 资产，再按 fixedBoundIds 过滤。
       const data = await knowledgeApi.code.teamAssets(activeTeamId);
-      if (seq !== fetchSeqRef.current) return; // 已被后续请求取代
+      if (signal.aborted || seq !== fetchSeqRef.current) return;
       const list = Array.isArray(data) ? data : [];
       setSources(list);
       // 已进入团队列表的失败终态让位给列表（列表返回的是 KS 实时 status / sync_error），
       // 避免旧的失败快照盖住后端已恢复的状态；列表里没有的仍保留，用于错误卡片兜底。
       setInFlight((prev) => reconcileTracked(prev, list));
     } catch (e: unknown) {
-      if (seq !== fetchSeqRef.current) return;
+      if (signal.aborted || seq !== fetchSeqRef.current) return;
       tea.notify.error(e);
       setSources([]);
     } finally {
-      if (seq === fetchSeqRef.current) setLoading(false);
+      if (!signal.aborted && seq === fetchSeqRef.current) setLoading(false);
     }
   }, [activeTeamId, scopeTab]);
 
-  // 触发 fetchSources：依赖原始参数 + fetchSources，并用 key 去重防止短时间内重复触发。
-  const fetchKeyRef = useRef<string>('');
+  // A replayed mount must load again because its first request was invalidated.
   useEffect(() => {
-    const key = `${activeTeamId}|${scopeTab}`;
-    if (fetchKeyRef.current === key) return;
-    fetchKeyRef.current = key;
     void fetchSources();
-  }, [activeTeamId, scopeTab, fetchSources]);
+  }, [fetchSources]);
 
   // inFlight 的 ref 镜像：poll 闭包通过 ref 读取最新值，
   // 避免把 inFlight 放进 effect 依赖——否则每次 setInFlight（即使内容不变、
@@ -227,8 +238,10 @@ export function useCodeSources() {
 
   useEffect(() => {
     if (!activeTeamId || !hasPollable) return;
+    const { signal } = lifetime.current;
     const poll = async () => {
       const outcome = await pollOnce(pollableItems(inFlightRef.current), {
+        signal,
         get: (codeGraphId) => knowledgeApi.code.get(codeGraphId),
         onReady: async (detail) => {
           try {
@@ -237,14 +250,14 @@ export function useCodeSources() {
             // 幂等：asset 已存在 / 409 → 忽略；其它真错报出来便于排查
             // （callback S2S 是主力，这里只是兜底，但失败要可见）
             const msg = e instanceof Error ? e.message : String(e);
-            if (!/already|exist|409|registered|ok/i.test(msg)) {
+            if (!signal.aborted && !/already|exist|409|registered|ok/i.test(msg)) {
               tea.notify.error(t('code.notify.metaFailed', { msg }));
             }
           }
-          void fetchSources();
+          if (!signal.aborted) void fetchSources();
         },
       });
-      if (outcome.remove.length > 0 || outcome.updates.length > 0) {
+      if (!signal.aborted && (outcome.remove.length > 0 || outcome.updates.length > 0)) {
         setInFlight((prev) => applyPollOutcome(prev, outcome));
       }
     };
@@ -254,21 +267,23 @@ export function useCodeSources() {
   }, [hasPollable, activeTeamId, fetchSources, t]);
 
   async function handleUnbindCode(codeGraphId: string) {
+    const { signal } = lifetime.current;
     if (!agentFilter) return;
     const ok = await tea.confirm({
       message: t('code.confirm.unbind'),
       description: t('code.confirm.unbind.desc'),
       okText: t('code.confirm.unbind.ok'),
     });
-    if (!ok) return;
+    if (!ok || signal.aborted) return;
     try {
       await knowledgeApi.code.unbind(codeGraphId, agentFilter);
+      if (signal.aborted) return;
       tea.notify.success(t('code.notify.unbound'));
       if (selectedCodeAsset?.cgId === codeGraphId) setSelectedCodeAsset(null);
       await fetchFixedBindings();
       await fetchSources();
     } catch (e: unknown) {
-      tea.notify.error((e instanceof Error ? e.message : String(e)) || t('code.notify.unbindFailed'));
+      if (!signal.aborted) tea.notify.error((e instanceof Error ? e.message : String(e)) || t('code.notify.unbindFailed'));
     }
   }
 
@@ -279,6 +294,7 @@ export function useCodeSources() {
    * 该概念已不成立；注册后如果失败，用户可在列表页对具体资源重新配置。
    */
   const openRegister = useCallback(async () => {
+    const { signal } = lifetime.current;
     setShowRegister(true);
     // 每次打开注册弹窗都清掉上一次的 SSH 公钥态，避免残留旧公钥误导用户。
     setShowSshKey(false);
@@ -286,9 +302,9 @@ export function useCodeSources() {
     if (!activeTeamId) return;
     try {
       const providers = await knowledgeApi.source.providers(activeTeamId);
-      setSourceProviders(providers);
+      if (!signal.aborted) setSourceProviders(providers);
     } catch {
-      setSourceProviders([]);
+      if (!signal.aborted) setSourceProviders([]);
     }
   }, [activeTeamId]);
 
@@ -303,20 +319,23 @@ export function useCodeSources() {
    * clone 必定失败并在列表里留一条 failed 记录，体验很差。
    */
   const ensureSshKey = async (): Promise<void> => {
+    const { signal } = lifetime.current;
     if (!activeTeamId) return;
     setSubmitting(true);
     try {
       const info = await knowledgeApi.code.sshKeyEnsure(activeTeamId);
+      if (signal.aborted) return;
       setSshPublicKey(info.public_key);
       setShowSshKey(true);
     } catch (e: unknown) {
-      tea.notify.error(e);
+      if (!signal.aborted) tea.notify.error(e);
     } finally {
-      setSubmitting(false);
+      if (!signal.aborted) setSubmitting(false);
     }
   };
 
   const submitCreate = async (): Promise<void> => {
+    const { signal } = lifetime.current;
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
     if (!isValidGitUrl(repo)) {
@@ -357,6 +376,7 @@ export function useCodeSources() {
               }
             : {}),
       });
+      if (signal.aborted) return;
 
       setShowRegister(false);
       setShowSshKey(false);
@@ -373,9 +393,9 @@ export function useCodeSources() {
       tea.notify.info(t('code.notify.registered'));
       fetchSources();
     } catch (e: unknown) {
-      tea.notify.error(e);
+      if (!signal.aborted) tea.notify.error(e);
     } finally {
-      setSubmitting(false);
+      if (!signal.aborted) setSubmitting(false);
     }
   };
 
@@ -395,8 +415,10 @@ export function useCodeSources() {
   };
 
   const handleSync = async (cgId: string) => {
+    const { signal } = lifetime.current;
     try {
       await knowledgeApi.code.sync(cgId);
+      if (signal.aborted) return;
       // sync 是异步的，202 只代表已入队。这里把该仓库放回 inFlight（与 handleRegister 对齐），
       // 交给上面的 GET 轮询直到 status 回到 ready；否则只会拉一次 teamAssets 快照，
       // 详情头会永远停在那一刻的「构建中」。
@@ -411,11 +433,12 @@ export function useCodeSources() {
       }
       void fetchSources();
     } catch (e: unknown) {
-      tea.notify.error(e);
+      if (!signal.aborted) tea.notify.error(e);
     }
   };
 
   const handleDelete = async (cgId: string) => {
+    const { signal } = lifetime.current;
     const source = sources.find((s) => s.code_graph_id === cgId);
     if (!source) return;
     const ok = await tea.confirm({
@@ -425,9 +448,10 @@ export function useCodeSources() {
       }),
       okText: t('code.action.delete'),
     });
-    if (!ok) return;
+    if (!ok || signal.aborted) return;
     try {
       await knowledgeApi.code.delete(cgId);
+      if (signal.aborted) return;
       // 乐观更新：立即从本地列表移除。后端删除是最终一致的，删除刚成功时再拉 teamAssets
       // 可能仍返回该仓库，导致列表不变、需手动刷新页面才消失。这里先本地摘除，
       // fetchSources 仅作兜底对齐。
@@ -438,7 +462,7 @@ export function useCodeSources() {
       tea.notify.success(t('code.notify.deleted'));
       fetchSources();
     } catch (e: unknown) {
-      tea.notify.error(e);
+      if (!signal.aborted) tea.notify.error(e);
     }
   };
 
@@ -452,32 +476,36 @@ export function useCodeSources() {
   };
 
   const handleSearch = async () => {
+    const { signal } = lifetime.current;
     if (!searchQuery.trim()) return;
     setSearching(true);
     setSearchResult('');
     try {
       const res = await knowledgeApi.code.search({ codeGraphId: selectedCgId, query: searchQuery, kind: 'any', limit: 20 });
-      setSearchResult(res?.text || JSON.stringify(res, null, 2));
+      if (!signal.aborted) setSearchResult(res?.text || JSON.stringify(res, null, 2));
     } catch (e: unknown) {
+      if (signal.aborted) return;
       setSearchResult('');
       tea.notify.error(e);
     } finally {
-      setSearching(false);
+      if (!signal.aborted) setSearching(false);
     }
   };
 
   const handleExplore = async () => {
+    const { signal } = lifetime.current;
     if (!exploreQuery.trim()) return;
     setExploring(true);
     setExploreResult('');
     try {
       const res = await knowledgeApi.code.explore(selectedCgId, exploreQuery);
-      setExploreResult(res?.text || JSON.stringify(res, null, 2));
+      if (!signal.aborted) setExploreResult(res?.text || JSON.stringify(res, null, 2));
     } catch (e: unknown) {
+      if (signal.aborted) return;
       setExploreResult('');
       tea.notify.error(e);
     } finally {
-      setExploring(false);
+      if (!signal.aborted) setExploring(false);
     }
   };
 
@@ -501,8 +529,6 @@ export function useCodeSources() {
     setStatusFilter,
     viewMode,
     setViewMode,
-    inFlight,
-    setInFlight,
     subView,
     setSubView,
     selectedCgId,
