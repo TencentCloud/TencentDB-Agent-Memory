@@ -15,7 +15,14 @@
  * Replaces colons and other unsafe characters with underscores.
  */
 export function sanitizeSessionId(sessionId: string): string {
-  return sessionId.replace(/[^a-zA-Z0-9._\-]/g, "_");
+  const replaced = sessionId.replace(/[^a-zA-Z0-9._\-]/g, "_");
+  // `.` is allowed inside a name (e.g. "main.session"), but a dot-only
+  // segment ("." / "..") is a path traversal marker: `offload/../x` resolves
+  // outside the offload directory. Keep the value inside `offload/` by
+  // mapping dots to underscores, consistent with MemoryKnowledge's
+  // sanitizeUsername.
+  if (/^\.+$/.test(replaced)) return replaced.replace(/\./g, "_");
+  return replaced;
 }
 
 /**
