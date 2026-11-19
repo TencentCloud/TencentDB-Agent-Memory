@@ -68,7 +68,14 @@ export interface L1RunnerResult {
   hasFullBacklog?: boolean;
 }
 export type L1Runner = (params: { sessionKey: string; msg: CapturedMessage[]; bg_msg: CapturedMessage[] }) => Promise<L1RunnerResult | void>;
-export interface L2RunnerResult { latestCursor?: string; }
+export interface L2RunnerResult {
+  latestCursor?: string;
+  /** True if the per-run batch budget was hit and L1 records remain past latestCursor. */
+  hasMore?: boolean;
+  /** Content-free persisted scene delta for L2→L3 diagnostic correlation. */
+  sceneDiff?: import("../core/persona/jev-gate.js").L2SceneDiffDiagnostic;
+  jevGateId?: string;
+}
 export type L2Runner = (sessionKey: string, cursor?: string) => Promise<L2RunnerResult | void>;
 export type L3Runner = () => Promise<void>;
 export type PipelineStatePersister = (states: Record<string, CheckpointPipelineSessionState>) => Promise<void>;

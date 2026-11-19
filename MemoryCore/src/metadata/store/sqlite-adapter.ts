@@ -20,7 +20,7 @@ import {
 } from "./relation-id-insert.js";
 import { generateUserKey } from "../utils/crypto.js";
 import { isUserKeyExpired } from "../utils/user-key.js";
-import { DEFAULT_GROUP_NAME, EXTRACTION_GROUP_NAME, InstanceUpstreamWriteConflictError } from "../types.js";
+import { DEFAULT_GROUP_NAME, EXTRACTION_GROUP_NAME, InstanceUpstreamWriteConflictError, DEFAULT_TASK_SENTINEL } from "../types.js";
 import type {
   UserEntity,
   UserKeyEntity,
@@ -57,6 +57,8 @@ import type {
   ConfigParamEntity,
   UpsertConfigParamInput,
   ListConfigParamsFilter,
+  UserSessionDefaultEntity,
+  UpsertUserSessionDefaultInput,
   InstanceUpstreamConfigEntity,
   InstanceUpstreamConfigFilter,
   CreateInstanceUpstreamGroupInput,
@@ -319,6 +321,25 @@ export class SqliteMetadataStore implements IMetadataStore {
         ON meta_config_params(user_id, module, param_name) WHERE scope = 'user';
       CREATE INDEX IF NOT EXISTS idx_meta_config_params_module
         ON meta_config_params(module);
+
+      -- UserSessionDefault (v3.3): 用户级 session 默认 (team/agent/task) 三元组。
+      -- user_id PK 天然保证"至多一条"。task_id 存真实 id 或字面量 "default"
+      -- (与 Proxy sessionInit.defaultTaskId 契约一致, 见 types.ts::DEFAULT_TASK_SENTINEL)。
+      CREATE TABLE IF NOT EXISTS meta_user_session_defaults (
+        user_id    TEXT PRIMARY KEY,
+        team_id    TEXT NOT NULL,
+        agent_id   TEXT NOT NULL,
+        task_id    TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_user_session_defaults_team
+        ON meta_user_session_defaults(team_id);
+      CREATE INDEX IF NOT EXISTS idx_meta_user_session_defaults_agent
+        ON meta_user_session_defaults(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_meta_user_session_defaults_task
+        ON meta_user_session_defaults(task_id);
 
       -- v2 (模型组) 结构。v1 未真正投产,直接 DROP + 重建,不留兼容 shim。
       -- 详见 docs/design/2026-08-25-instance-upstream-config.md §5.1。
@@ -1017,6 +1038,16 @@ export class SqliteMetadataStore implements IMetadataStore {
     return result;
   }
 
+  /** 同一权限条件用于 COUNT 和分页查询，避免先分页后过滤造成遗漏或泄露总数。 */
+  private teamResourceReadWhere(table: "meta_agents" | "meta_tasks"): string {
+    const ownerColumn = table === "meta_agents" ? "owner_user_id" : "creator_user_id";
+    const teamVisibility = table === "meta_agents" ? " AND meta_agents.visibility = 'team'" : "";
+    return ` AND (${table}.${ownerColumn} = ? OR EXISTS (
+      SELECT 1 FROM meta_team_members m
+      WHERE m.team_id = ${table}.team_id AND m.user_id = ? AND m.status = 'active'${teamVisibility}
+    ))`;
+  }
+
   listAgentsByTeam(teamId: string, pagination?: PaginationParams | null, filter?: AgentFilter): ListPage<AgentEntity> {
     let where = "WHERE team_id = ?";
     const params: SQLInputValue[] = [teamId];
@@ -1031,6 +1062,11 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (filter?.name) {
       where += " AND name = ?";
       params.push(filter.name);
+    }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_agents");
+      params.push(callerUserId, callerUserId);
     }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_agents ${where}`,
@@ -1053,6 +1089,11 @@ export class SqliteMetadataStore implements IMetadataStore {
       where += " AND name = ?";
       params.push(filter.name);
     }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_agents");
+      params.push(callerUserId, callerUserId);
+    }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_agents ${where}`,
       params,
@@ -1067,6 +1108,16 @@ export class SqliteMetadataStore implements IMetadataStore {
   // Task（含 linkAgents 原子）
   // ============================================================
   createTask(input: CreateTaskInput): TaskEntity {
+    // v3.3 reserved id 守卫 (深度防御二道墙): service 层 createTask 已经先过了
+    // 守卫, 走 Router / API 路径的调用根本到不了这里; 但迁移脚本 / seed 工具可能
+    // 绕过 service 直调 store, 这道墙保证即便绕过也无法写入 id="default" 的真实
+    // task (会让 Proxy 的虚拟值短路链路串味)。详见 service/metadata-service.ts
+    // createTask 的 reserved id 守卫注释。
+    if (input.task_id === DEFAULT_TASK_SENTINEL) {
+      throw new Error(
+        `createTask: task_id "${DEFAULT_TASK_SENTINEL}" is reserved by Proxy sessionInit.defaultTaskId as a virtual "no-task" marker; let store auto-generate task_id instead`,
+      );
+    }
     const now = nowIso();
     for (let attempt = 0; attempt < PK_RETRY_LIMIT; attempt++) {
       const taskId = input.task_id ?? generateId(ID_PREFIX.task);
@@ -1155,6 +1206,11 @@ export class SqliteMetadataStore implements IMetadataStore {
       where += " AND title = ?";
       params.push(filter.title);
     }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_tasks");
+      params.push(callerUserId, callerUserId);
+    }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_tasks ${where}`,
       params,
@@ -1179,6 +1235,11 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (filter.title) {
       where += " AND title = ?";
       params.push(filter.title);
+    }
+    const callerUserId = filter.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_tasks");
+      params.push(callerUserId, callerUserId);
     }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_tasks ${where}`,
@@ -1897,6 +1958,78 @@ export class SqliteMetadataStore implements IMetadataStore {
       param_name: String(r.param_name),
       param_value: String(r.param_value),
       description: String(r.description),
+      created_at: String(r.created_at),
+      updated_at: String(r.updated_at),
+    };
+  }
+
+  // ============================================================
+  // UserSessionDefault (v3.3) — 用户级 (team, agent, task) 默认三元组
+  // ============================================================
+
+  getUserSessionDefault(userId: string): UserSessionDefaultEntity | null {
+    return this.mapUserSessionDefault(
+      this.get<Row>(
+        "SELECT * FROM meta_user_session_defaults WHERE user_id = ?",
+        userId,
+      ),
+    );
+  }
+
+  upsertUserSessionDefault(
+    input: UpsertUserSessionDefaultInput,
+  ): UserSessionDefaultEntity {
+    const now = nowIso();
+    // upsert 事务:若已存在,保留原 created_at,仅刷新 updated_at + 其他字段。
+    this.db.exec("BEGIN");
+    try {
+      const existing = this.get<Row>(
+        "SELECT created_at FROM meta_user_session_defaults WHERE user_id = ?",
+        input.user_id,
+      );
+      if (existing) {
+        this.run(
+          `UPDATE meta_user_session_defaults
+             SET team_id = ?, agent_id = ?, task_id = ?, updated_at = ?
+           WHERE user_id = ?`,
+          input.team_id, input.agent_id, input.task_id, now, input.user_id,
+        );
+      } else {
+        this.run(
+          `INSERT INTO meta_user_session_defaults
+             (user_id, team_id, agent_id, task_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          input.user_id, input.team_id, input.agent_id, input.task_id, now, now,
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+
+    const row = this.getUserSessionDefault(input.user_id);
+    if (!row) {
+      throw new Error("upsertUserSessionDefault: row disappeared after write");
+    }
+    return row;
+  }
+
+  deleteUserSessionDefault(userId: string): number {
+    const info = this.db
+      .prepare("DELETE FROM meta_user_session_defaults WHERE user_id = ?")
+      .run(userId);
+    return info.changes;
+  }
+
+  private mapUserSessionDefault(row: Row | null): UserSessionDefaultEntity | null {
+    if (!row) return null;
+    const r = row as Record<string, unknown>;
+    return {
+      user_id: String(r.user_id),
+      team_id: String(r.team_id),
+      agent_id: String(r.agent_id),
+      task_id: String(r.task_id),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
     };

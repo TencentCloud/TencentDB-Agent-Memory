@@ -152,6 +152,13 @@ export interface FormData {
    * handler.ts 传 "openai"(见 session/index.ts dsh 分派)。
    */
   protocol?: "openai" | "anthropic";
+  /**
+   * v3.3: 表单顶部追加的一行说明（账户默认回退原因等），拼进 question 前缀展示。
+   *
+   * dsh 由 `session/index.ts` 在 CB 产出 formData 后外层重渲染，转换时必须带上，
+   * 否则账户默认失效的原因在 dsh 客户端上会静默丢失。
+   */
+  notice?: string;
 }
 
 // ── ask_user_question input schema (dsh snake_case + 必填 id) ──────────────────
@@ -172,8 +179,9 @@ interface DshAskQuestion {
 }
 
 function buildAskUserQuestionArgs(data: FormData): { questions: DshAskQuestion[] } {
-  const { teams, stage, selectedTeamId, retry } = data;
-  const titlePrefix = retry ? "⚠️ " : "";
+  const { teams, stage, selectedTeamId, retry, notice } = data;
+  // v3.3: 回退原因横幅 —— 与 CC/WB 同款挂在每个 question 前缀上。
+  const titlePrefix = (retry ? "⚠️ " : "") + (notice ? `ℹ️ ${notice} ` : "");
   const questions: DshAskQuestion[] = [];
 
   if (stage === "asset_confirm") {

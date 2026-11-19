@@ -65,6 +65,7 @@ export type {
   CreateWikiParams,
   IngestResult,
   RawFileEntry,
+  RawContent,
   RawWriteResult,
   RawReadItem,
   RawWriteManyItem,

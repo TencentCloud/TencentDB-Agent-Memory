@@ -35,10 +35,10 @@ fi
 env_mode=$(grep -E '^[[:space:]]*MEMORY_CORE_STORE_MODE=' "$ENV_FILE" \
   | tail -n1 | cut -d= -f2- | tr -d '[:space:]"' || true)
 if [[ -n "$env_mode" && "$env_mode" != "mongodb" ]]; then
-  echo "[error] .env 里显式设置了 MEMORY_CORE_STORE_MODE=$env_mode，与本脚本冲突。" >&2
+  echo "[error] .env 里显式设置了 MEMORY_CORE_STORE_MODE=${env_mode}，与本脚本冲突。" >&2
   echo "        二选一：" >&2
   echo "          ① 想用 mongo：注释掉 .env 里该行，重跑本脚本；" >&2
-  echo "          ② 想用 $env_mode：直接 ./start-all.sh。" >&2
+  echo "          ② 想用 ${env_mode}：直接 ./start-all.sh。" >&2
   exit 1
 fi
 

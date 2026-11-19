@@ -17,7 +17,7 @@
 import http from "node:http";
 import { join } from "node:path";
 import { URL } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import zlib from "node:zlib";
 import dayjs from "dayjs";
 import { TdaiCore } from "../core/tdai-core.js";
@@ -65,6 +65,8 @@ import { handleV2Route, errorEnvelope, makeRequestId } from "./v2-router.js";
 import type { V2RouterDeps } from "./v2-router.js";
 import { handleV3MetaRoute, V3_PREFIX } from "../metadata/router/v3-meta-router.js";
 import { handleV3TaskSourceRoute } from "../metadata/router/v3-task-source-router.js";
+import { handleV3SessionRoute, V3_SESSION_ADD_PATH } from "./v3-session-router.js";
+import { SESSION_WRITE_TIMEOUT_MS } from "../core/session/session-record.js";
 import { handleInternalMetaRoute, V3_INTERNAL_PREFIX } from "../metadata/router/internal-meta-router.js";
 import { MetadataService } from "../metadata/service/metadata-service.js";
 import { ConfigParamService } from "../metadata/service/config-param-service.js";
@@ -181,9 +183,15 @@ function createConsoleLogger(): Logger {
  * triggered by the combination of env reads and the documented route
  * comments above.
  */
-import { resolveMaxBodyBytes } from "../utils/env-config.js";
+import { resolveMaxBodyBytes, resolveSessionMaxBodyBytes } from "../utils/env-config.js";
 
 const MAX_BODY_BYTES = resolveMaxBodyBytes();
+const SESSION_MAX_BODY_BYTES = resolveSessionMaxBodyBytes();
+
+/** Concurrent PUTs on the COS client dedicated to `/v3/session/add`, per Core process. */
+const SESSION_COS_FILE_PARALLEL_LIMIT = 20;
+/** Bounds how many failed session uploads the SDK keeps (with their bodies) in its task list. */
+const SESSION_COS_UPLOAD_QUEUE_SIZE = 50;
 
 /**
  * Thrown by `parseJsonBody` when the incoming body exceeds `MAX_BODY_BYTES`.
@@ -200,16 +208,38 @@ export class PayloadTooLargeError extends Error {
   }
 }
 
-export async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
+/**
+ * After a 413 rejection, keep reading (and discarding) the rest of the body so
+ * the 413 response reaches the client instead of a connection reset. Destroying
+ * the socket right away makes clients see ECONNRESET, which callers treat as
+ * retryable. Discarding is capped at `budgetBytes`; past that the socket is
+ * destroyed as before.
+ */
+function discardRemainingBody(req: http.IncomingMessage, budgetBytes: number): void {
+  let discarded = 0;
+  req.on("data", (chunk: Buffer) => {
+    discarded += chunk.length;
+    if (discarded > budgetBytes) req.destroy();
+  });
+  req.resume();
+}
+
+export async function parseJsonBody<T>(
+  req: http.IncomingMessage,
+  maxBytes: number = MAX_BODY_BYTES,
+): Promise<T> {
   return new Promise((resolve, reject) => {
-    // Reject early when Content-Length header already exceeds the limit:
-    // saves transferring up to MAX_BODY_BYTES of attacker-controlled data.
+    // Reject early when Content-Length header already exceeds the limit.
+    // Bodies declared far above the limit are cut off without reading them.
     const declared = Number.parseInt(req.headers["content-length"] ?? "", 10);
-    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
-      reject(new PayloadTooLargeError(MAX_BODY_BYTES));
-      // Drain & destroy so the client doesn't keep streaming.
-      req.resume();
-      req.destroy();
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      reject(new PayloadTooLargeError(maxBytes));
+      if (declared > maxBytes * 2) {
+        req.resume();
+        req.destroy();
+      } else {
+        discardRemainingBody(req, maxBytes);
+      }
       return;
     }
 
@@ -234,10 +264,14 @@ export async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
     source.on("data", (chunk: Buffer) => {
       if (aborted) return;
       received += chunk.length;
-      if (received > MAX_BODY_BYTES) {
+      if (received > maxBytes) {
         aborted = true;
-        reject(new PayloadTooLargeError(MAX_BODY_BYTES));
-        req.destroy();
+        reject(new PayloadTooLargeError(maxBytes));
+        if (source !== req) {
+          req.unpipe();
+          (source as unknown as { destroy: () => void }).destroy();
+        }
+        discardRemainingBody(req, maxBytes);
         return;
       }
       chunks.push(chunk);
@@ -321,6 +355,9 @@ export class TdaiGateway {
   // ── COS: global shared client singleton + per-instance StorageAdapter cache ──
   private sharedCosClient: import("../integrations/cos/cos-backend.js").SharedCosClient | null = null;
   private cosStorageCache: Map<string, StorageAdapter> | null = null;
+  // Separate client for `/v3/session/add`, so trace uploads and other COS writes do not queue behind each other.
+  private sessionCosClient: import("../integrations/cos/cos-backend.js").SharedCosClient | null = null;
+  private readonly sessionStorageCache = new Map<string, StorageAdapter>();
 
   // ── Metadata (v3): shared store pool + per-instance MetadataService ──
   private metadataStorePool: MetadataStorePool | null = null;
@@ -927,6 +964,23 @@ export class TdaiGateway {
         return await this.handleInstanceDestroyV3(req, res);
       }
 
+      // ── /v3/session/add — session records (docs/session-api.md).
+      //    Bearer apiKey gate only; identity headers are validated inside the
+      //    router (missing → 400). Uses its own body limit (default 32 MiB).
+      if (pathname === V3_SESSION_ADD_PATH) {
+        if (!this.checkAuthForV2(req, res)) return;
+        const handledSession = await handleV3SessionRoute(
+          req, res, pathname, method,
+          (r) => parseJsonBody(r, SESSION_MAX_BODY_BYTES),
+          sendJson,
+          {
+            resolveStorage: (instanceId) => this.resolveSessionStorageForInstance(instanceId),
+            logger: this.logger,
+          },
+        );
+        if (handledSession) return;
+      }
+
       // ── v3 internal metadata（/v3/internal/meta/*，仅 Bearer）──
       if (pathname.startsWith(`${V3_INTERNAL_PREFIX}/`)) {
         if (!this.checkAuthForV2(req, res)) return;
@@ -1416,6 +1470,7 @@ export class TdaiGateway {
     if (this.cosStorageCache?.has(instanceId)) {
       this.cosStorageCache.delete(instanceId);
     }
+    this.sessionStorageCache.delete(instanceId);
     if (this.sharedCosClient && this.configProvider) {
       try {
         const cosConfig = await this.configProvider.resolveCos();
@@ -1495,6 +1550,10 @@ export class TdaiGateway {
       stores: {
         vectorStore: !!this.core.getVectorStore(),
         embeddingService: !!this.core.getEmbeddingService(),
+        // BM25 keyword search depends on the FTS5 module, which is not
+        // compiled into every official Node build (e.g. v22.13.1). When
+        // false, recall degrades to embedding-only (issue #679).
+        ftsAvailable: this.core.getVectorStore()?.isFtsAvailable() ?? false,
       },
       // Integrated services status
       services: {
@@ -2668,6 +2727,27 @@ export class TdaiGateway {
   }
 
   /**
+   * Storage for `/v3/session/add`: always the local/COS file backend of the
+   * instance, never the rowfs / mongofs legs that resolveStorageForInstance
+   * may select. Service mode lazily initializes COS with a single attempt so
+   * a COS outage fails the request fast (503) instead of blocking on retries.
+   * With COS, writes go through the dedicated session client, under the same
+   * per-instance prefix as the main one.
+   */
+  private async resolveSessionStorageForInstance(instanceId: string): Promise<StorageAdapter> {
+    if (!this.sharedCosClient && this.config.deployMode !== "standalone") {
+      await this.initSharedCosClient(1);
+    }
+    if (!this.sessionCosClient) return this.resolveFileOthersForInstance(instanceId);
+
+    const cached = this.sessionStorageCache.get(instanceId);
+    if (cached) return cached;
+    const adapter = await this.buildCosStorageForInstance(instanceId, this.sessionCosClient);
+    this.sessionStorageCache.set(instanceId, adapter);
+    return adapter;
+  }
+
+  /**
    * 形态原有的文件后端（standalone→local / service→cos），per-instance 缓存。
    * 既是 local/cos 模式的正面路径，也是 rowfs 模式组合后端的 others 侧。
    */
@@ -2688,6 +2768,17 @@ export class TdaiGateway {
     if (!this.sharedCosClient) {
       throw new Error(`SharedCosClient not initialized for instance ${instanceId}`);
     }
+    const adapter = await this.buildCosStorageForInstance(instanceId, this.sharedCosClient);
+    if (!this.cosStorageCache) this.cosStorageCache = new Map();
+    this.cosStorageCache.set(instanceId, adapter);
+    return adapter;
+  }
+
+  /** Per-instance CosStorageBackend on `sharedClient`: lightweight, only holds the `<pathPrefix>/<instanceId>/` prefix. */
+  private async buildCosStorageForInstance(
+    instanceId: string,
+    sharedClient: import("../integrations/cos/cos-backend.js").SharedCosClient,
+  ): Promise<StorageAdapter> {
     if (!this.configProvider) {
       throw new Error(`configProvider not initialized for instance ${instanceId}`);
     }
@@ -2698,18 +2789,9 @@ export class TdaiGateway {
       throw new Error(`COS config not available for instance ${instanceId} (Shark returned null or empty CosUrl)`);
     }
 
-    // Per-instance CosStorageBackend: lightweight, only holds prefix
     const { CosStorageBackend } = await import("../integrations/cos/cos-backend.js");
     const prefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${instanceId}/`;
-    const backend = new CosStorageBackend({
-      sharedClient: this.sharedCosClient,
-      prefix,
-      logger: this.logger,
-    });
-    const adapter = new StorageAdapter(backend);
-    if (!this.cosStorageCache) this.cosStorageCache = new Map();
-    this.cosStorageCache.set(instanceId, adapter);
-    return adapter;
+    return new StorageAdapter(new CosStorageBackend({ sharedClient, prefix, logger: this.logger }));
   }
 
   /**
@@ -2809,6 +2891,14 @@ export class TdaiGateway {
           cosEndpointDomain,
         });
         await this.sharedCosClient.getClient();
+        this.sessionCosClient = new SharedCosClient({
+          credentialProvider,
+          logger: this.logger,
+          cosEndpointDomain,
+          timeout: SESSION_WRITE_TIMEOUT_MS,
+          fileParallelLimit: SESSION_COS_FILE_PARALLEL_LIMIT,
+          uploadQueueSize: SESSION_COS_UPLOAD_QUEUE_SIZE,
+        });
         this.logger.info(`${TAG} SharedCosClient initialized (bucket=${bucket}, domain=${cosEndpointDomain}, attempt=${attempt})`);
         if (this.config.cos.generationLogRetentionDays > 0) {
           try {
@@ -3016,14 +3106,16 @@ export class TdaiGateway {
           }
         }
 
-        // Read L2 cursor from session state (l2_last_extraction_time)
-        // This ensures L2 only processes L1 records created after the last extraction.
+        // Read L2 cursor from session state.
+        // Prefer last_extraction_updated_time (updatedAt of the newest L1
+        // record already consumed). Fall back to l2_last_extraction_time only
+        // for sessions written by older versions that never stored the record
+        // cursor — that legacy value is the L2 completion time and can skip L1
+        // records written while the previous L2 was running.
         let cursor: string | undefined;
         if (gateway.stateBackend) {
           const state = await gateway.stateBackend.getSessionState(instanceId, task.sessionId, teamId, agentId);
-          if (state?.l2_last_extraction_time) {
-            cursor = state.l2_last_extraction_time;
-          }
+          cursor = state?.last_extraction_updated_time || state?.l2_last_extraction_time || undefined;
         }
 
         if (signal?.aborted) throw signal.reason ?? new Error("executeL2: aborted before LLM");
@@ -3042,11 +3134,42 @@ export class TdaiGateway {
           } catch { /* ok */ }
         }
 
-        const result = await core.runL2WithStore(task.sessionId, store, storage ?? undefined, cursor);
+        const jevGateId = randomUUID();
+        const result = await core.runL2WithStore(
+          task.sessionId,
+          store,
+          storage ?? undefined,
+          cursor,
+          {
+            l2TaskId: task.id,
+            jevGateId,
+            signal,
+            teamId,
+            userId: typeof task.data?.userId === "string" ? task.data.userId : undefined,
+            agentId,
+            sessionId: task.sessionId,
+          },
+          resolveCheckpointLock(instanceId),
+        );
+        task.data = {
+          ...task.data,
+          l2TaskId: task.id,
+          jevGateId: result.jevGateId ?? jevGateId,
+          l2SceneDiff: result.sceneDiff,
+        };
 
         // Mark task as skipped if L2 had no new records to process
         if (result.skipped) {
           (task as any)._l2Skipped = true;
+        }
+        // Hand the consumed-records cursor to the worker so it advances the
+        // L2 cursor to the newest processed L1 record, not to the wall clock.
+        if (result.latestCursor) {
+          (task as any)._l2LatestCursor = result.latestCursor;
+        }
+        // Batch budget hit: the worker re-enqueues an L2 after releasing the lock.
+        if (result.hasMore) {
+          (task as any)._l2HasMore = true;
         }
 
         // Report credit + new scenes as memory
@@ -3096,7 +3219,22 @@ export class TdaiGateway {
 
         core.setInstanceId(instanceId);
         const { store } = await resolveStore(task);
-        const result = await core.runL3WithStore(store, storage ?? undefined);
+        const result = await core.runL3WithStore(
+          store,
+          storage ?? undefined,
+          {
+            l2TaskId: typeof task.data?.l2TaskId === "string" ? task.data.l2TaskId : undefined,
+            l3TaskId: task.id,
+            jevGateId: typeof task.data?.jevGateId === "string" ? task.data.jevGateId : undefined,
+            sceneDiff: task.data?.l2SceneDiff as import("../core/persona/jev-gate.js").L2SceneDiffDiagnostic | undefined,
+            signal,
+            teamId: task.teamId ?? (typeof task.data?.teamId === "string" ? task.data.teamId : undefined),
+            userId: typeof task.data?.userId === "string" ? task.data.userId : undefined,
+            agentId: task.agentId ?? (typeof task.data?.agentId === "string" ? task.data.agentId : undefined),
+            sessionId: task.sessionId,
+          },
+          resolveCheckpointLock(instanceId),
+        );
 
         // Report credit + memory (only +1 on first persona creation)
         // provider=proxy 模式下 credit 由 context_proxy 上报，此处仅报 memory delta。

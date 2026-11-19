@@ -18,7 +18,7 @@
  */
 
 import { join } from "node:path";
-import { rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 
 import type {
   AuditAction,
@@ -29,6 +29,9 @@ import type {
 } from "./types.js";
 import { BuildQueue } from "./build-queue.js";
 import type { ICredentialStore } from "../source-auth/types.js";
+import { SSH_PROVIDER_ID } from "../code-source/providers/ssh.js";
+import type { AuthMethodKind } from "../code-source/auth-methods/types.js";
+import type { CredentialKind } from "../source-auth/types.js";
 
 export interface CodeGraphBuildContext {
   codeGraphId: string;
@@ -40,6 +43,11 @@ export interface CodeGraphBuildContext {
   dir: string;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
   setInternalStatus: (s: string) => void;
+  /**
+   * 资产归属用户（SSH clone 用它定位该用户的私钥）。
+   * 取 `owner_user_id ?? user_id`；两者都缺时为空串（worker 据此报「未配置 SSH 公钥」）。
+   */
+  ownerUserId?: string;
 }
 
 export interface CodeGraphBuildResult {
@@ -60,6 +68,27 @@ export type SyncResult =
   | { kind: "not_found" }
   | { kind: "busy"; status: "pending" | "processing"; step: string | null };
 
+/**
+ * build 的选项（透传至 runBuild；不传则行为与 create/sync 完全一致）。
+ */
+export interface BuildOptions {
+  /**
+   * true = 跳过 fetch/clone，直接用该资源**已有目录**的内容建索引。
+   *
+   * 目录恒为 `{dataRoot}/{service_id}/{team_id}/{code_graph_id}`，
+   * 不接受任何外部传入路径（无路径穿越面，见设计文档 §4）。
+   */
+  fromLocalDir?: boolean;
+}
+
+/**
+ * build 结果：在 sync 的判别联合基础上多一个「目录缺失/为空」分支。
+ *
+ * 单独成成员而不是复用 not_found —— 两者的处置完全不同：
+ * not_found 是资源不存在（404），empty_dir 是资源存在但没内容可建（400）。
+ */
+export type BuildResult = SyncResult | { kind: "empty_dir" };
+
 export interface CodeGraphServiceLogger {
   info?: (msg: string) => void;
   warn?: (msg: string) => void;
@@ -70,7 +99,16 @@ export interface CodeGraphServiceOptions {
   store: IKnowledgeStore;
   /** knowledge 数据根目录；资产目录 = {dataRoot}/{service_id}/{team_id}/{code_graph_id}/。 */
   dataRoot: string;
+  /** 常规 worker：拉取（clone/fetch）+ 建索引。create / sync 走它。 */
   worker: CodeGraphWorker;
+  /**
+   * 本地构建 worker：**只建索引，不拉取**。`POST /code-graph/build` 走它。
+   *
+   * 独立注入而非在 worker 里加分支 —— 保持线上 clone 链路的执行体单一语义，
+   * 新增路径的回归风险不落在主链路上（设计文档 §3.1）。
+   * 未注入时 build() 直接返回 empty_dir 之外的路径会失败，由装配层保证注入。
+   */
+  localWorker?: CodeGraphWorker;
   queue?: BuildQueue;
   logger?: CodeGraphServiceLogger;
   /** Callback config for TMC status notifications. Optional. */
@@ -81,14 +119,11 @@ export interface CodeGraphServiceOptions {
    */
   credentialStore?: ICredentialStore;
   /**
-   * 代码来源 provider 注册中心。
-   *
-   * 用途：create 时按 `provider.authMethod.kind` 决定落库凭据的 kind
-   * （bearer / basic ...），避免在此硬编码认证方式。
-   * 未注入时 create 若带 credential 会退化为写 kind=bearer（向后兼容）。
+   * 代码来源 provider 注册中心（用于读 provider 声明的认证方式）。
+   * 只依赖 `authMethod.kind` 这一个字段，避免 store 层反向依赖 code-source 全量类型。
    */
   codeSourceRegistry?: {
-    get(id: string): { authMethod: { kind: "bearer" | "basic" } } | undefined;
+    get(id: string): { authMethod: { kind: AuthMethodKind } } | undefined;
   };
   /**
    * 释放该 code-graph 占用的内存资源（instance pool + 关闭索引句柄）。
@@ -124,6 +159,7 @@ export class CodeGraphService {
   private readonly store: IKnowledgeStore;
   private readonly dataRoot: string;
   private readonly worker: CodeGraphWorker;
+  private readonly localWorker?: CodeGraphWorker;
   private readonly queue: BuildQueue;
   private readonly logger?: CodeGraphServiceLogger;
   private readonly callbackConfig?: { tmcCallbackUrl: string };
@@ -140,6 +176,7 @@ export class CodeGraphService {
   constructor(opts: CodeGraphServiceOptions) {
     this.store = opts.store;
     this.dataRoot = opts.dataRoot;
+    this.localWorker = opts.localWorker;
     this.worker = opts.worker;
     this.queue = opts.queue ?? new BuildQueue();
     this.logger = opts.logger;
@@ -162,13 +199,23 @@ export class CodeGraphService {
     const { row, existed } = this.store.createCodeGraph(params);
     if (!existed) {
       // ① 私有仓：入队前先落凭据（否则 worker 立刻 clone 时凭据还不存在 → 401）。
-      if (params.credential) {
+      //
+      // 例外：SSH 来源不落凭据行 —— 它用「每用户私钥 + GIT_SSH_COMMAND」而非
+      // URL 注入令牌。若落了凭据行，worker 会把 ssh:// 地址丢给 basic-auth
+      // 拼装器拼成 https://... 直接炸掉。详见设计文档 §2.2 D2。
+      const isSshSource = params.credential?.provider_id === SSH_PROVIDER_ID;
+      if (params.credential && !isSshSource) {
         if (!this.credentialStore) {
           throw new Error("credential provided but credentialStore is not wired");
         }
         // 落库 kind 按 provider 的认证方式决定；未注入 registry 时兼容退化为 bearer。
-        const kind =
+        //
+        // AuthMethodKind 比 CredentialKind 多一个 "ssh-key"（协议级、不落库）。
+        // 此处显式收窄：非 bearer/basic 一律按 bearer 处理 —— 能走到这里的
+        // 一定不是 ssh（上面已排除），收窄只为让类型系统满意，不改变运行时行为。
+        const declared =
           this.codeSourceRegistry?.get(params.credential.provider_id)?.authMethod.kind ?? "bearer";
+        const kind: CredentialKind = declared === "basic" ? "basic" : "bearer";
         this.credentialStore.put(
           { type: "code-graph", serviceId: row.service_id, resourceId: row.code_graph_id },
           { kind, secret: params.credential.secret, username: params.credential.username },
@@ -212,6 +259,50 @@ export class CodeGraphService {
     const fresh = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
     if (fresh) this.enqueueBuild(fresh);
     return fresh ? { kind: "ok", row: fresh } : { kind: "not_found" };
+  }
+
+  /**
+   * 本地目录构建：**不拉取**，直接用该资源已有目录的内容重建索引。
+   *
+   * 与 sync 的差别只有两点：
+   *   1. 入队前多一道目录非空校验（缺失/为空 → empty_dir，不入队）
+   *   2. 入队时带 `{ fromLocalDir: true }`，runBuild 据此换 localWorker
+   *
+   * 用途：① 目录内容已就位、只想重建索引；② 把 failed 的资源修复为 ready
+   * （成功分支无条件写 ready + 清 sync_error，对原状态无要求，见设计文档 §3.3）。
+   */
+  build(serviceId: string, teamId: string, codeGraphId: string, requesterUserId?: string): BuildResult {
+    const row = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+    if (!row) return { kind: "not_found" };
+    // 并发拒绝：与 sync 同口径。
+    if (row.status === "pending" || row.status === "processing") {
+      return { kind: "busy", status: row.status, step: row.internal_status };
+    }
+    // 目录校验前置：不存在/为空直接返回，避免入队后必然 failed 的难排查结果。
+    if (!this.isNonEmptyDir(this.dirFor(serviceId, teamId, codeGraphId))) {
+      return { kind: "empty_dir" };
+    }
+    const nextVersion = row.version + 1;
+    this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
+      status: "pending",
+      internal_status: null,
+      sync_error: null,
+      version: nextVersion,
+    });
+    this.audit({ ...row, version: nextVersion }, "ingest", "build from local dir", requesterUserId);
+    const fresh = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+    if (fresh) this.enqueueBuild(fresh, { fromLocalDir: true });
+    return fresh ? { kind: "ok", row: fresh } : { kind: "not_found" };
+  }
+
+  /** 目录存在且非空（用于 build 的前置校验）。 */
+  private isNonEmptyDir(dir: string): boolean {
+    try {
+      if (!existsSync(dir) || !statSync(dir).isDirectory()) return false;
+      return readdirSync(dir).length > 0;
+    } catch {
+      return false;
+    }
   }
 
   get(serviceId: string, teamId: string, codeGraphId: string): CodeGraphRow | null {
@@ -310,9 +401,17 @@ export class CodeGraphService {
     }
   }
 
-  private enqueueBuild(row: CodeGraphRow): void {
+  private enqueueBuild(row: CodeGraphRow, opts?: BuildOptions): void {
     this.queue.enqueue(row.code_graph_id, () =>
-      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch),
+      this.runBuild(
+        row.service_id,
+        row.code_graph_id,
+        row.team_id,
+        row.repo_url,
+        row.branch,
+        row.owner_user_id ?? row.user_id ?? undefined,
+        opts,
+      ),
     );
   }
 
@@ -322,19 +421,25 @@ export class CodeGraphService {
     teamId: string,
     repoUrl: string,
     branch: string,
+    ownerUserId?: string,
+    opts?: BuildOptions,
   ): Promise<void> {
     // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
     if (this.isDeleted(serviceId, codeGraphId)) {
       this.finishCancelled(serviceId, teamId, codeGraphId);
       return;
     }
+    // 本地构建没有 clone 步骤，写 "cloning" 会误导（前端/运维据此判断卡在哪一步）。
+    const fromLocalDir = opts?.fromLocalDir === true;
     this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
       status: "processing",
-      internal_status: "cloning",
+      internal_status: fromLocalDir ? "indexing" : "cloning",
       sync_error: null,
     });
+    // 本地构建换 worker；未注入 localWorker 时退化到常规 worker（保守：宁可走原路径也不静默跳过）。
+    const worker = fromLocalDir ? (this.localWorker ?? this.worker) : this.worker;
     try {
-      const result = await this.worker({
+      const result = await worker({
         codeGraphId,
         serviceId,
         teamId,
@@ -343,6 +448,7 @@ export class CodeGraphService {
         dir: this.dirFor(serviceId, teamId, codeGraphId),
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),
+        ownerUserId,
       });
       // 结束前检查点：processing 期间被删 → 跳过 ready/audit/回调，做幂等收尾清理。
       if (this.isDeleted(serviceId, codeGraphId)) {

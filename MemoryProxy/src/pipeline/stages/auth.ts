@@ -38,6 +38,7 @@ export interface AuthStageResult {
   /** 只在 rejected=true 时有意义, 语义与 verifyUserKey 一致 */
   rejected: boolean;
   rejectReason?: string;
+  failureStatus?: 401 | 502 | 503 | 504;
 }
 
 /**
@@ -78,7 +79,7 @@ export function extractApiKeyFromContext(
  * Early auth stage — 在 body 解析之前跑, 拒绝的请求短路。
  *
  * 返回 `rejected: true` 时调用方应立即用 protocol.buildErrorResponse
- * 生成 401, 不要往下走。
+ * 按 failureStatus 返回错误, 不要往下走。
  */
 export async function stageAuth(
   c: Context,
@@ -95,6 +96,7 @@ export async function stageAuth(
       spaceId,
       rejected: true,
       rejectReason: verify.rejectReason,
+      failureStatus: verify.failureStatus,
     };
   }
   const userId = verify.userId;

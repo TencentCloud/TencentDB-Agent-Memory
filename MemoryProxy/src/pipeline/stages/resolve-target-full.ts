@@ -36,6 +36,10 @@ export interface ResolveTargetFullInput {
   traceId: string;
   startTime: string;
   spaceId: string;
+  /** Client's model before applyMainModel pinned it; omitted when nothing was pinned. */
+  requestedModel?: string;
+  /** The client named the pool service (`applyPoolService(...).routed`). */
+  modelPool?: boolean;
 }
 
 export interface ResolveTargetFullResult {
@@ -80,6 +84,8 @@ export async function stageResolveTargetFull(
     traceId: input.traceId,
     startTime: input.startTime,
     spaceId: input.spaceId,
+    ...(input.requestedModel !== undefined ? { requestedModel: input.requestedModel } : {}),
+    ...(input.modelPool ? { modelPool: true } : {}),
     // markerOptIn=false (default/prod): 每个请求都走 router (`/cost-guard` 路径 404)
     // markerOptIn=true (test): 只有带 marker 才启用 router; 裸路径 passthrough
     useGuard: config.costGuard.markerOptIn ? hasCostGuardMarker(c.req.path) : true,

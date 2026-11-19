@@ -18,6 +18,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Input, Select } from 'tea-component';
 import { getErrorMessage } from '@/lib/error-message';
+import { tea } from '@/lib/tea-bridge';
+import { copyToClipboard } from '@/pages/ChatMemoryPage/utils/memory-utils';
 import {
   authMethodsApi,
   authVerifyApi,
@@ -434,9 +436,11 @@ export default function LoginGate({
                 />
                 <Button
                   className="_tdai-login-copy"
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(createdKey.userKey);
-                    setCopied(true);
+                  onClick={async () => {
+                    setCopied(false);
+                    const ok = await copyToClipboard(createdKey.userKey);
+                    setCopied(ok);
+                    if (!ok) tea.notify.error(t('guide.copyFailed'));
                   }}
                 >
                   {copied ? t('login.woa.copied') : t('login.woa.copyKey')}

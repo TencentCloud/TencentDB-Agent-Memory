@@ -13,7 +13,7 @@
  *   CODE_SOURCE_<UPPER_ID>_SITE_BASE_URL=...
  */
 
-import { BUILTIN_PROVIDERS } from "./providers/index.js";
+import { BUILTIN_PROVIDERS, ALWAYS_ON_PROVIDERS } from "./providers/index.js";
 import type { CodeSourceMeta, ICodeSourceProvider } from "./types.js";
 import { bearerAuthMethod } from "./auth-methods/bearer.js";
 
@@ -67,6 +67,11 @@ export class CodeSourceRegistry {
    */
   constructor(ids?: string[], builtins: readonly ICodeSourceProvider[] = BUILTIN_PROVIDERS) {
     const enabledSet = new Set(ids ?? enabledIds());
+    // 协议级来源（ssh）恒启用：它是传输协议而非代码平台，
+    // 用户填了 ssh 地址就该能用，不该受部署的 CODE_SOURCE_ENABLED 名单限制。
+    for (const p of ALWAYS_ON_PROVIDERS) {
+      this.providers.set(p.id, p);
+    }
     for (const p of builtins) {
       if (enabledSet.has(p.id)) this.providers.set(p.id, p);
     }

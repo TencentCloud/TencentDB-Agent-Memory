@@ -9,10 +9,18 @@ import {
   type CodeGraphDetail,
   type SourceProviderMeta,
 } from '@/lib/api/knowledge-api';
+import {
+  applyPollOutcome,
+  createPoller,
+  mergeTrackedSources,
+  pollableItems,
+  pollOnce,
+  reconcileTracked,
+} from '@/lib/codeGraphPolling';
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
-import { isValidGitHttpUrl, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
+import { isValidGitUrl, isSshGitUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
 export function useCodeSources() {
   const { t } = useTranslation();
@@ -46,6 +54,10 @@ export function useCodeSources() {
   const [formCredential, setFormCredential] = useState<Record<string, string>>({});
   const setCredentialField = (name: string, value: string) =>
     setFormCredential((prev) => ({ ...prev, [name]: value }));
+
+  // SSH 两段式注册：第 1 段拿到的公钥 + 是否展示公钥弹窗
+  const [sshPublicKey, setSshPublicKey] = useState('');
+  const [showSshKey, setShowSshKey] = useState(false);
 
   // Allocate-to-agent dialog state
   const [allocateTarget, setAllocateTarget] = useState<{
@@ -103,17 +115,10 @@ export function useCodeSources() {
     if (scopeTab === 'fixed') void fetchFixedBindings();
   }, [scopeTab, fetchFixedBindings]);
 
-  const displaySources = useMemo(() => {
-    // inFlight = 刚注册或刚点过「同步」的仓库，其状态由 code.get 轮询实时刷新。
-    // 同 id 时以 inFlight 为准覆盖 sources：否则详情头只会显示 202 那一刻
-    // teamAssets 快照里的状态，轮询结果永远反映不到界面上。
-    if (inFlight.length === 0) return sources;
-    const inFlightMap = new Map(inFlight.map((x) => [x.code_graph_id, x]));
-    const sourceIds = new Set(sources.map((s) => s.code_graph_id));
-    // 还没进 teamAssets 的（刚注册、meta 尚未登记）排在最前占位
-    const extras = inFlight.filter((x) => x.code_graph_id && !sourceIds.has(x.code_graph_id));
-    return [...extras, ...sources.map((s) => inFlightMap.get(s.code_graph_id) ?? s)];
-  }, [sources, inFlight]);
+  const displaySources = useMemo(
+    () => mergeTrackedSources(sources, inFlight),
+    [sources, inFlight],
+  );
 
   const scopeSources = useMemo(() => {
     if (scopeTab === 'team') return displaySources;
@@ -188,7 +193,11 @@ export function useCodeSources() {
       // fixed tab 也是拿全量 team 资产，再按 fixedBoundIds 过滤。
       const data = await knowledgeApi.code.teamAssets(activeTeamId);
       if (seq !== fetchSeqRef.current) return; // 已被后续请求取代
-      setSources(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      setSources(list);
+      // 已进入团队列表的失败终态让位给列表（列表返回的是 KS 实时 status / sync_error），
+      // 避免旧的失败快照盖住后端已恢复的状态；列表里没有的仍保留，用于错误卡片兜底。
+      setInFlight((prev) => reconcileTracked(prev, list));
     } catch (e: unknown) {
       if (seq !== fetchSeqRef.current) return;
       tea.notify.error(e);
@@ -212,61 +221,37 @@ export function useCodeSources() {
   // 只是数组引用变了）都会重新触发 effect → 立即 poll → 又 setInFlight → 死循环。
   const inFlightRef = useRef<CodeGraphDetail[]>([]);
   inFlightRef.current = inFlight;
-  const hasInFlight = inFlight.length > 0;
+  // 只有还存在需要轮询的条目时才启动定时器：全是失败终态（failed / missing）时，
+  // 不再每 8 秒发一次注定没有变化的请求（issue #1937）。
+  const hasPollable = useMemo(() => pollableItems(inFlight).length > 0, [inFlight]);
 
   useEffect(() => {
-    if (!activeTeamId || !hasInFlight) return;
+    if (!activeTeamId || !hasPollable) return;
     const poll = async () => {
-      const items = inFlightRef.current;
-      if (items.length === 0) return;
-      const toRemove: string[] = [];
-      const updates: CodeGraphDetail[] = [];
-      for (const item of items) {
-        if (!item.code_graph_id) continue;
-        try {
-          const detail = await knowledgeApi.code.get(item.code_graph_id);
-          if (detail.status === 'ready') {
-            try {
-              await knowledgeApi.code.registerMeta(activeTeamId, detail.code_graph_id);
-            } catch (e: unknown) {
-              // 幂等：asset 已存在 / 409 → 忽略；其它真错报出来便于排查
-              // （callback S2S 是主力，这里只是兜底，但失败要可见）
-              const msg = e instanceof Error ? e.message : String(e);
-              if (!/already|exist|409|registered|ok/i.test(msg)) {
-                tea.notify.error(t('code.notify.metaFailed', { msg }));
-              }
+      const outcome = await pollOnce(pollableItems(inFlightRef.current), {
+        get: (codeGraphId) => knowledgeApi.code.get(codeGraphId),
+        onReady: async (detail) => {
+          try {
+            await knowledgeApi.code.registerMeta(activeTeamId, detail.code_graph_id);
+          } catch (e: unknown) {
+            // 幂等：asset 已存在 / 409 → 忽略；其它真错报出来便于排查
+            // （callback S2S 是主力，这里只是兜底，但失败要可见）
+            const msg = e instanceof Error ? e.message : String(e);
+            if (!/already|exist|409|registered|ok/i.test(msg)) {
+              tea.notify.error(t('code.notify.metaFailed', { msg }));
             }
-            toRemove.push(detail.code_graph_id);
-            void fetchSources();
-          } else {
-            // 只在状态真正变化时才记录更新，避免无意义的 setInFlight 触发重渲染
-            if (detail.status !== item.status) updates.push(detail);
           }
-        } catch {
-          /* ignore transient poll errors */
-        }
-      }
-      if (toRemove.length > 0 || updates.length > 0) {
-        setInFlight((prev) => {
-          let next = prev;
-          if (toRemove.length > 0) {
-            const removeSet = new Set(toRemove);
-            next = next.filter((x) => !removeSet.has(x.code_graph_id));
-          }
-          if (updates.length > 0) {
-            const updMap = new Map(updates.map((u) => [u.code_graph_id, u]));
-            next = next.map((x) => updMap.get(x.code_graph_id) ?? x);
-          }
-          return next;
-        });
+          void fetchSources();
+        },
+      });
+      if (outcome.remove.length > 0 || outcome.updates.length > 0) {
+        setInFlight((prev) => applyPollOutcome(prev, outcome));
       }
     };
-    void poll();
-    const timer = setInterval(() => {
-      void poll();
-    }, 8000);
-    return () => clearInterval(timer);
-  }, [hasInFlight, activeTeamId, fetchSources, t]);
+    const poller = createPoller({ intervalMs: 8000, run: poll });
+    poller.start();
+    return () => poller.stop();
+  }, [hasPollable, activeTeamId, fetchSources, t]);
 
   async function handleUnbindCode(codeGraphId: string) {
     if (!agentFilter) return;
@@ -295,6 +280,9 @@ export function useCodeSources() {
    */
   const openRegister = useCallback(async () => {
     setShowRegister(true);
+    // 每次打开注册弹窗都清掉上一次的 SSH 公钥态，避免残留旧公钥误导用户。
+    setShowSshKey(false);
+    setSshPublicKey('');
     if (!activeTeamId) return;
     try {
       const providers = await knowledgeApi.source.providers(activeTeamId);
@@ -304,16 +292,42 @@ export function useCodeSources() {
     }
   }, [activeTeamId]);
 
-  const handleRegister = async () => {
+  /**
+   * 注册 = 两段式（仅 SSH 仓库需要两段）：
+   *
+   *   第 1 段 ensureSshKey：向后端取（必要时生成）该用户的公钥，弹窗展示给用户，
+   *                        用户去 Git 平台配好后再进入第 2 段。
+   *   第 2 段 submitCreate：真正 create 建图。
+   *
+   * 这样设计的原因：若一步到位直接 create，用户此刻还没配公钥，
+   * clone 必定失败并在列表里留一条 failed 记录，体验很差。
+   */
+  const ensureSshKey = async (): Promise<void> => {
+    if (!activeTeamId) return;
+    setSubmitting(true);
+    try {
+      const info = await knowledgeApi.code.sshKeyEnsure(activeTeamId);
+      setSshPublicKey(info.public_key);
+      setShowSshKey(true);
+    } catch (e: unknown) {
+      tea.notify.error(e);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitCreate = async (): Promise<void> => {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
-    if (!isValidGitHttpUrl(repo)) {
+    if (!isValidGitUrl(repo)) {
       tea.notify.error(t('code.register.invalidUrl'));
       return;
     }
-    // 私有仓：按 provider.form_fields 校验必填字段
+    const isSsh = isSshGitUrl(repo);
+    // 私有仓（HTTPS 平台）：按 provider.form_fields 校验必填字段。
+    // SSH 来源 form_fields 为空数组 → 天然跳过令牌校验。
     const provider = sourceProviders.find((p) => p.id === formSourceType);
-    if (provider) {
+    if (provider && !isSsh) {
       for (const f of provider.form_fields) {
         if (f.required && !(formCredential[f.name] ?? '').trim()) {
           tea.notify.error(t('code.register.tokenRequired'));
@@ -325,6 +339,7 @@ export function useCodeSources() {
     try {
       // 私有仓：create 时把凭据一并传过去，KS 在入队建图前先落凭据，
       // 避免「create 立即 clone、凭据尚未写入」的时序窗口（否则私有仓必 401）。
+      // SSH 来源不传 secret（后端对该 provider 也不要求），只传 provider_id 表明走 SSH。
       const secret = (formCredential.secret ?? '').trim();
       const username = (formCredential.username ?? '').trim();
       const detail = await knowledgeApi.code.create({
@@ -332,16 +347,20 @@ export function useCodeSources() {
         repoUrl: repo,
         branch: formBranch.trim(),
         repoName: repo,
-        ...(provider && secret
-          ? {
-              providerId: formSourceType,
-              secret,
-              ...(username ? { username } : {}),
-            }
-          : {}),
+        ...(isSsh
+          ? { providerId: SSH_SOURCE_ID }
+          : provider && secret
+            ? {
+                providerId: formSourceType,
+                secret,
+                ...(username ? { username } : {}),
+              }
+            : {}),
       });
 
       setShowRegister(false);
+      setShowSshKey(false);
+      setSshPublicKey('');
       setFormRepo('');
       setFormBranch('main');
       setFormSourceType('');
@@ -358,6 +377,21 @@ export function useCodeSources() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleRegister = async () => {
+    const repo = formRepo.trim();
+    if (!repo || !formBranch.trim() || !activeTeamId) return;
+    if (!isValidGitUrl(repo)) {
+      tea.notify.error(t('code.register.invalidUrl'));
+      return;
+    }
+    // SSH 仓库：先取公钥给用户去平台配置，用户点「已配置，继续」后才真正建图。
+    if (isSshGitUrl(repo)) {
+      await ensureSshKey();
+      return;
+    }
+    await submitCreate();
   };
 
   const handleSync = async (cgId: string) => {
@@ -490,6 +524,12 @@ export function useCodeSources() {
     setCredentialField,
     setFormCredential,
     openRegister,
+    // SSH 两段式
+    sshPublicKey,
+    setSshPublicKey,
+    showSshKey,
+    setShowSshKey,
+    submitCreate,
     // allocate
     allocateTarget,
     setAllocateTarget,

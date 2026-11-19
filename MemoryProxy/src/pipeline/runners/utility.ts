@@ -10,6 +10,7 @@
  */
 
 import type { Context } from "hono";
+import { logPipelineUpstreamError } from "../../upstream-error-log.js";
 import type { ProxyConfig } from "../../types.js";
 import { createPipeline, writeLog } from "../../logger.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "../../opik.js";
@@ -20,6 +21,7 @@ import {
 import { matchWhitelistEndpoint, type WhitelistEndpoint } from "../../routes/whitelist.js";
 import { joinUrl } from "../../guard-adapter.js";
 import { log } from "../../report/log.js";
+import { readIncomingRequestId, withRequestId } from "../../request-id.js";
 import { verifyUserKey } from "../../auth.js";
 import { stageAuth } from "../stages/auth.js";
 import { stageSystemUser } from "../stages/system-user.js";
@@ -30,6 +32,7 @@ import {
   resolveForAgent,
 } from "../../instance-upstream-cache.js";
 import { SKIP_REQUEST_HEADERS_WITH_INTERNAL, SKIP_RESPONSE_HEADERS, filterResponseHeaders } from "../../common/constants.js";
+import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 
 function buildAuxUpstreamHeaders(
   c: Context,
@@ -87,11 +90,16 @@ function extractUsageFromResponse(
  * 与 handleAuxiliaryEndpoint 语义等价。
  */
 export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promise<Response> {
-  const traceId = uuidv7();
+  // 客户端/网关 x-request-id 作为 trace 主键，缺失才走 uuidv7。see request-id.ts。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
   const startTime = new Date().toISOString();
+  const requestStartMono = performance.now();
 
   const entry = matchWhitelistEndpoint(c.req.path);
-  if (!entry) return c.json({ error: "Unregistered endpoint" }, 404);
+  if (!entry) {
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Unregistered endpoint" }, traceId), 404);
+  }
 
   // 1. Auth (via shared stageAuth)
   // 老 auxiliary 是 x-api-key 优先 (与 stage 的 Bearer 优先反过来), 但两者结果集合等价
@@ -102,7 +110,8 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
   const spaceId = auth.spaceId;
   const userId = auth.userId;
   if (auth.rejected) {
-    return c.json({ error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` }, 401);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` }, traceId), auth.failureStatus ?? 401);
   }
   const keyId = auth.keyId;
 
@@ -144,25 +153,34 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
   }
 
   // 4. pipe log + forward
-  const pipe = createPipeline(config, traceId, modelId);
+  const pipe = createPipeline(config, traceId, modelId, {
+    spaceId,
+    protocol: entry.protocol,
+    startedAt: startTime,
+    startedMono: requestStartMono,
+  });
   pipe.info("AUX_ENDPOINT", `${entry.pathSuffix} → ${entry.upstreamEndpoint} (${entry.protocol})`);
   pipe.forwardStart();
 
   let upstreamResp: Response;
+  const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 3_600_000;
   try {
     upstreamResp = await fetch(upstreamUrl, {
       method: "POST",
       headers: upstreamHeaders,
       body: rawBody,
+      ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
     });
   } catch (err: unknown) {
     pipe.error("AUX_FORWARD", err instanceof Error ? err : new Error(String(err)));
-    return c.json({
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({
       error: "Upstream request failed",
       detail: err instanceof Error ? err.message : String(err),
-    }, 502);
+    }, traceId), 502);
   }
   pipe.forwardDone(upstreamResp.status, upstreamResp.headers.get("x-request-id") ?? undefined);
+  await logPipelineUpstreamError(pipe, upstreamResp);
 
   // 5. stream vs non-stream
   const contentType = upstreamResp.headers.get("content-type") ?? "";
@@ -170,7 +188,18 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
 
   if (isStream) {
     log.debug("aux.stream.passthrough", { path: c.req.path, upstreamUrl });
-    return new Response(upstreamResp.body, {
+    const observedStream = upstreamResp.body
+      ? withStreamIdleWarning(upstreamResp.body, {
+          spaceId,
+          traceId,
+          requestId: traceId,
+          upstreamRequestId: upstreamResp.headers.get("x-request-id") ?? "",
+          model: modelId,
+          protocol: entry.protocol,
+          branch: "client_pipeline",
+        })
+      : null;
+    return new Response(observedStream, {
       status: upstreamResp.status,
       headers: filterResponseHeaders(upstreamResp.headers),
     });
@@ -199,8 +228,8 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
           { ...pipe.ids(), sessionKey: keyId },
         );
       } catch (err: unknown) {
-        log.error("aux.credit_report_failed",
-          { path: c.req.path, upstreamUrl },
+        log.error("【P2】aux.credit_report_failed",
+          { ...pipe.ids(), path: c.req.path, upstreamUrl },
           err instanceof Error ? err : new Error(String(err)));
       }
     }

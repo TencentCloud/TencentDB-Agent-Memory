@@ -34,6 +34,14 @@ export interface LangfuseTurnContextBuildInput {
   target: ForwardTarget;
   messages: unknown[];
   /**
+   * 记忆实例 ID（kernel tenant；路径段 `/proxy/<spaceId>/...` 或 auth.serviceId
+   * 解析出来的 spaceId）。会带进 trace/observation 级 metadata 的 `instanceId`
+   * 键，供 Langfuse 按实例筛选。调用点保留内部 `spaceId` 名字（CH/credit 侧
+   * 命名统一），只有送进 Langfuse 这层才改叫 `instanceId`。
+   * 老单租户部署该值为空时不上报该键。
+   */
+  spaceId?: string;
+  /**
    * 协议 — 影响 countHumanTurns 分支。
    * "responses" 走独立的 countHumanTurnsCodex/Workbuddy (codex/wb handler 内部),
    * caller 必须通过 `localTurnSeqOverride` 传入; 不能在此 stage 内自动推导。
@@ -61,6 +69,23 @@ export interface LangfuseTurnContextBuildInput {
    * 不传时 stage 走 resolveLatestUserQuery 默认姿势。
    */
   userQueryOverride?: string | null;
+  /** Human-friendly attribution resolved from the caller API key. */
+  wecomName?: string;
+  /**
+   * 权威 turnSeq 覆写 — caller 已在入口通过 stageResolveTurnSeq (Redis
+   * 单调化) 算出该 turn 的最终 turnSeq, 把它传进来跳过本 stage 内的
+   * localTurnSeq 推导与 resolveMonotonicTurnSeq 调用。
+   *
+   * 治理背景: 同一个 turn 的 injection / mem-command / lf 构造必须用同
+   * 一个 turnSeq, 下游所有 observation 才会挂到同一条 Langfuse trace。
+   * 做法: runner 入口算一次 stageResolveTurnSeq → 传给 injection /
+   * mem-command / 本 stage, 本 stage 直接复用, 不再调 Redis Lua
+   * (避免 EVAL 两次导致 markField 二次翻, 虽然 Lua 本身幂等, 省一跳 I/O)。
+   *
+   * 未传时行为完全不变: localTurnSeqOverride > target.turnSeq > protocol
+   * fallback 这套老路径一字不改, 现网老 caller 零改动。
+   */
+  preResolvedTurnSeq?: number;
 }
 
 export interface LangfuseTurnBundle {
@@ -78,32 +103,42 @@ export interface LangfuseTurnBundle {
 export async function stageBuildLangfuseTurnContext(
   input: LangfuseTurnContextBuildInput,
 ): Promise<LangfuseTurnBundle> {
-  let localTurnSeq: number;
-  if (input.localTurnSeqOverride !== undefined) {
-    localTurnSeq = input.localTurnSeqOverride;
-  } else if (input.target.turnSeq > 0) {
-    localTurnSeq = input.target.turnSeq;
-  } else if (input.protocol === "responses") {
-    // codex/wb 必须显式传 localTurnSeqOverride (走各自的 countHumanTurnsCodex/Workbuddy);
-    // 未传就当 0, 后续 resolveMonotonicTurnSeq 也短路 (localTurnSeq<=0 直返)。
-    localTurnSeq = 0;
+  // Fast path: caller 已经通过 stageResolveTurnSeq 预算了权威 turnSeq,
+  // 跳过本地推导 + Redis Lua, 保证与 injection/mem-command 用同一个值。
+  let turnSeq: number;
+  if (input.preResolvedTurnSeq !== undefined) {
+    turnSeq = input.preResolvedTurnSeq;
   } else {
-    localTurnSeq = countHumanTurns(input.messages, input.protocol);
-  }
+    let localTurnSeq: number;
+    if (input.localTurnSeqOverride !== undefined) {
+      localTurnSeq = input.localTurnSeqOverride;
+    } else if (input.target.turnSeq > 0) {
+      localTurnSeq = input.target.turnSeq;
+    } else if (input.protocol === "responses") {
+      // codex/wb 必须显式传 localTurnSeqOverride (走各自的 countHumanTurnsCodex/Workbuddy);
+      // 未传就当 0, 后续 resolveMonotonicTurnSeq 也短路 (localTurnSeq<=0 直返)。
+      localTurnSeq = 0;
+    } else {
+      localTurnSeq = countHumanTurns(input.messages, input.protocol);
+    }
 
-  const turnSeq = await resolveMonotonicTurnSeq(
-    input.config,
-    input.sessionKey,
-    localTurnSeq,
-    input.lane,
-  );
+    turnSeq = await resolveMonotonicTurnSeq(
+      input.config,
+      input.sessionKey,
+      localTurnSeq,
+      input.lane,
+    );
+  }
 
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(input.sessionKey, turnSeq),
     turnSeq,
-    traceName: `${input.target.model} / ${input.keyId}`,
-    userId: input.keyId,
+    traceName: `${input.target.model} / ${input.wecomName || input.keyId}`,
+    userId: input.wecomName || input.keyId,
     sessionId: input.sessionKey,
+    // 空字符串按"无实例"处理（老 /proxy 前缀 + 单租户部署）。
+    // 对外统一叫 instanceId；源头变量仍叫 spaceId（CH/credit 命名一致）。
+    instanceId: input.spaceId || undefined,
     tags: input.traceTags,
     routeTags: input.target.tags,
     userQuery: input.userQueryOverride ?? resolveLatestUserQuery(
@@ -139,6 +174,9 @@ export function stageReportAnalyzerTrace(input: {
     langfuseTraceId: input.lf.traceId,
     traceName: input.lf.traceName,
     traceTags: input.lf.tags,
+    // lf.userId is `wecomName || keyId`, the same identity the turn trace was
+    // created under, so the analyzer span joins that trace's project.
+    projectName: input.lf.userId,
     keyId: `${input.keyId}:${input.sessionKey}`,
     sessionKey: input.sessionKey,
     turnSeq: input.turnSeq,

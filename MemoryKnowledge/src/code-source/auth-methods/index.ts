@@ -5,10 +5,12 @@
 import type { AuthMethod, AuthMethodKind } from "./types.js";
 import { bearerAuthMethod } from "./bearer.js";
 import { basicAuthMethod } from "./basic.js";
+import { sshKeyAuthMethod } from "./ssh-key.js";
 
 export const AUTH_METHODS: Readonly<Record<AuthMethodKind, AuthMethod>> = Object.freeze({
   bearer: bearerAuthMethod,
   basic: basicAuthMethod,
+  "ssh-key": sshKeyAuthMethod,
 });
 
 /** 按 kind 拿实现；未收录 → undefined。 */
@@ -17,4 +19,4 @@ export function getAuthMethod(kind: string): AuthMethod | undefined {
 }
 
 export type { AuthMethod, AuthMethodKind, CredentialFormField } from "./types.js";
-export { bearerAuthMethod, basicAuthMethod };
+export { bearerAuthMethod, basicAuthMethod, sshKeyAuthMethod };

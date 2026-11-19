@@ -1404,3 +1404,84 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ===== SessionDefaultSection（v3.3 用户级 Session 默认 Team/Agent/Task）=====
+   样式完全对齐上方 DefaultAgentTemplateSection：同一张 _memory-panel-card、
+   同样的 head/info/actions 布局与 body 纵向间距，保证同页两个"预设类"卡片
+   观感一致。仅多出 row（label + name + id 三列）用于承载三元组展示。 */
+._memory-session-default-section {
+  padding: 14px 16px;
+}
+
+._memory-session-default-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+._memory-session-default-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+._memory-session-default-title {
+  color: var(--tea-color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+._memory-session-default-desc {
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+._memory-session-default-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+._memory-session-default-body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+._memory-session-default-placeholder {
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+}
+
+/* 三元组单行：label + name + (id) */
+._memory-session-default-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 18px;
+}
+
+._memory-session-default-row-label {
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+  min-width: 48px;
+  flex-shrink: 0;
+}
+
+._memory-session-default-row-name {
+  color: var(--tea-color-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+._memory-session-default-row-id {
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}

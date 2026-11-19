@@ -41,8 +41,11 @@ function clientFor(ctx: TaskSourceContext): TapdMcpClient {
 }
 
 function asRows(raw: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === "object");
+  if (!Array.isArray(raw) || raw.some(r => !r || typeof r !== "object" || Array.isArray(r) ||
+    !(typeof r.id === "string" && r.id.trim() || typeof r.id === "number" && Number.isSafeInteger(r.id)))) {
+    throw new TaskSourceError("task_source_invalid_response", "Invalid TAPD task list response");
+  }
+  return raw as Array<Record<string, unknown>>;
 }
 
 /**
@@ -225,7 +228,9 @@ export const tapdProvider: TaskSourceProvider = {
     if (!rows.length) {
       throw new TaskSourceError("remote_task_not_found", `TAPD ${itemType} not found: ${externalId}`);
     }
-    return toDetail(rows[0], itemType, ctx.siteBaseUrl, scope);
+    const row = rows.find(r => String(r.id) === externalId);
+    if (!row) throw new TaskSourceError("task_source_invalid_response", "TAPD returned an unexpected task identity");
+    return toDetail(row, itemType, ctx.siteBaseUrl, scope);
   },
 };
 

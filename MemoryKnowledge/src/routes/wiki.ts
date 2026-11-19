@@ -18,9 +18,10 @@
 
 import { Hono } from "hono";
 
-import type { WikiService } from "../store/index.js";
+import type { WikiService, RawContent } from "../store/index.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
 import type { WikiStatus } from "../store/index.js";
+import { maxBytesOf, toWireFormats } from "../document-converter/format-registry.js";
 import {
   extractIdFields,
   isValidIdSegment,
@@ -223,6 +224,20 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     return c.json(wrapOk({ items: items.map(toWikiDetail), total }));
   });
 
+  /**
+   * 格式注册表下发 —— **单一真源**的唯一出口。
+   *
+   * Panel 与前端的白名单 / 上传通道 / 大小档位 / 预览形态全部从此派生，
+   * 不再各自硬编码扩展名清单。新增一种格式只需在
+   * `document-converter/format-registry.ts` 加一条，全链路自动生效。
+   */
+  app.post("/formats", async (c) => {
+    // 显式投影：只下发 Panel 实际消费的字段（含运行时算出的 maxBytes），
+    // 后端内部实现细节（htmlPostProcessor / markdownPostProcessor / note / ...）
+    // 不通过 API 泄漏。见 `toWireFormats()` 文档。
+    return c.json(wrapOk({ items: toWireFormats() }));
+  });
+
   // ═══════════════════ File Layer raw/* ═══════════════════
 
   // ── id-only ──
@@ -261,7 +276,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     if (!row) return c.json(wrapError(404, "wiki not found"), 404);
 
     try {
-      const result = wikiService.rawReadMany(serviceId, row.team_id, wikiId, filenames);
+      const result = await wikiService.rawReadMany(serviceId, row.team_id, wikiId, filenames);
       const err = maybeWriteError(result);
       if (err) return err;
       return c.json(wrapOk({ items: result }));
@@ -285,16 +300,15 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       return c.json(wrapError(400, "files is required (non-empty array)"), 400);
     }
 
-    // 上传大小限制（防御纵深，Panel 侧已有同样校验）
-    const MAX_FILE_SIZE = 512 * 1024;
+    // 上传大小限制（防御纵深，Panel 侧已有同样校验，两处阈值语义必须一致）
     const MAX_FILES = 10;
-    const MAX_TOTAL = 5 * 1024 * 1024;
+    const MAX_TOTAL = 20 * 1024 * 1024;
     if (files.length > MAX_FILES) {
       return c.json(wrapError(413, `too many files (max ${MAX_FILES})`), 413);
     }
     let totalSize = 0;
 
-    const validated: { filename: string; content: string }[] = [];
+    const validated: { filename: string; content: RawContent }[] = [];
     for (const item of files) {
       if (!item || typeof item !== "object") {
         return c.json(wrapError(400, "files items must be {filename, content}"), 400);
@@ -306,12 +320,35 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       if (typeof r.content !== "string") {
         return c.json(wrapError(400, "content must be string for each file"), 400);
       }
-      const size = Buffer.byteLength(r.content, "utf-8");
-      if (size > MAX_FILE_SIZE) {
-        return c.json(wrapError(413, `file too large: ${r.filename} (max ${MAX_FILE_SIZE} bytes)`), 413);
+      // **默认 base64，缺省/utf8 兜底为 utf8**：
+      // - 文件上传路径（readUploadFile → 二进制文件）必传 base64，后端按原始
+      //   字节落盘。UTF-8 解码对二进制有损不可逆（非法字节 → U+FFFD）。
+      // - 手工粘贴 MD 场景（useWikiSources `knowledgeApi.wiki.upload({ content })`
+      //   不传 encoding）直接把字符串按 utf8 落盘，不必多走一次 base64 编码。
+      // 两条路径在同一端点内分流，与扩展名无关。
+      const encoding = r.encoding === "utf8" ? "utf8" : "base64";
+      let buf: Buffer;
+      try {
+        buf = Buffer.from(r.content, encoding);
+      } catch {
+        return c.json(wrapError(400, `invalid content encoding: ${r.filename}`), 400);
+      }
+      if (encoding === "base64") {
+        // 严格校验：非法 base64 会被 Buffer.from 静默忽略（产出乱码），必须拦下。
+        // Node 的 base64 解码是宽松的，故用正则 + 往返比对确认为严格 base64。
+        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(r.content) || buf.toString("base64") !== r.content) {
+          return c.json(wrapError(400, `invalid base64 content: ${r.filename}`), 400);
+        }
+      }
+      // 按**原始字节**计费：base64 串长比原始字节膨胀约 33%，按串长校验会误杀
+      const size = buf.length;
+      // 单文件上限按格式取（逐 ext 覆盖 > sizeTier 档位默认），见 maxBytesOf
+      const max = maxBytesOf(r.filename);
+      if (size > max) {
+        return c.json(wrapError(413, `file too large: ${r.filename} (max ${max} bytes)`), 413);
       }
       totalSize += size;
-      validated.push({ filename: r.filename, content: r.content });
+      validated.push({ filename: r.filename, content: buf });
     }
     if (totalSize > MAX_TOTAL) {
       return c.json(wrapError(413, `total too large (max ${MAX_TOTAL} bytes)`), 413);

@@ -24,6 +24,11 @@ import { buildSessionInfo } from "../registrar.js";
 import { injectSessionContextWithToggles } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
 import { isHeaderOnlyAgent, resolvePresetIdentity, type PresetIdentity } from "../preset.js";
+import {
+  resolveUserSessionDefault,
+  describeUserDefaultFallback,
+  buildDefaultBindingNoticeIfApplicable,
+} from "../user-default.js";
 
 import { buildFormResponse, FormData } from "./form.js";
 import { buildBypassNoticeResponse } from "../workbuddy/text-form.js";
@@ -103,6 +108,13 @@ export interface SessionInitResult {
    * 供 mem:session-reset 完成确认等展示层使用；session-init 完成时才有值。
    */
   teamName?: string | null;
+  /**
+   * v3.3 user-session-default: 本次绑定账户默认配置时, Proxy 要让用户看到的
+   * 一段 markdown 文本(✅ 当前 session 绑定默认配置 + Team/Agent/Task 三行)。
+   * runner 层在 SSE 流最前面拼成一段 content delta 下发, 和 LLM 回复独立。
+   * null = 不是命中默认(header/form/后续轮次), 不需要插。
+   */
+  defaultBindingNotice?: string | null;
   /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
   bypassed?: boolean;
   /**
@@ -380,7 +392,9 @@ function applyArtifactsAndContext(
 ): MessageArr {
   // 曾经这里会按 config.keepInitArtifacts 决定要不要 stripInitArtifacts,
   // 现在**永远保留** session_init form 交互, 不做任何删除。
-  const injected = injectSessionContextWithToggles(messages, agentDetail, taskDetail, config, sessionKey);
+  const injected = injectSessionContextWithToggles(
+    messages, agentDetail, taskDetail, config, sessionKey,
+  );
   if (injected !== messages) {
     const finalRoles = (injected as unknown[]).map((m: any) => m.role);
     console.log(
@@ -498,6 +512,18 @@ export async function completeRegistration(
   );
   const teamName = selectedTeam?.team_name ?? null;
 
+  // v3.3 user-session-default: presetSource 来源收敛
+  //
+  // 三种来源:
+  //   - "user_default" — handleSessionInit 入口命中账户默认 (seedState 已标)
+  //   - "header"       — header preset 命中 (seedState 已标)
+  //   - "form"         — 用户走完交互表单到达 initialized (入口到 completeRegistration
+  //                       的 state 不带 presetSource, 这里兜底写 "form")
+  //
+  // defaultFallbackReason 只在表单路径下才有意义 (命中默认时 state 必空),
+  // 原样透传 state 值即可。
+  const effectivePresetSource = state.presetSource ?? "form";
+
   const nextState: SessionInitState = {
     status: "initialized",
     keyId: sessionKey,
@@ -511,10 +537,23 @@ export async function completeRegistration(
     taskDetail,
     resetFlow: state.resetFlow,
     resetEpoch: state.resetEpoch,
+    presetSource: effectivePresetSource,
+    defaultFallbackReason: state.defaultFallbackReason,
   };
   await store.set(compositeKey, nextState);
 
-  const out = applyArtifactsAndContext(messages, agentDetail, taskDetail, compositeKey, config);
+  const out = applyArtifactsAndContext(
+    messages, agentDetail, taskDetail, compositeKey, config,
+  );
+
+  // v3.3 user-session-default: 命中账户默认时, 为"用户完全无感跳过表单"场景
+  // 构造一段**由 Proxy 自己下发**的绑定提示(供 runner 层在 SSE 流最前面插入,
+  // 保证用户 100% 看到 —— 之前让 LLM 转述的方案被证伪过 2 次, LLM 会漏/截断)。
+  // 格式: ✅ 标题 + 空行 + 三行 Team/Agent/Task(名称 + id)。
+  const defaultBindingNotice = buildDefaultBindingNoticeIfApplicable(
+    effectivePresetSource, teamName, regData.team_id, agentDetail, taskDetail, regData.task_id,
+  );
+
   return {
     intercepted: false,
     messages: out,
@@ -523,6 +562,7 @@ export async function completeRegistration(
     agentDetail,
     taskDetail,
     teamName,
+    defaultBindingNotice,
     resetFlow: state.resetFlow ?? false,
   };
 }
@@ -828,6 +868,74 @@ async function handleSessionInitInner(
       return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
+    // ── User session default (v3.3): 账户级配置 —— 优先级最高 ───────────────
+    //
+    // 用户通过面板设置的"默认 (team, agent, task) 三元组"。命中有效即一步到位
+    // fastRegister, 跳过 asset_confirm / team_select / agent_select / task_select
+    // 全部表单, 且**忽略**请求 header 里带的 x-team-id/x-agent-id/x-task-id
+    // (设计文档 §2.2 优先级链)。
+    //
+    // 失败路径 (无记录 / RPC 异常 / team/agent/task 校验不过) → resolver 返 null,
+    // 继续往下走 header-only short-circuit → header preset → 原交互表单。
+    // resolver 内部 catch 所有异常, 保证"账户默认失效"路径对用户无差别。
+    const userDefaultResult = await resolveUserSessionDefault({
+      userId,
+      teams,
+      metadataClient,
+      compositeKey,
+      defaultTaskId: config.defaultTaskId,
+    });
+    const userDefaultResolution = userDefaultResult.resolution;
+    const userDefaultFallbackReason = userDefaultResult.fallbackReason;
+    if (userDefaultResolution && userDefaultResolution.canRegister) {
+      // ⚠️ cachedTeams 来自 fetchTeamsAndAgents, 其 team.agents 只含 **owner=self**
+      // 的 agent。但账户默认允许选 team 可见的、别人 owner 的 agent —— 若命中后者,
+      // 下游 completeRegistration 的 findTeamIdForAgent(cachedTeams, agentId) 会匹配
+      // 不到 → buildRegistrationData 返 null → bypass, 表现为"有默认配置却仍弹表单"。
+      // 这里把命中的 agent 补进对应 team 的 agents 列表 (仅内存, 供下游匹配用)。
+      const teamsForDefault = teams.map((t) => {
+        if (t.team_id !== userDefaultResolution.teamId) return t;
+        if (t.agents.some((a) => a.agent_id === userDefaultResolution.agentId)) return t;
+        return {
+          ...t,
+          agents: [
+            ...t.agents,
+            {
+              agent_id: userDefaultResolution.agentId!,
+              agent_name: userDefaultResolution.agentName ?? userDefaultResolution.agentId!,
+            },
+          ],
+        };
+      });
+      const seedState: SessionInitState = {
+        status: "uninitialized",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teamsForDefault,
+        selectedTeamId: userDefaultResolution.teamId,
+        presetSource: "user_default",
+      };
+      return completeRegistration(
+        {
+          agent_id: userDefaultResolution.agentId!,
+          task_id: userDefaultResolution.taskId,
+        },
+        seedState, teamsForDefault, compositeKey, sessionKey, userId,
+        config, store, messages, metadataClient, userKey, spaceId,
+      );
+    }
+    // 未命中: 把 fallback 原因挂到 state (非空才有意义), 便于失败路径最终
+    // 到达 initialized 时携带原因入 ClickHouse。只对"配置存在但失效"的情况
+    // 有意义; "未配置"(fallbackReason="") 不写以免误伤分析。
+    const pendingDefaultFallbackReason = userDefaultFallbackReason || undefined;
+    // v3.3: 同一原因的**用户可读**版本 —— 回退后拼进表单标题, 让"我的默认配置
+    // 为什么没生效"可自证 (PRD "提示原因并回退到手动选择")。
+    // describeUserDefaultFallback 对 "" / get_failed 返回 null → 不打扰用户。
+    const pendingDefaultFallbackNotice =
+      describeUserDefaultFallback(userDefaultFallbackReason) ?? undefined;
+
     // ── Header-only agent short-circuit ────────────────────────────────────
     // pi / hermes / openclaw 客户端只通过请求头预选身份,没有交互 form UI:
     //   - pi:       openai-chat, body.tools 不含 ask_followup_question
@@ -861,6 +969,10 @@ async function handleSessionInitInner(
           userId,
           cachedTeams: teams,
           selectedTeamId: prHo.teamId,
+          // v3.3 user-session-default: 命中 header preset。
+          // 若账户默认失败后回退到 header, defaultFallbackReason 透传入埋点。
+          presetSource: "header",
+          defaultFallbackReason: pendingDefaultFallbackReason,
         };
         return completeRegistration(
           { agent_id: prHo.agentId!, task_id: prHo.taskId },
@@ -939,6 +1051,9 @@ async function handleSessionInitInner(
           userId,
           cachedTeams: teams,
           selectedTeamId: pr.teamId,
+          // v3.3 user-session-default: 命中 header preset。
+          presetSource: "header",
+          defaultFallbackReason: pendingDefaultFallbackReason,
         };
         return completeRegistration(
           { agent_id: pr.agentId!, task_id: pr.taskId },
@@ -974,6 +1089,8 @@ async function handleSessionInitInner(
           questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId,
           protocol: reqCtx.protocol,
+          // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+          notice: pendingDefaultFallbackNotice,
         };
         return { intercepted: true, response: buildFormResponse(fd), formData: fd };
       }
@@ -998,6 +1115,8 @@ async function handleSessionInitInner(
             cachedTeams: teams,
             selectedTeamId: onlyTeam.team_id,
             selectedAgentId: soloAgent.agent_id,
+            // v3.3 user-session-default: 透传账户默认失败原因 (若有)。
+            defaultFallbackReason: pendingDefaultFallbackReason,
           };
           console.log(
             `[session-init:cb] session=${compositeKey} skipAssetConfirm only-team=${onlyTeam.team_id} only-agent=${soloAgent.agent_id} auto-select`,
@@ -1027,6 +1146,8 @@ async function handleSessionInitInner(
             selectedTeamId: onlyTeam.team_id, selectedAgentId: soloAgent.agent_id,
             stream: reqCtx.stream, questionsAsArray: reqCtx.questionsAsArray,
             modelId: reqCtx.modelId, protocol: reqCtx.protocol,
+            // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+            notice: pendingDefaultFallbackNotice,
           };
           return { intercepted: true, response: buildFormResponse(fd), formData: fd };
         }
@@ -1042,11 +1163,15 @@ async function handleSessionInitInner(
           userId,
           cachedTeams: teams,
           selectedTeamId: onlyTeam.team_id,
+          // v3.3 user-session-default: 透传账户默认失败原因 (若有)。
+          defaultFallbackReason: pendingDefaultFallbackReason,
         });
         const fd: FormData = {
           teams, stage: nextStage, selectedTeamId: onlyTeam.team_id,
           stream: reqCtx.stream, questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId, protocol: reqCtx.protocol,
+          // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+          notice: pendingDefaultFallbackNotice,
         };
         return { intercepted: true, response: buildFormResponse(fd), formData: fd };
       }
@@ -1058,6 +1183,9 @@ async function handleSessionInitInner(
         attemptCount: 0,
         userId,
         cachedTeams: teams,
+        // v3.3 user-session-default: 同上。
+        defaultFallbackReason: pendingDefaultFallbackReason,
+        defaultFallbackNotice: pendingDefaultFallbackNotice,
       });
       console.log(
         `[session-init:cb] session=${compositeKey} → pending_team_select (teams=${teams.length})`,
@@ -1066,6 +1194,7 @@ async function handleSessionInitInner(
         teams, stage: "team",
         stream: reqCtx.stream, questionsAsArray: reqCtx.questionsAsArray,
         modelId: reqCtx.modelId, protocol: reqCtx.protocol,
+        notice: pendingDefaultFallbackNotice,
       };
       return { intercepted: true, response: buildFormResponse(fd), formData: fd };
     }
@@ -1078,6 +1207,10 @@ async function handleSessionInitInner(
       attemptCount: 0,
       userId,
       cachedTeams: teams,
+      // v3.3 user-session-default: 若账户默认有记录但校验失败, 落 fallback reason,
+      // 由后续 completeRegistration 透传入 ClickHouse (preset_source 终态为 "form")。
+      defaultFallbackReason: pendingDefaultFallbackReason,
+      defaultFallbackNotice: pendingDefaultFallbackNotice,
     });
     console.log(
       `[session-init:cb] session=${compositeKey} user=${userId} → pending_asset_confirm (teams=${teams.length})`,
@@ -1089,6 +1222,8 @@ async function handleSessionInitInner(
       questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
+      // 回退原因直接展示在首个表单上 (PRD "提示原因并回退到手动选择")。
+      notice: pendingDefaultFallbackNotice,
     };
     return { intercepted: true, response: buildFormResponse(fd), formData: fd };
   }
@@ -1264,6 +1399,8 @@ async function handleSessionInitInner(
             questionsAsArray: reqCtx.questionsAsArray,
             modelId: reqCtx.modelId,
             protocol: reqCtx.protocol,
+            // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+            notice: state?.defaultFallbackNotice,
           };
           return { intercepted: true, response: buildFormResponse(fd), formData: fd };
         }
@@ -1284,6 +1421,10 @@ async function handleSessionInitInner(
           userId: state.userId,
           cachedTeams: teams,
           selectedTeamId: onlyTeam.team_id,
+          // v3.3: 继承资产确认阶段落下的原因 (reason + 用户可读 notice),
+          // 否则下一步 agent/task 表单丢失提示。
+          defaultFallbackReason: state.defaultFallbackReason,
+          defaultFallbackNotice: state.defaultFallbackNotice,
         });
         console.log(
           `[session-init:cb] session=${compositeKey} only-team=${onlyTeam.team_id} → ${nextStatus}`,
@@ -1296,6 +1437,8 @@ async function handleSessionInitInner(
           questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId,
           protocol: reqCtx.protocol,
+          // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+          notice: state?.defaultFallbackNotice,
         };
         return { intercepted: true, response: buildFormResponse(fd), formData: fd };
       }
@@ -1307,6 +1450,12 @@ async function handleSessionInitInner(
         attemptCount: 0,
         userId: state.userId,
         cachedTeams: teams,
+        // v3.3 user-session-default: 透传 asset_confirm 阶段落下的 fallback 原因。
+        defaultFallbackReason: state.defaultFallbackReason,
+        // v3.3: 用户可读的原因也必须继承 —— 否则 asset_confirm 之后进 team_select
+        // 时 notice 断链, 用户选完 team 后就再也看不到"为什么没走默认配置"。
+        // 与 claude-code 侧 (init.ts store.set 的对称位置) 保持一致。
+        defaultFallbackNotice: state.defaultFallbackNotice,
       });
       console.log(
         `[session-init:cb] session=${compositeKey} → pending_team_select (teams=${teams.length})`,
@@ -1318,6 +1467,7 @@ async function handleSessionInitInner(
         questionsAsArray: reqCtx.questionsAsArray,
         modelId: reqCtx.modelId,
         protocol: reqCtx.protocol,
+        notice: state.defaultFallbackNotice,
       };
       return { intercepted: true, response: buildFormResponse(fd), formData: fd };
     }
@@ -1341,6 +1491,8 @@ async function handleSessionInitInner(
       questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
+      // 回退原因来自 state, 重试表单继续展示 (用户仍需要知道为何没走默认)。
+      notice: state.defaultFallbackNotice,
     };
     return { intercepted: true, response: buildFormResponse(fd), formData: fd };
   }
@@ -1422,33 +1574,40 @@ async function handleSessionInitInner(
       // 逻辑与本文件 line 1135-1193 (asset_confirm choice===true 且 1-team 单 team) 完全对称;
       // 与 CC advanceFromTeamPicked (session/claude-code/init.ts:220-285) 语义一致。
       //
-      // CB 老一发同问路径 (useSplitStage=false) 不进这段, 因为 CB 老 form 不做断言,
-      // agent 只有 1 个时正常弹只列该 agent 的 agent_task form。
+      // CB 老一发同问路径 (useSplitStage=false) 不进"单 agent 自动选"分支, 因为 CB
+      // 老 form 不做断言, agent 只有 1 个时正常弹只列该 agent 的 agent_task form.
+      // 但 agents=0 这条必须对 **所有** 客户端生效 —— CB 老路径的 agent_task form
+      // 在 agents=0 时会退化成只问 task 的 form (form.ts:164 agent 题前有 length>0 gate),
+      // 而 extractFromOptionText 又严格要求 agent+task 双命中, 用户必然卡 3 次 retry
+      // (TAPD bug 1070195170166095423, 现场见 docs/… 或测试
+      // src/__tests__/session/codebuddy-team-no-agents.test.ts).
       const selectedTeam = cachedTeamsForMore.find((t) => t.team_id === teamId);
-      if (useSplitStage && selectedTeam && selectedTeam.agents.length <= 1) {
-        // 分支 A: agents.length === 0 → bypass (team 无 agent, 无法建立绑定)
-        if (selectedTeam.agents.length === 0) {
-          await store.set(compositeKey, {
-            ...state,
-            status: "initialized",
-            selectedTeamId: teamId,
-            sessionInfo: null,
-            agentDetail: null,
-            taskDetail: null,
-            bypassed: true,
-          } as SessionInitState);
-          console.log(
-            `[session-init:cb] session=${compositeKey} team=${teamId} has 0 agents → bypass`,
-          );
-          return {
-            intercepted: false,
-            messages: messages as Record<string, unknown>[],
-            bypassed: true,
-            justRegistered: true,
-            resetFlow: state?.resetFlow ?? false,
-          };
-        }
+      // 分支 A: agents.length === 0 → bypass (team 无 agent, 无法建立绑定).
+      // CC advanceFromTeamPicked (claude-code/init.ts:237) 对应镜像. 对所有客户端生效,
+      // 不门控 useSplitStage, 覆盖 CB 老路径这条 TAPD 现场.
+      if (selectedTeam && selectedTeam.agents.length === 0) {
+        await store.set(compositeKey, {
+          ...state,
+          status: "initialized",
+          selectedTeamId: teamId,
+          sessionInfo: null,
+          agentDetail: null,
+          taskDetail: null,
+          bypassed: true,
+        } as SessionInitState);
+        console.log(
+          `[session-init:cb] session=${compositeKey} team=${teamId} has 0 agents → bypass`,
+        );
+        return {
+          intercepted: false,
+          messages: messages as Record<string, unknown>[],
+          bypassed: true,
+          justRegistered: true,
+          resetFlow: state?.resetFlow ?? false,
+        };
+      }
 
+      if (useSplitStage && selectedTeam && selectedTeam.agents.length <= 1) {
         // 分支 B: agents.length === 1 → auto-select agent, 级联判 task
         const soloAgent = selectedTeam.agents[0];
         const nextState: SessionInitState = {
@@ -1521,6 +1680,8 @@ async function handleSessionInitInner(
           questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId,
           protocol: reqCtx.protocol,
+          // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+          notice: state?.defaultFallbackNotice,
         };
         return { intercepted: true, response: buildFormResponse(fd), formData: fd };
       }
@@ -1545,6 +1706,8 @@ async function handleSessionInitInner(
         questionsAsArray: reqCtx.questionsAsArray,
         modelId: reqCtx.modelId,
         protocol: reqCtx.protocol,
+        // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+        notice: state?.defaultFallbackNotice,
       };
       return { intercepted: true, response: buildFormResponse(fd), formData: fd };
     }
@@ -1566,6 +1729,8 @@ async function handleSessionInitInner(
       questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
+      // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+      notice: state?.defaultFallbackNotice,
     };
     return { intercepted: true, response: buildFormResponse(fd), formData: fd };
   }
@@ -1698,6 +1863,8 @@ async function handleSessionInitInner(
         questionsAsArray: reqCtx.questionsAsArray,
         modelId: reqCtx.modelId,
         protocol: reqCtx.protocol,
+        // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+        notice: state?.defaultFallbackNotice,
       };
       return { intercepted: true, response: buildFormResponse(fd), formData: fd };
     }
@@ -1721,6 +1888,8 @@ async function handleSessionInitInner(
       questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
+      // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+      notice: state?.defaultFallbackNotice,
     };
     return { intercepted: true, response: buildFormResponse(fd), formData: fd };
   }
@@ -1822,6 +1991,8 @@ async function handleSessionInitInner(
       questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
+      // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+      notice: state?.defaultFallbackNotice,
     };
     return { intercepted: true, response: buildFormResponse(fd), formData: fd };
   }
@@ -1881,6 +2052,8 @@ async function handleSessionInitInner(
       questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
+      // v3.3: 账户默认失效原因透传 (与 claude-code 侧对称)。
+      notice: state?.defaultFallbackNotice,
     };
     return { intercepted: true, response: buildFormResponse(fd), formData: fd };
   }

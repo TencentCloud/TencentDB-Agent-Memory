@@ -41,7 +41,7 @@ export interface SessionBinding {
 }
 
 export interface BindingRepo {
-  getBinding(spaceId: string, sessionId: string): Promise<SessionBinding | null>;
+  getBinding(spaceId: string, sessionId: string, options?: { strict?: boolean }): Promise<SessionBinding | null>;
   putBinding(spaceId: string, sessionId: string, binding: SessionBinding): Promise<void>;
   deleteBinding(spaceId: string, sessionId: string): Promise<void>;
   touchLastSeen(spaceId: string, sessionId: string): Promise<void>;
@@ -62,7 +62,7 @@ export class RedisBindingRepo implements BindingRepo {
     private bindingTtlDays: number = DEFAULT_BINDING_TTL_DAYS,
   ) {}
 
-  async getBinding(spaceId: string, sessionId: string): Promise<SessionBinding | null> {
+  async getBinding(spaceId: string, sessionId: string, options?: { strict?: boolean }): Promise<SessionBinding | null> {
     try {
       const all = await this.redis.hgetall(redisKey(spaceId, sessionId));
       if (!all || Object.keys(all).length === 0) return null;
@@ -75,7 +75,8 @@ export class RedisBindingRepo implements BindingRepo {
         agentSource: all.agent_source || undefined,
         userKey: all.user_key || undefined,
       };
-    } catch {
+    } catch (err) {
+      if (options?.strict) throw err;
       return null;
     }
   }

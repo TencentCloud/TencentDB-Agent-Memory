@@ -75,7 +75,23 @@ export interface MemCommandInterceptInput {
     userId: string;
     sessionId: string;
     tags: string[];
+    /** 记忆实例 ID —— codex/wb 的 lf 上已有，透传给 mem-command trace。 */
+    instanceId?: string;
   };
+  /**
+   * 权威 turnSeq (stageResolveTurnSeq 预算的 Redis 单调值) — 当 caller
+   * 还没构造 lf (CC/openai-chat 的 mem-command 发生在 lf 构造之前) 但已经
+   * 在入口算出权威 turnSeq 时, 把它传进来, 本 stage 用它派生 lfTraceId,
+   * 跟后续 lf 构造出的 lf.traceId 完全一致, 该 turn 的 mem-command trace
+   * 与 LLM generation 共享一条 Langfuse trace。
+   *
+   * 优先级: `langfuseCtx > preResolvedTurnSeq > inline countHumanTurns`
+   *   - langfuseCtx 已给出 lf 的完整上下文(含 traceId), 直接用, 不需要
+   *     本参数
+   *   - 老 caller 两者都没传 → fallback 到现状 inline countHumanTurns,
+   *     行为与治理前完全一致
+   */
+  preResolvedTurnSeq?: number;
 }
 
 /**
@@ -187,19 +203,23 @@ export async function stageMemCommandIntercept(
   console.log(`[mem-command] cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} success=${memResult.success}`);
 
   // Langfuse report — 优先复用 caller 传入的 lf ctx (codex/wb 已构造),
-  // 未提供则 inline 计算 turnSeq → traceId (openai-chat / anthropic 走这条,
-  // 因为它们的 mem 拦截在 lf 构造之前)。
+  // 其次用 caller 传入的权威 preResolvedTurnSeq (CC/openai-chat 新路径),
+  // 两者都没有再 fallback inline countHumanTurns (老路径, 与治理前等价)。
   let lfTraceId: string;
   let lfUserId: string;
   let lfSessionId: string;
   let lfTags: string[];
+  let lfInstanceId: string | undefined;
   if (input.langfuseCtx) {
     lfTraceId = input.langfuseCtx.traceId;
     lfUserId = input.langfuseCtx.userId;
     lfSessionId = input.langfuseCtx.sessionId;
     lfTags = [...input.langfuseCtx.tags, "mem-command"];
+    lfInstanceId = input.langfuseCtx.instanceId;
   } else {
-    const memTurnSeq = countHumanTurns(messages, protocol === "anthropic" ? "anthropic" : "openai");
+    const memTurnSeq = input.preResolvedTurnSeq !== undefined
+      ? input.preResolvedTurnSeq
+      : countHumanTurns(messages, protocol === "anthropic" ? "anthropic" : "openai");
     lfTraceId = langfuseTurnTraceId(sessionKey, memTurnSeq);
     lfUserId = keyId;
     lfSessionId = sessionKey;
@@ -223,6 +243,9 @@ export async function stageMemCommandIntercept(
     traceName: `memory-proxy / ${keyId}`,
     userId: lfUserId,
     sessionId: lfSessionId,
+    // mem 命令 trace 也带实例维度（caller lf 有就继承，否则用本 stage 入参的 spaceId）。
+    // Langfuse 这层对外统一叫 instanceId；源头变量 spaceId 不动。
+    instanceId: lfInstanceId ?? spaceId ?? undefined,
     tags: lfTags,
     traceInput: memCmd.rawMessage,
     traceOutput: memResult.messageText,

@@ -109,6 +109,72 @@ export interface ExtractedMemory {
   metadata: EpisodicMetadata | Record<string, never>;
   /** Scene name this memory was extracted in */
   scene_name: string;
+  /**
+   * When the underlying conversation happened (ISO 8601 UTC), resolved from
+   * the L0 messages this memory cites — NOT when L1 ran. Lets L1 dedup and
+   * L2 tell genuinely newer facts from late-arriving older ones when the
+   * pipeline processes backlog out of order. Absent for legacy callers; the
+   * writer then falls back to the write time (previous behaviour).
+   */
+  event_time?: string;
+}
+
+/** Latest valid ISO timestamp in a memory's timeline (normalised to UTC ISO), or undefined. */
+export function latestTimestamp(timestamps: readonly string[] | undefined): string | undefined {
+  let best: number | undefined;
+  for (const ts of timestamps ?? []) {
+    const t = Date.parse(ts);
+    if (Number.isFinite(t) && (best === undefined || t > best)) best = t;
+  }
+  return best === undefined ? undefined : new Date(best).toISOString();
+}
+
+/**
+ * Timestamps of a merged/updated memory = union of the new memory's event
+ * time and every target's stored timestamps, sorted and de-duplicated.
+ *
+ * Computed in code: the LLM-supplied `merged_timestamps` is only used as a
+ * fallback when no target timestamps could be read, and even then only values
+ * that parse as real dates are kept (models occasionally invent them).
+ */
+export function mergeEventTimestamps(
+  eventTime: string,
+  targetTimestamps: readonly string[],
+  llmTimestamps?: readonly string[],
+): string[] {
+  const valid = (ts: string) => Number.isFinite(Date.parse(ts));
+  const pool = [eventTime, ...targetTimestamps];
+  if (targetTimestamps.length === 0 && llmTimestamps) pool.push(...llmTimestamps);
+  return [...new Set(pool.filter((ts) => ts && valid(ts)).map((ts) => new Date(ts).toISOString()))].sort();
+}
+
+/**
+ * Resolve the conversation time of one extracted memory.
+ *
+ * Priority:
+ *   1. latest timestamp among its own `source_message_ids` (precise)
+ *   2. latest timestamp among its scene's `message_ids` (same scene segment)
+ *   3. latest timestamp in the whole batch of new messages
+ *
+ * Never uses the batch *start/end*: a batch can span several sessions/days,
+ * so a span would mislabel a Wednesday memory as Monday. IDs the LLM made up
+ * are ignored rather than trusted.
+ */
+export function resolveMemoryEventTime(
+  sourceIds: readonly string[] | undefined,
+  sceneIds: readonly string[] | undefined,
+  messageTime: ReadonlyMap<string, number>,
+): string | undefined {
+  const latest = (ids: readonly string[] | undefined): number | undefined => {
+    let max: number | undefined;
+    for (const id of ids ?? []) {
+      const t = messageTime.get(String(id));
+      if (typeof t === "number" && Number.isFinite(t) && t > 0 && (max === undefined || t > max)) max = t;
+    }
+    return max;
+  };
+  const t = latest(sourceIds) ?? latest(sceneIds) ?? latest([...messageTime.keys()]);
+  return t === undefined ? undefined : new Date(t).toISOString();
 }
 
 export type DedupAction = "store" | "update" | "merge" | "skip";
@@ -187,13 +253,22 @@ export async function writeMemory(params: {
   }
 
   const now = new Date().toISOString();
+  // 对话发生时间；旧调用方未提供时退回写入时间（保持原行为）
+  const eventTime = memory.event_time || now;
 
   let nextVersion = 0;
+  // merge/update 时，被合并旧记忆的时间戳（由代码取并集，不信任 LLM 回填的 merged_timestamps）
+  let targetTimestamps: string[] = [];
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0 && vectorStore) {
     try {
       const existing = await vectorStore.queryL1Records({ recordIds: decision.target_ids });
       const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
       nextVersion = maxVersion + 1;
+      for (const row of existing) {
+        for (const ts of [row.timestamp_str, row.timestamp_start, row.timestamp_end]) {
+          if (ts) targetTimestamps.push(ts);
+        }
+      }
     } catch (err) {
       logger?.warn?.(`${TAG} Failed to read existing memory version, defaulting to v0: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -209,13 +284,16 @@ export async function writeMemory(params: {
     finalContent = decision.merged_content ?? memory.content;
     finalType = decision.merged_type ?? memory.type;
     finalPriority = decision.merged_priority ?? memory.priority;
-    finalTimestamps = decision.merged_timestamps ?? [now];
+    finalTimestamps = memory.event_time
+      ? mergeEventTimestamps(memory.event_time, targetTimestamps, decision.merged_timestamps)
+      // 旧调用方没有对话时间：保持升级前行为（LLM 回填的时间线，缺失时用写入时间）
+      : (decision.merged_timestamps ?? [now]);
   } else {
     // store
     finalContent = memory.content;
     finalType = memory.type;
     finalPriority = memory.priority;
-    finalTimestamps = [now];
+    finalTimestamps = [eventTime];
   }
 
   const record: MemoryRecord = {

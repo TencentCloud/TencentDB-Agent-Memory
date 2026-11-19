@@ -25,6 +25,9 @@ export const enUS = {
   'menu.desc.team_agents': 'Agent / scope / fixed assets',
   'menu.desc.api_keys': 'Manage your API keys for external clients',
 
+  // ===== TabBar =====
+  'tabbar.close': 'Close {{name}}',
+
   // ===== GlobalHeader =====
   'header.guide': 'Guide',
   'header.sync': 'Live Sync',
@@ -296,6 +299,8 @@ export const enUS = {
   'wiki.import.selectedPages': '{{count}} pages selected',
   'wiki.detail.mdName': 'File name (e.g. note.md)',
   'wiki.detail.mdContent': 'Markdown content',
+  'wiki.detail.mdNameRequired': 'Please enter a file name (e.g. note.md)',
+  'wiki.detail.mdContentRequired': 'Please enter Markdown content',
   'common.remove': 'Remove',
   'wiki.title': 'Wiki Knowledge Base',
   'wiki.breadcrumb': 'Wiki',
@@ -361,13 +366,14 @@ export const enUS = {
   'wiki.detail.addDoc.file': 'Upload Files',
   'wiki.detail.addDoc.markdown': 'Markdown',
   'wiki.detail.addDoc.external': 'External source (iWiki, ...)',
-  'wiki.detail.dropzone': 'Drag or click to select Markdown files (multi-select supported)',
+  'wiki.detail.dropzone': 'Drag or click to select files (multi-select; .md/.txt/.docx/.xlsx/.pptx/.pdf supported)',
   'wiki.detail.upload.footer': '{{count}} files pending upload',
+  'wiki.detail.upload.fileTooLarge': '{{filename}} exceeds the size limit ({{maxMB}} MB). Upload cancelled.',
   'wiki.detail.upload.submitting': 'Uploading…',
   'wiki.detail.upload.confirm': 'Confirm Upload',
   'wiki.detail.md.add': '+ Add Entry',
   'wiki.detail.md.pending': '{{count}} pending upload',
-  'wiki.detail.ignored': 'Ignored {{count}} non-Markdown files (only .md/.txt/.markdown supported)',
+  'wiki.detail.ignored': 'Ignored {{count}} unsupported files (supported: .md/.markdown/.txt/.html/.htm/.csv/.docx/.xlsx/.pptx/.pdf/.odt/.ods/.odp/.odg/.rtf/.epub)',
   'wiki.detail.overwrite.title': 'Detected {{count}} files with the same name',
   'wiki.detail.overwrite.desc': 'Continuing will overwrite existing content: {{files}}',
   'wiki.detail.overwrite.ok': 'Overwrite & Upload',
@@ -504,22 +510,36 @@ export const enUS = {
   'code.register.gitUrl': 'Git URL',
   'code.register.gitUrlExtra':
     'After registration, it will automatically clone and build a code index.',
+  // Git URL placeholder switches by source (SSH source shows git@ form).
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
+  'code.register.gitUrlPlaceholderSsh': 'git@github.com:namespace/repo.git or ssh://git@host:2222/namespace/repo.git',
   'code.register.branch': 'Branch',
-  'code.register.sshWarning':
-    'SSH format repository URLs are not supported in this version. Please use HTTPS format (e.g. https://gitlab.example.com/namespace/repo.git).',
+  'code.register.sshHint':
+    'Detected an SSH repository. Clicking Register will first generate an SSH public key for you; add it to your git platform before continuing.',
   'code.register.urlError':
-    'Please enter a valid HTTP(S) Git repository URL ending with .git (e.g. https://gitlab.example.com/namespace/repo.git). No spaces allowed.',
+    'Please enter a valid Git repository URL (HTTPS or SSH) ending with .git. No spaces allowed.',
   'code.register.invalidUrl':
-    'Please enter a valid HTTPS Git repository URL ending with .git (e.g. https://gitlab.example.com/namespace/repo.git). No spaces allowed.',
+    'Please enter a valid Git repository URL: HTTPS like https://gitlab.example.com/namespace/repo.git, or SSH like git@github.com:namespace/repo.git / ssh://git@host:2222/namespace/repo.git.',
   'code.register.submitting': 'Registering…',
   'code.register.submit': 'Register',
   'code.register.source': 'Source',
   'code.register.sourceExtra':
     'For private repos, pick a source and provide an access token. Leave as Public for open repos.',
+  'code.register.sourceSshExtra': 'SSH repos need no token; they are cloned with the SSH key of your account.',
   'code.register.sourcePublic': 'Public (no token)',
   // Source display names keyed by source id; backend display_name (if any) takes precedence.
   'code.source.gongfeng': 'Tencent Gongfeng',
+  'code.source.ssh': 'SSH',
+  // SSH public key (step 1 of the two-step registration)
+  'code.sshKey.caption': 'Configure SSH public key',
+  'code.sshKey.publicKey': 'SSH public key',
+  'code.sshKey.copy': 'Copy',
+  'code.sshKey.guideTitle': 'Complete the following steps:',
+  'code.sshKey.guideStep1': 'Copy the public key above;',
+  'code.sshKey.guideStep2': 'Add it on the SSH Keys settings page of your git platform;',
+  'code.sshKey.guideStep3': 'Once added, click "Configured, continue" at the bottom right.',
+  'code.sshKey.guideNote': 'Only one key is generated per account; later SSH repos reuse it — no need to configure again.',
+  'code.sshKey.continue': 'Configured, continue',
   'code.register.token': 'Access token',
   // Credential fields, keyed by form_field.name
   'code.credField.secret.label': 'Access token',
@@ -678,7 +698,7 @@ export const enUS = {
   // ===== ImportSkillDialog =====
   'importSkill.caption': 'Import Skill',
   'importSkill.hint':
-    'Upload a SKILL.md directory, or paste a conversation to let the system auto-extract a skill.',
+    'Upload a SKILL.md directory, one or more skill .zip archives, or paste a conversation to let the system auto-extract a skill.',
   'importSkill.agent': 'Owning Agent (required)',
   'importSkill.agent.extra':
     'The skill will be a fixed asset of this agent — it is only loaded when a task is linked to this agent.',
@@ -686,6 +706,7 @@ export const enUS = {
   'importSkill.agent.noAgent':
     'No agent in the current team. Please create at least one agent in Team Management first.',
   'importSkill.mode.directory': 'Directory Import',
+  'importSkill.mode.zip': 'Zip Import',
   'importSkill.mode.session': 'Conversation Import',
   'importSkill.directory.label':
     'Select a local directory (should contain SKILL.md and an optional files/ subdirectory)',
@@ -696,6 +717,40 @@ export const enUS = {
   'importSkill.directory.resources': 'Resource files: {{count}}',
   'importSkill.directory.warning':
     'SKILL.md not found in the directory. Ensure at least one SKILL.md exists in the root or <skill-name>/ subdirectory.',
+  'importSkill.zip.label': 'Select zip archives (.zip, multiple allowed; one archive = one Skill)',
+  'importSkill.zip.multiHint':
+    'Multiple .zip files can be selected at once. The layout inside each archive must match directory import: SKILL.md at the archive root or under <skill-name>/, with all other files imported as resources. One archive maps to exactly one Skill; archives containing multiple SKILL.md files are skipped.',
+  'importSkill.zip.dropHint': 'Drag .zip archives here, or click the button below (multiple allowed)',
+  'importSkill.zip.selectFile': 'Select Archives',
+  'importSkill.zip.clear': 'Clear',
+  'importSkill.zip.picked': '{{count}} archives selected',
+  'importSkill.zip.parsing': 'Parsing…',
+  'importSkill.zip.ready': '{{count}} resource files, structure validated',
+  'importSkill.zip.invalid': 'Structure validation failed',
+  'importSkill.zip.submit': 'Import {{count}} Skills',
+  'importSkill.zip.done': 'Done',
+  'importSkill.zip.summary': 'Finished: {{ok}} succeeded / {{skipped}} skipped / {{failed}} failed',
+  'importSkill.zip.result.ok': '{{count}} resource files',
+  'importSkill.zip.result.skipped': 'Skipped: {{reason}}',
+  'importSkill.zip.result.failed': 'Import failed: {{reason}}',
+  'importSkill.zip.error.notZip': 'Not a valid .zip archive',
+  'importSkill.zip.error.empty': 'The archive contains no files',
+  'importSkill.zip.error.noSkillMd':
+    'SKILL.md not found in the archive (must be at the root or under <skill-name>/)',
+  'importSkill.zip.error.noFrontmatter':
+    'SKILL.md is missing YAML frontmatter (the file must start with a name/description block wrapped in ---)',
+  'importSkill.zip.error.noDescription': 'SKILL.md frontmatter is missing the required "description" field',
+  'importSkill.zip.error.invalidName':
+    'Invalid SKILL.md name "{{name}}" (lowercase letters, digits and hyphens only, must start with a letter or digit, max 64 chars)',
+  'importSkill.zip.error.bodyTooLong': 'SKILL.md body exceeds the {{size}}-character limit',
+  'importSkill.zip.error.multiSkill':
+    'The archive contains multiple SKILL.md files. One archive can only hold one Skill — please split it and retry.',
+  'importSkill.zip.error.unsafePath': 'Illegal path in archive (absolute or containing ".."): {{path}}',
+  'importSkill.zip.error.tooLarge': 'Archive exceeds the {{size}} limit',
+  'importSkill.zip.error.totalTooLarge':
+    'Uncompressed size exceeds the {{size}} limit (bounded by the API request body size). Please trim resources and repack.',
+  'importSkill.zip.error.tooManyEntries': 'Archive contains more than {{count}} files',
+  'importSkill.zip.error.noReady': 'No archive passed structure validation. Please check that SKILL.md exists.',
   'importSkill.session.hintPrefix':
     'Paste a conversation with this agent. The system will automatically extract reusable skills. The conversation JSON must contain a ',
   'importSkill.session.hintSuffix': ' array.',
@@ -713,6 +768,8 @@ export const enUS = {
   'importSkill.error.tooManyMessages':
     'Too many messages ({{count}}). The API supports up to 500 messages. Please trim and retry.',
   'importSkill.error.noMainFile': 'Please select a directory containing SKILL.md.',
+  'importSkill.error.payloadTooLarge':
+    'Content too large (~{{actual}}), exceeding the {{size}} per-import limit. Please reduce resource sizes and retry.',
   'importSkill.error.noName':
     'Cannot infer skill name from SKILL.md or directory structure. Please check the frontmatter or directory layout.',
   'importSkill.result.session':
@@ -1261,10 +1318,26 @@ export const enUS = {
     'A Wiki ingestion is already in progress. Please wait for it to complete before starting another.',
   'wiki.ingest.stateRecovery': 'State recovered: {{stage}}{{pageHint}}',
   'wiki.ingest.currentPage': ', {{count}} pages so far',
+  // Auto-check paused (#1917: polling must be bounded). Wording deliberately says
+  // "auto-check stopped", not "completed"/"failed" — the backend may still be working.
+  'wiki.ingest.pollPaused.timeout':
+    'Auto-check stopped after {{minutes}} minutes. Ingestion may still be running in the background — click "Check again" to refresh the status.',
+  'wiki.ingest.pollPaused.network':
+    'Auto-check stopped after repeated failures to read the ingest status. Check your network, then click "Check again".',
+  'wiki.detail.recheck': 'Check again',
   'wiki.notify.readRawFailed': 'Failed to read raw document',
+  'wiki.notify.rawNotFound': 'Raw document does not exist or has been deleted',
   'wiki.notify.uploadCancelled': 'Failed to fetch existing documents. Upload cancelled.',
   'wiki.error.selectTeam': 'Please select a team first',
   'wiki.detail.md.placeholder': '# Title',
+  // Raw document preview failure reasons (codes from the KS converter layer)
+  'wiki.rawPreview.unsupported': 'Preview is not supported for this file type',
+  'wiki.rawPreview.mismatch': 'File content does not match its extension and cannot be parsed',
+  'wiki.rawPreview.encrypted': 'Document is encrypted and requires a password to parse',
+  'wiki.rawPreview.scannedPdf': 'Scanned PDF has no extractable text (OCR is disabled)',
+  'wiki.rawPreview.notReady': 'Document parser is not ready, please contact the administrator',
+  'wiki.rawPreview.timeout': 'Document parsing timed out, the file may be too large',
+  'wiki.rawPreview.failed': 'Document parsing failed, preview unavailable',
 
   // ===== skill-api =====
   'skillApi.error.unauthorized': 'Unauthorized - Your session has expired or user key is missing',
@@ -1392,10 +1465,12 @@ export const enUS = {
   'error.NO_VALID_MESSAGES': 'No valid messages to import.',
   'error.MISSING_WIKI_ID': 'Missing Wiki information.',
   'error.WIKI_NOT_FOUND': 'The Wiki does not exist or has been deleted.',
-  'error.WIKI_EMPTY_NO_SOURCES': 'No source files have been uploaded for this Wiki. Please upload .md files before extracting.',
+  'error.WIKI_EMPTY_NO_SOURCES': 'No source files have been uploaded for this Wiki. Please upload files before extracting.',
   'error.MISSING_FILES': 'Please upload at least one file.',
   'error.TOO_MANY_FILES': 'The number of uploaded files exceeds the limit (max 10). Please upload in batches.',
-  'error.FILE_TOO_LARGE': 'A single file cannot exceed 512KB. Please trim it before uploading.',
+  // Not hardcoded to 512KB: the limit is per-format (text 512KB / binary 10MB,
+  // overridable per extension).
+  'error.FILE_TOO_LARGE': 'A single file exceeds the size limit for its format. Please trim it before uploading.',
   'error.TOTAL_TOO_LARGE': 'The total upload size cannot exceed 5MB. Please upload in batches.',
   'error.MISSING_CODE_GRAPH_ID': 'Missing CodeGraph information.',
   'error.CODE_GRAPH_NOT_FOUND': 'The CodeGraph does not exist or has been deleted.',
@@ -1462,7 +1537,7 @@ export const enUS = {
   // Each description follows "what it is → how to import → how to use" for first-time users)
   'onboarding.guide.asset.wiki.title': 'Wiki: team document assets',
   'onboarding.guide.asset.wiki.desc':
-    'What: a knowledge base for shared team documents. Import: click "Create Wiki" → open it and upload Markdown files (.md/.txt, multi-select & drag-drop supported) → trigger "Extract" to build searchable knowledge pages. Use: click "Allocate to Agent" on a Wiki card, or tick it in the Agent edit dialog — bound Agents can then retrieve and cite these documents in chat.',
+    'What: a knowledge base for shared team documents. Import: click "Create Wiki" → open it and upload files (.md/.txt/.docx/.xlsx/.pptx/.pdf supported, multi-select & drag-drop supported) → trigger "Extract" to build searchable knowledge pages. Use: click "Allocate to Agent" on a Wiki card, or tick it in the Agent edit dialog — bound Agents can then retrieve and cite these documents in chat.',
   'onboarding.guide.asset.code.title': 'CodeGraph: team code assets',
   'onboarding.guide.asset.code.desc':
     'What: an index and call graph built over team code repositories. Import: click "Register repo" and paste a Git HTTPS URL — indexing runs automatically. Use: once allocated to an Agent, the Agent can search code and explore call chains in chat to answer repo-related questions.',
@@ -1903,4 +1978,51 @@ export const enUS = {
   'analytics.drill.categoryHint': 'calls for this asset type',
   'analytics.drill.knowledgeAmbiguous':
     'Wiki and Code Graph share the knowledge-service bridge source, and the kernel only filters by bridge_source — so the results below include all knowledge calls and cannot be narrowed to a single type.',
+
+  // ===== SessionDefault (v3.3 user-level Session default Team/Agent/Task) =====
+  'sessionDefault.title': 'Session Default Config',
+  'sessionDefault.desc': 'New Sessions use it automatically, skipping selection.',
+  'sessionDefault.empty': 'Not set',
+  'sessionDefault.create': 'Set Default',
+  'sessionDefault.create.tooltip': 'Pick the default Team / Agent / Task',
+  'sessionDefault.edit': 'Edit',
+  'sessionDefault.edit.tooltip': 'Edit the default',
+  'sessionDefault.clear': 'Clear',
+  'sessionDefault.clear.tooltip': 'New Sessions will fall back to manual selection',
+  'sessionDefault.clear.confirm': 'Clear the default configuration?',
+  'sessionDefault.clear.desc': 'New Sessions fall back to manual selection; running sessions are unaffected.',
+  'sessionDefault.clear.ok': 'Clear',
+
+  // Dialog
+  'sessionDefault.dialog.create.caption': 'Set Session Default',
+  'sessionDefault.dialog.edit.caption': 'Edit Session Default',
+  'sessionDefault.dialog.desc': 'Pick Team, Agent, then Task. If the config becomes invalid, it silently falls back to manual selection without interrupting you.',
+  'sessionDefault.dialog.submit': 'Save',
+  'sessionDefault.dialog.cancel': 'Cancel',
+
+  // Fields
+  'sessionDefault.field.team': 'Team',
+  'sessionDefault.field.agent': 'Agent',
+  'sessionDefault.field.task': 'Task',
+
+  // Placeholders
+  'sessionDefault.team.placeholder.select': 'Select a Team',
+  'sessionDefault.team.placeholder.empty': 'You are not a member of any Team',
+  'sessionDefault.agent.placeholder.select': 'Select an Agent',
+  'sessionDefault.agent.placeholder.needTeam': 'Select a Team first',
+  'sessionDefault.agent.placeholder.empty': 'No available Agent under the current Team',
+  'sessionDefault.task.placeholder.select': 'Select a Task or "no task binding"',
+  'sessionDefault.task.placeholder.needTeam': 'Select a Team first',
+  'sessionDefault.task.extra': 'Pick "default" to bind no Task — recall spans all memories of the Agent.',
+  'sessionDefault.task.sentinel.label': 'default (no task binding)',
+
+  // Summary rows
+  'sessionDefault.summary.team': 'Team',
+  'sessionDefault.summary.agent': 'Agent',
+  'sessionDefault.summary.task': 'Task',
+  'sessionDefault.summary.unresolved': '(invalid / cannot resolve)',
+
+  // Toast
+  'sessionDefault.notify.saved': 'Default saved; new Sessions will use it automatically',
+  'sessionDefault.notify.cleared': 'Default cleared',
 };

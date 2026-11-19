@@ -42,9 +42,21 @@ export function injectBasicAuth(
 /**
  * 把 URL 里的凭据剥掉（clone 完成后落回 .git/config 用的干净地址）。
  * 幂等：干净地址传进来原样返回。
+ *
+ * ⚠ **SSH 地址必须原样返回**：`git@` / `ssh://git@` 里的 `git` 是 SSH 登录用户，
+ * 不是凭据。用 `new URL()` 清空 username 会把它一并删掉，变成
+ * `ssh://host:2222/path.git` —— GitLab/GitHub 的 SSH 端点只接受 `git` 用户，
+ * 于是 clone 必然认证失败（表现为"SSH 认证失败"但公钥其实没问题）。
+ *
+ * 不 import source-fetcher 的 isSshUrl 以避免循环依赖（source-fetcher ← code-source），
+ * 这里用同规则的本地判定。
  */
 export function stripCredentials(repoUrl: string): string {
-  const url = tryParse(repoUrl);
+  const v = (repoUrl ?? "").trim();
+  // SSH：scp 写法 `git@host:path` 与标准 `ssh://` 写法都没有 HTTP 凭据可剥。
+  if (v.startsWith("git@") || v.startsWith("ssh://")) return repoUrl;
+
+  const url = tryParse(v);
   if (!url) return repoUrl;
   url.username = "";
   url.password = "";

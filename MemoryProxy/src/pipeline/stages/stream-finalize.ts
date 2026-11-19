@@ -140,6 +140,12 @@ export interface OpikStreamSpanInput {
   traceId: string;
   forkTraceId?: string;
   keyId: string;
+  /**
+   * Opik project of the turn trace this span belongs to. Must match the
+   * project the trace was created in (e.g. the WeCom name), otherwise the
+   * update and span land outside it. Defaults to `keyId`.
+   */
+  projectName?: string;
   modelId: string;
   startTime: string;
   endTime: string;
@@ -164,11 +170,12 @@ export interface OpikStreamSpanInput {
 export function stageOpikStreamSpan(input: OpikStreamSpanInput): void {
   if (input.gates?.opik === false) return;
   const outputMessages = input.outputMessage ? [input.outputMessage] : [];
+  const projectName = input.projectName || input.keyId;
   try {
     if (input.updateTrace) {
       opikUpdateTrace(input.config, {
         traceId: input.traceId,
-        projectName: input.keyId,
+        projectName,
         endTime: input.endTime,
         output: outputMessages,
         usage: input.usage,
@@ -188,7 +195,7 @@ export function stageOpikStreamSpan(input: OpikStreamSpanInput): void {
     if (input.retried) tags.push("retry");
     opikCreateLlmSpan(input.config, {
       traceId: input.traceId,
-      projectName: input.keyId,
+      projectName,
       name: input.modelId,
       startTime: input.startTime,
       endTime: input.endTime,

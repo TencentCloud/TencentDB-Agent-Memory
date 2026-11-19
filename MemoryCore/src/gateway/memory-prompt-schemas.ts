@@ -15,13 +15,17 @@ export const memoryPromptCreateSchema = z.strictObject({
   name: nameSchema,
   layer: promptLayerSchema,
   prompt: promptSchema,
+  /** Optional. Omitted = "append" (legacy behaviour). "template" replaces the built-in rules/template slot (l1/l2/l3). */
+  mode: z.enum(["append", "template"]).optional(),
 });
 
 export const memoryPromptUpdateSchema = z.strictObject({
   memory_prompt_id: z.string().trim().min(1),
   name: nameSchema.optional(),
   prompt: promptSchema.optional(),
-}).refine((value) => value.name !== undefined || value.prompt !== undefined, {
+  /** Not updatable; accepted only to return a precise error (TEMPLATE_MODE_IMMUTABLE). */
+  mode: z.unknown().optional(),
+}).refine((value) => value.name !== undefined || value.prompt !== undefined || value.mode !== undefined, {
   message: "name or prompt is required",
 });
 

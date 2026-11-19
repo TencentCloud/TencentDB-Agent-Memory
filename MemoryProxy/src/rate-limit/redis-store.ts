@@ -34,21 +34,34 @@ export interface RateLimitOverride {
   qpm: number;
 }
 
+export interface RateLimitInstanceOverride {
+  instanceId: string;
+  tpm: number;
+  qpm: number;
+}
+
+/**
+ * Limit precedence: instance × model override > instance override > global
+ * (`{rl}:config`, falling back to YAML). Counters stay per instance × model, so
+ * an instance override is the quota each of its models gets, not a shared pool.
+ */
 const CHECK_REQUEST_LUA = `
-local configuredTpm = tonumber(redis.call("HGET", KEYS[1], "tpm")) or tonumber(ARGV[2])
-local configuredQpm = tonumber(redis.call("HGET", KEYS[1], "qpm")) or tonumber(ARGV[3])
-local overrideRaw = redis.call("HGET", KEYS[2], ARGV[1])
-local tpm = configuredTpm
-local qpm = configuredQpm
-if overrideRaw then
-  local ok, value = pcall(cjson.decode, overrideRaw)
+local tpm = tonumber(redis.call("HGET", KEYS[1], "tpm")) or tonumber(ARGV[2])
+local qpm = tonumber(redis.call("HGET", KEYS[1], "qpm")) or tonumber(ARGV[3])
+
+local function applyOverride(raw)
+  if not raw then return end
+  local ok, value = pcall(cjson.decode, raw)
   if ok and type(value) == "table" then
     tpm = tonumber(value.tpm) or tpm
     qpm = tonumber(value.qpm) or qpm
   else
-    tpm = tonumber(overrideRaw) or tpm
+    tpm = tonumber(raw) or tpm
   end
 end
+
+applyOverride(redis.call("HGET", KEYS[7], ARGV[5]))
+applyOverride(redis.call("HGET", KEYS[2], ARGV[1]))
 local window = tonumber(ARGV[4])
 local now = tonumber(redis.call("TIME")[1])
 local cutoff = now - window + 1
@@ -123,6 +136,7 @@ return 1
 export class RedisRateLimitStore {
   private readonly configKey: string;
   private readonly overridesKey: string;
+  private readonly instanceOverridesKey: string;
 
   constructor(
     private readonly client: Redis | null,
@@ -130,6 +144,7 @@ export class RedisRateLimitStore {
   ) {
     this.configKey = `${KEY_PREFIX}config`;
     this.overridesKey = `${KEY_PREFIX}overrides`;
+    this.instanceOverridesKey = `${KEY_PREFIX}instance-overrides`;
   }
 
   isAvailable(): boolean {
@@ -165,17 +180,19 @@ export class RedisRateLimitStore {
     try {
       const raw = await this.client.eval(
         CHECK_REQUEST_LUA,
-        6,
+        7,
         this.configKey,
         this.overridesKey,
         reqIndex,
         reqCounts,
         tokIndex,
         tokCounts,
+        this.instanceOverridesKey,
         dimension,
         String(this.config.tpm),
         String(this.config.qpm),
         String(WINDOW_SECONDS),
+        instanceId,
       ) as Array<number | string>;
 
       const allowed = Number(raw[0]) === 1;
@@ -298,6 +315,56 @@ export class RedisRateLimitStore {
     return result.sort((a, b) =>
       a.instanceId.localeCompare(b.instanceId) || a.modelId.localeCompare(b.modelId)
     );
+  }
+
+  /** Removes every instance × model override under `instanceId`; returns how many were removed. */
+  async deleteOverridesForInstance(instanceId: string): Promise<number> {
+    this.assertAvailable();
+    const fields = (await this.listOverrides())
+      .filter((override) => override.instanceId === instanceId)
+      .map((override) => dimensionField(override.instanceId, override.modelId));
+    if (fields.length === 0) return 0;
+    return this.client!.hdel(this.overridesKey, ...fields);
+  }
+
+  async getInstanceOverride(instanceId: string): Promise<{ tpm: number; qpm: number } | null> {
+    this.assertAvailable();
+    const raw = await this.client!.hget(this.instanceOverridesKey, instanceId);
+    if (raw === null) return null;
+    try {
+      const value = JSON.parse(raw) as Partial<{ tpm: number; qpm: number }>;
+      return {
+        tpm: Number(value.tpm ?? this.config.tpm),
+        qpm: Number(value.qpm ?? this.config.qpm),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async setInstanceOverride(instanceId: string, limits: { tpm: number; qpm: number }): Promise<void> {
+    this.assertAvailable();
+    await this.client!.hset(this.instanceOverridesKey, instanceId, JSON.stringify(limits));
+  }
+
+  async deleteInstanceOverride(instanceId: string): Promise<void> {
+    this.assertAvailable();
+    await this.client!.hdel(this.instanceOverridesKey, instanceId);
+  }
+
+  async listInstanceOverrides(): Promise<RateLimitInstanceOverride[]> {
+    this.assertAvailable();
+    const all = await this.client!.hgetall(this.instanceOverridesKey);
+    const result: RateLimitInstanceOverride[] = [];
+    for (const [instanceId, value] of Object.entries(all)) {
+      try {
+        const limits = JSON.parse(value) as { tpm: number; qpm: number };
+        result.push({ instanceId, tpm: Number(limits.tpm), qpm: Number(limits.qpm) });
+      } catch {
+        // Ignore malformed fields written outside the admin API.
+      }
+    }
+    return result.sort((a, b) => a.instanceId.localeCompare(b.instanceId));
   }
 
   private degradedDecision(reason = "redis_unavailable"): RateLimitDecision {

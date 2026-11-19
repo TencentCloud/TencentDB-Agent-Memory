@@ -76,6 +76,23 @@ memory:
   persona:
     triggerEveryN: 50
     maxScenes: 15
+    triggerMode: current          # current: 累计 scene 数触发；jev: L2 更新后即时判断是否更新 L3
+    # JEV 即时更新门（可选）。启用时把上一行改为 jev，再取消下面整段注释。
+    # 以下与 MemoryProxy/config.example.yaml 一致，使用 TokenHub 作为示例；
+    # 原生 TypeSafe 可把 endpoint 改为 https://api.typesafe.ai/v1/systemone，
+    # 并填写该服务支持的模型名。endpoint、model 与 key 必须属于同一服务。
+    # jev:
+    #   provider: jev             # decision provider 类型；内置实现为 jev
+    #   endpoint: "https://tokenhub.tencentmaas.com/v1/systemone"
+    #   # 解析优先级：TYPESAFE_API_KEY 环境变量 > 此处（支持 ${VAR}）> 空。
+    #   # 启用 JEV 时 key 不能为空；不要在配置文件中写入真实密钥。
+    #   apiKey: "${TYPESAFE_API_KEY}"
+    #   model: "ep-YOUR-SERVICE-ID" # TokenHub 模型/服务 ID；此处仅为占位符
+    #   timeoutMs: 3000             # 在线路径单次调用超时，单位 ms；允许范围 100~60000
+    #   diagnostics:
+    #     # off: 关闭；metadata: 仅记录关联标识、计时、截断和判定元数据；
+    #     # full: 另记录 persona、scene、state 与原始响应，仅限短时诊断并保护日志访问。
+    #     mode: "off"
 
   pipeline:
     everyNConversations: 5

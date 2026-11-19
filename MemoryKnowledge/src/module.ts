@@ -36,16 +36,34 @@ import {
 } from "./store/auto-sync-scheduler.js";
 import { createCredentialStore } from "./source-auth/credential-store.js";
 import type { ICredentialStore } from "./source-auth/types.js";
+import type { ISshKeyStore } from "./ssh-key/types.js";
+import { isSshUrl } from "./source-fetcher/ssh-options.js";
 import { buildCloneUrl, stripCredentials } from "./code-source/clone-url.js";
 import { CodeSourceRegistry } from "./code-source/registry.js";
 import { WikiSourceRegistry } from "./wiki-source/registry.js";
 import { createWikiImporter } from "./wiki-source/wiki-importer.js";
-import { isGitAuthError, explainGitAuthError } from "./source-fetcher/git-fetcher.js";
+import { isGitAuthError, explainGitAuthError, isRemoteBranchMissingError } from "./source-fetcher/git-fetcher.js";
 
 const log = createLogger("knowledge-module");
 
 /** 进程级全局 LLM 并发信号量（跨所有 wiki 的 extract + merge）。 */
 export const globalLlmLimit = pLimit(getGlobalLlmConcurrency());
+
+/**
+ * 读目录下 `.git` 的 HEAD commit（前 12 位）；没有 .git 或读不了 → undefined。
+ *
+ * 供本地构建 worker 用：目录是手工放置的代码时通常没有 .git，
+ * 这时**不能**判定构建失败，只是没有 commit 可记录。
+ */
+async function headCommitIfGit(dir: string): Promise<string | undefined> {
+  if (!existsSync(join(dir, ".git"))) return undefined;
+  try {
+    const sha = (await simpleGit(dir).revparse(["HEAD"])).trim();
+    return sha ? sha.slice(0, 12) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // ───────────────────────── Module Config ─────────────────────────
 
@@ -60,8 +78,18 @@ export interface KnowledgeModuleConfig {
   wikiWorker?: WikiWorker;
   /** Optional: externally injected code worker (for testing). */
   codeWorker?: CodeGraphWorker;
+  /**
+   * 本地构建 worker（只建索引、不拉取）。用于 `POST /code-graph/build`。
+   * 未注入 → 用模块内 realLocalCodeWorker。测试可注入桩。
+   */
+  localCodeWorker?: CodeGraphWorker;
   /** Optional: externally injected credential store (for testing). */
   credentialStore?: ICredentialStore;
+  /**
+   * SSH 密钥存储（每用户一对 RSA；SSH 仓库 clone 时经 GIT_SSH_COMMAND 注入）。
+   * 未注入 → SSH 仓库注册会在 clone 阶段报「未配置 SSH 公钥」。
+   */
+  sshKeyStore?: ISshKeyStore;
   /** Optional: wiki 拉取服务（外部 wiki 定时同步用）；未注入 → wiki 同步目标跳过。 */
   wikiImporter?: WikiImporter;
 }
@@ -91,6 +119,8 @@ export interface KnowledgeModule {
   credentialStore: ICredentialStore;
   /** 代码来源 provider 注册中心（前端下拉 + provider 查询）。 */
   codeSourceRegistry: CodeSourceRegistry;
+  /** SSH 密钥存储（未配置 sshKeyStore 时为 undefined）。 */
+  sshKeyStore?: ISshKeyStore;
 }
 
 /**
@@ -140,6 +170,9 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // ── 外部来源凭据存储（base64；无密钥；见 §4.1.3） ──
   const credentialStore = config.credentialStore ?? createCredentialStore({ db });
+
+  // ── SSH 密钥存储（每用户一对 RSA；SSH 仓库 clone 时注入 GIT_SSH_COMMAND）──
+  const sshKeyStore = config.sshKeyStore;
 
   // ── 代码来源 provider 注册中心（内置 + 部署启用列表） ──
   const codeSourceRegistry = new CodeSourceRegistry();
@@ -200,6 +233,38 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     }
   };
 
+  /**
+   * SSH 仓库：解析该资产归属用户的私钥，供 fetch/sync 注入 GIT_SSH_COMMAND。
+   *
+   * 取不到要抛**可懂**错误 —— 用户可能绕过前端直接调 API 注册了 ssh 仓库，
+   * 此时裸抛 ENOENT 会让人无从下手。
+   */
+  const sshFetchOptionsFor = (params: {
+    serviceId: string;
+    ownerUserId?: string;
+    repoUrl: string;
+  }): { ssh: { keyPath: string; knownHostsPath: string } } | undefined => {
+    if (!isSshUrl(params.repoUrl)) return undefined;
+    const username = params.ownerUserId?.trim();
+    if (!username) {
+      throw new Error(
+        "SSH 仓库缺少归属用户，无法定位 SSH 私钥；请重新注册并确保已登录。",
+      );
+    }
+    if (!sshKeyStore) {
+      throw new Error(
+        "服务端未启用 SSH 密钥能力（sshKeyStore 未装配），无法拉取 SSH 仓库。",
+      );
+    }
+    const key = sshKeyStore.get(params.serviceId, username);
+    if (!key) {
+      throw new Error(
+        "尚未为该用户生成 SSH 公钥，无法拉取仓库。请先获取 SSH 公钥并在代码平台完成配置后重试。",
+      );
+    }
+    return { ssh: { keyPath: key.keyPath, knownHostsPath: key.knownHostsPath } };
+  };
+
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
     const { dir, repoUrl, branch, codeGraphId, serviceId, setInternalStatus } = ctx;
@@ -210,8 +275,15 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     // 判定「是否私有仓」用 URL 是否被改写（等价于凭据行是否存在，且无需再查一次库）。
     const needsCredential = effectiveUrl !== cleanUrl;
 
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
+    // Resolve protocol-specific fetcher (validates url: https/ssh whitelist + SSRF blocklist).
     const fetcher = fetcherRegistry.resolve(effectiveUrl);
+
+    // SSH 仓库 → 每用户私钥（HTTPS 下恒为 undefined，行为与改造前完全一致）。
+    const sshOpts = sshFetchOptionsFor({
+      serviceId,
+      ownerUserId: ctx.ownerUserId,
+      repoUrl: effectiveUrl,
+    });
 
     const isExistingRepo = existsSync(join(dir, ".git"));
     // ★ 私有仓不做增量 sync：GitSourceFetcher.sync() 内部是 `git fetch origin`，
@@ -224,7 +296,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (canIncremental) {
       try {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(effectiveUrl, branch, dir);
+        const res = await fetcher.sync(effectiveUrl, branch, dir, sshOpts);
         version = res.version;
 
         setInternalStatus("indexing");
@@ -252,11 +324,20 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
       setInternalStatus("cloning");
       let res;
       try {
-        res = await fetcher.fetch(effectiveUrl, branch, dir);
+        res = await fetcher.fetch(effectiveUrl, branch, dir, sshOpts);
       } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err);
+        // ★ 顺序要紧：先判「分支不存在」，再判认证。
+        //
+        // 原因：git 在分支找不到时也会输出 `Could not read from remote repository`，
+        // 与认证失败的措辞重叠。若先判认证，分支错误会被误报成「SSH 认证失败」，
+        // 让用户去查公钥 —— 而真正要做的只是改个分支名。
+        // （fetcher 层的 explainBranchError 已把分支错误转成带远端分支列表的可行动消息。）
+        if (isRemoteBranchMissingError(raw)) {
+          throw err; // 已由 fetcher 包装好，原样透出
+        }
         // git 认证/权限错误措辞误导（`could not read Username` = 仓库需要认证），
         // 转成面向用户的提示后再抛，写入 sync_error 供前端展示。
-        const raw = err instanceof Error ? err.message : String(err);
         if (isGitAuthError(raw)) {
           throw new Error(explainGitAuthError(raw, needsCredential));
         }
@@ -281,6 +362,36 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
       ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
       : undefined;
     return { commitHash, stats };
+  };
+
+  /**
+   * 本地目录构建 worker —— **只建索引，不做任何网络拉取**。
+   *
+   * 供 `POST /code-graph/build` 使用（设计文档 2026-10-12）：目录内容已就位时
+   * 直接 `indexProject`，也可把 failed 的资源修复为 ready。
+   *
+   * 与 realCodeWorker 的关键差异：没有 clone / fetch / 凭据 / SSRF 任何环节，
+   * 因此不会因网络、分支、令牌问题失败 —— 失败只可能是目录本身有问题。
+   */
+  const realLocalCodeWorker: CodeGraphWorker = async (ctx) => {
+    const { dir, codeGraphId, setInternalStatus } = ctx;
+
+    // 目录校验：build() 入队前已查过一次，这里再查是防「入队后到执行前」被删。
+    if (!existsSync(dir)) {
+      throw new Error(`代码目录不存在，无法构建：${dir}`);
+    }
+
+    setInternalStatus("indexing");
+    const instance = await indexProject(dir);
+    instancePool.set(codeGraphId, instance);
+
+    const rawStats = getStats(instance);
+    const stats = rawStats
+      ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
+      : undefined;
+
+    // commitHash：目录里带 .git 就读一下，没有或读不了就留空 —— 不因此判失败。
+    return { commitHash: await headCommitIfGit(dir), stats };
   };
 
   // ── Real wiki worker: ingest via wiki engine ──
@@ -333,6 +444,8 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     store,
     dataRoot: dataDir,
     worker: config.codeWorker ?? realCodeWorker,
+    // 本地构建 worker（POST /code-graph/build 用）：只建索引、不拉取。可注入便于测试。
+    localWorker: config.localCodeWorker ?? realLocalCodeWorker,
     queue: sharedQueue,
     logger: { info: log.info.bind(log), warn: log.warn.bind(log), error: log.error.bind(log) },
     callbackConfig,
@@ -425,6 +538,6 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   return {
     wikiService, cgService, wikiMgr, store, instancePool,
     llmBindingStore, autoSyncScheduler, autoSyncConfig, credentialStore,
-    codeSourceRegistry, wikiSourceRegistry,
+    codeSourceRegistry, wikiSourceRegistry, sshKeyStore,
   };
 }

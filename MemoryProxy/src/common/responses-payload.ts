@@ -18,7 +18,9 @@ import type { UpstreamToolCall } from "../request-prepare-adapter.js";
  *
  * `arguments` stays verbatim — agent clients re-serialize tool calls against
  * their own schema and drop fields it does not declare, so this is the last
- * point where whatever the preparation stage added is still intact.
+ * point where whatever the preparation stage added is still intact. Some
+ * non-native upstreams emit it as an object; it is serialized rather than
+ * dropped, matching the chat runner.
  */
 export function collectResponsesToolCalls(output: unknown): UpstreamToolCall[] {
   if (!Array.isArray(output)) return [];
@@ -32,10 +34,23 @@ export function collectResponsesToolCalls(output: unknown): UpstreamToolCall[] {
     calls.push({
       id: callId,
       name: typeof it.name === "string" ? it.name : "",
-      arguments: typeof it.arguments === "string" ? it.arguments : "",
+      arguments: serializeArguments(it.arguments),
     });
   }
   return calls;
+}
+
+/** Arguments as a JSON string: strings verbatim, objects serialized, anything else empty. */
+export function serializeArguments(args: unknown): string {
+  if (typeof args === "string") return args;
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    try {
+      return JSON.stringify(args);
+    } catch {
+      return "";
+    }
+  }
+  return "";
 }
 
 /**

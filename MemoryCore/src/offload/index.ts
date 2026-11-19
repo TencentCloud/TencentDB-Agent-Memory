@@ -1228,8 +1228,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     const CE_PLUGIN_ID = "memory-tencentdb";
     const configSlotCE = (api.config as any)?.plugins?.slots?.contextEngine;
     if (configSlotCE !== CE_PLUGIN_ID) {
-      logger.warn(`[context-offload] Config plugins.slots.contextEngine="${configSlotCE ?? "(not set)"}" (expected "${CE_PLUGIN_ID}"). Context engine slot not assigned to this plugin - ALL offload functions disabled.`);
-      _contextEngineRejected = true;
+      logger.warn(`[context-offload] Config plugins.slots.contextEngine="${configSlotCE ?? "(not set)"}" (expected "${CE_PLUGIN_ID}"). Context engine slot not assigned to this plugin — MMD injection unavailable; other offload hooks degrade to local mode (issue #846).`);
+      // Do NOT hard-disable: after_tool_call collection, before_prompt_build
+      // preprocessing and llm_input L3 compression have local implementations
+      // and keep working even without the context-engine slot.
       return;
     }
 
@@ -1261,9 +1263,11 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       }
     }
     if (ceSlotOccupied) {
-      _contextEngineRejected = true;
-      logger.error("[context-offload] Offload module DISABLED: context engine slot occupied by another plugin. All hooks will be no-ops.");
-      return; // Early exit — do not start reclaim scheduler either
+      // Graceful degradation (issue #846): only MMD injection truly requires
+      // the context-engine slot. after_tool_call collection, before_prompt_build
+      // preprocessing and llm_input L3 compression have local implementations
+      // and must keep working — do NOT hard-disable all offload.
+      logger.warn("[context-offload] Context engine slot occupied by another plugin — MMD injection unavailable; other offload hooks degrade to local mode (issue #846).");
     }
   } else {
     logger.debug?.("[context-offload] Context engine already registered, singleton updated (hot-refresh)");

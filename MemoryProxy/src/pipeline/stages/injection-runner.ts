@@ -34,6 +34,19 @@ export interface InjectionRunnerInput {
   callerUserKey?: string;
   /** anthropic 独有: fork 请求 readOnly=true 不触发 self-heal */
   readOnly?: boolean;
+  /**
+   * 权威 turnSeq 覆写。传入时跳过内部 countHumanTurns, 直接用该值作为注入
+   * span 的 metadata.turnSeq → LangfuseInjectionObserver 以此派生 traceId。
+   *
+   * 治理背景 (见 stages/turn-seq.ts):
+   *   未传时走 stateless countHumanTurns, 跟 lf 构造里的 resolveMonotonicTurnSeq
+   *   在 compaction 场景会分家 (本轮 injection span 挂到幽灵 trace)。
+   *   runner 若已在入口调 stageResolveTurnSeq 算出权威值, 把它传进来保证
+   *   injection 与 LLM generation 共享同一 Langfuse trace。
+   *
+   * 未传时行为与现状完全一致, 老 caller 不需要改动。
+   */
+  turnSeqOverride?: number;
 }
 
 export interface InjectionRunnerResult {
@@ -55,7 +68,11 @@ export async function stageInjectionRunner(
   }
 
   try {
-    const injectionTurnSeq = countHumanTurns(messages, protocol);
+    // 优先用 caller 传入的权威 turnSeq (stageResolveTurnSeq 预算的 Redis
+    // 单调值), 否则 fallback 到 stateless countHumanTurns — 与现状等价。
+    const injectionTurnSeq = input.turnSeqOverride !== undefined
+      ? input.turnSeqOverride
+      : countHumanTurns(messages, protocol);
     const { getInjectionPipeline } = await import("../../injection/index.js");
     const pipeline = getInjectionPipeline(config);
     const injectedBody = await pipeline.process(body, {

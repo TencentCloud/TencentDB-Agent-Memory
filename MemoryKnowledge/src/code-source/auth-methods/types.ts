@@ -14,8 +14,15 @@
 
 import type { CredentialPayload } from "../types.js";
 
-/** 认证方式类别（判别联合，加成员时全仓 kind 引用点会强制编译报错）。 */
-export type AuthMethodKind = "bearer" | "basic";
+/**
+ * 认证方式类别（判别联合，加成员时全仓 kind 引用点会强制编译报错）。
+ *
+ * 注意：`"ssh-key"` **不是** `CredentialKind`（source-auth/types.ts）。
+ * SSH 凭据是每用户私钥文件，不走 `knowledge_source_credential` 表；
+ * 业务层（CodeGraphService.create）对 ssh provider 直接跳过落凭据分支，
+ * 故此处加成员不会外溢到 HTTP 凭据层。
+ */
+export type AuthMethodKind = "bearer" | "basic" | "ssh-key";
 
 /** 前端凭据表单里一个字段的描述（i18n key 由前端根据 name 拼）。 */
 export interface CredentialFormField {

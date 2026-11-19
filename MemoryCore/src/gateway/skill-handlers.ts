@@ -952,25 +952,60 @@ export async function handleListing(body: unknown, _auth: V2AuthContext, request
       ? "# 每行一个 skill,字段以逗号分隔: id=<skill_id>, name=<名字>, desc=<描述>。\n" +
         "# 调用 skill_view 时传 id 字段的值(形如 skl-xxxxxx)。\n"
       : "";
+    const listingHeader = `<available_skills>\n${formatHint}`;
     let listing = lines.length === 0
       ? "<available_skills>\n(none)\n</available_skills>"
-      : `<available_skills>\n${formatHint}${lines.join("\n")}\n</available_skills>`;
+      : `${listingHeader}${lines.join("\n")}\n</available_skills>`;
 
+    let wasTruncated = false;
     if (listing.length > charBudget) {
       const truncated = listing.slice(0, Math.max(0, charBudget - 32));
       listing = `${truncated}\n... [truncated]\n</available_skills>`;
+      wasTruncated = true;
     }
+
+    // ── 结构化候选 (`candidates`) ────────────────────────────────────────
+    // 动机: 调用方 (proxy 的 skill selector) 需要 description 才能判断相关性,
+    // 而 `hits` 出于向后兼容只有 skill_id/version/name, 且不受 char_budget 影响。
+    //
+    // 硬约束: candidates 必须与**实际渲染进 listing 的可见条目**一字对应 ——
+    // 截断掉的行不能出现在 candidates 里, 否则调用方拿到的候选集比注入到
+    // prompt 的目录更大, 等于悄悄改变了召回范围。
+    //
+    // 可见性计算复刻 `lines.join("\n")` 的偏移: 第 0 行从 header 末尾开始,
+    // 后续每行前面多一个 `\n` 分隔符; 只有整行落在 cutoff 内才算可见。
+    let visibleCount = items.length;
+    if (wasTruncated) {
+      const cutoff = Math.max(0, charBudget - 32);
+      let pos = listingHeader.length;
+      visibleCount = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const start = i === 0 ? pos : pos + 1;
+        const end = start + lines[i]!.length;
+        if (end > cutoff) break;
+        visibleCount++;
+        pos = end;
+      }
+    }
+    const candidates = items.slice(0, visibleCount).map((s) => ({
+      skill_id: s.skill_id,
+      version: s.version,
+      name: s.name,
+      description: flat(s.description),
+    }));
 
     obsLogger.info("skill.handleListing.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0, mode,
       hits: items.length,
       listing_len: listing.length,
       truncated: listing.length >= charBudget,
+      candidates: candidates.length,
       activity_attempted: activityAttempted,
       activity_fallback_reason: activityFallbackReason, });
     return successEnvelope({
       mode,
       listing,
       hits: items.map((s) => ({ skill_id: s.skill_id, version: s.version, name: s.name })),
+      candidates,
     }, requestId);
   } catch (e) { obsLogger.error("skill.handleListing.done", { req_id: requestId, dur_ms: Date.now() - t0 }, e instanceof Error ? e : undefined); return mapCoreError(e, requestId); }
 }

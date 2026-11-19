@@ -4,12 +4,23 @@ export type MemoryPromptLayer = "l1" | "l2" | "l3";
 export type MemoryPromptSource = "agent" | "team" | "instance" | "system";
 export type MemoryPromptTargetType = "instance" | "team" | "agent";
 export type MemoryPromptSettingAction = "apply" | "replace" | "clear";
+/**
+ * How a custom prompt is merged into the built-in system prompt.
+ * - append (default, legacy): appended as <CUSTOM_MEMORY_STRATEGY>; output format is fixed.
+ * - template: replaces a built-in slot (L1 extraction rules / L2 scene template / L3 persona template);
+ *   system protocol (L1 JSON contract, L2 META/tools/files, L3 file/navigation) is kept.
+ *
+ * Storage keeps the field absent for append records so legacy data / responses stay unchanged.
+ */
+export type MemoryPromptStrategyMode = "append" | "template";
 
 export interface MemoryPromptRecord {
   memory_prompt_id: string;
   name: string;
   layer: MemoryPromptLayer;
   prompt: string;
+  /** Present only for template records. Absent / unknown value means "append". */
+  mode?: "template";
   version: number;
   status: "active" | "deleting";
   created_by?: string;
@@ -84,6 +95,17 @@ export interface ResolvedMemoryPrompt {
   layer: MemoryPromptLayer;
   source: MemoryPromptSource;
   version: number;
+  /** Absent means "append" (legacy behaviour). */
+  mode?: "template";
+}
+
+/** Normalize a raw stored value: only the exact string "template" enables template mode. */
+export function normalizeMemoryPromptMode(value: unknown): "template" | undefined {
+  return value === "template" ? "template" : undefined;
+}
+
+export function isTemplateMemoryPrompt(value: { mode?: unknown } | undefined): boolean {
+  return !!value && value.mode === "template";
 }
 
 export interface MemoryPromptStore {

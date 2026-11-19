@@ -47,6 +47,12 @@ export interface UserConfigView {
   items: UserConfigViewItem[];
 }
 
+export interface InstanceConfigView {
+  module: string;
+  module_description: string;
+  items: UserConfigViewItem[]; // reuse: effective_value here = scope=global row (or registry fallback)
+}
+
 // ── Service 接口 ──
 
 export interface IConfigParamService {
@@ -54,11 +60,15 @@ export interface IConfigParamService {
   getEffectiveParam(module: string, paramName: string, userId?: string): Promise<string>;
   getEffectiveInt(module: string, paramName: string, userId?: string): Promise<number>;
   setUserParam(userId: string, module: string, paramName: string, value: string): Promise<ConfigParamEntity>;
+  setGlobalParam(module: string, paramName: string, value: string): Promise<ConfigParamEntity>;
   getInstanceQuotaLimits(): Promise<{ max_users_per_instance: number; max_teams_per_instance: number }>;
   getUserConfigView(userId: string, module: string, paramNames?: string[]): Promise<UserConfigView>;
   isAssetTypeEnabledForUser(userId: string, assetType: AssetType): Promise<boolean>;
   getUserConfigForCaller(data: { user_id: string; module: string; param_name?: string }): Promise<UserConfigView>;
   setUserConfigForCaller(data: { user_id: string; module: string; params: Record<string, string> }): Promise<{ ok: true }>;
+  getInstanceConfigView(module: string, paramNames?: string[]): Promise<InstanceConfigView>;
+  getInstanceConfigForCaller(data: { module: string; param_name?: string }): Promise<InstanceConfigView>;
+  setInstanceConfigForCaller(data: { module: string; param_name: string; param_value: string }): Promise<ConfigParamEntity>;
 }
 
 // ── 实现 ──
@@ -166,7 +176,7 @@ export class ConfigParamService implements IConfigParamService {
       throw new MetadataError("invalid_param_scope", `module '${module}' param '${paramName}' is global-only, cannot set for user scope`);
     }
 
-    this.validateParamValue(moduleDef, paramDef, value);
+    this.validateParamValue("user", paramDef, value);
 
     const result = await this.store.upsertConfigParam({
       scope: "user",
@@ -178,6 +188,43 @@ export class ConfigParamService implements IConfigParamService {
     });
 
     this.invalidateUserCache(userId, module);
+    return result;
+  }
+
+  // ── 实例级写入(system_admin 用, scope=global) ──
+
+  async setGlobalParam(module: string, paramName: string, value: string): Promise<ConfigParamEntity> {
+    const moduleDef = getModuleDef(this.registry, module);
+    if (!moduleDef) {
+      throw new MetadataError("unknown_module", `unknown module: ${module}`);
+    }
+
+    const paramDef = getParamDef(this.registry, module, paramName);
+    if (!paramDef) {
+      throw new MetadataError("invalid_param_key", `unknown param: ${module}.${paramName}`);
+    }
+
+    if (!paramDef.allowed_scopes.includes("global")) {
+      throw new MetadataError(
+        "invalid_param_scope",
+        `module '${module}' param '${paramName}' is not global-writable (allowed_scopes=${JSON.stringify(paramDef.allowed_scopes)})`,
+      );
+    }
+
+    this.validateParamValue("global", paramDef, value);
+
+    const result = await this.store.upsertConfigParam({
+      scope: "global",
+      user_id: null,
+      module,
+      param_name: paramName,
+      param_value: value,
+      description: paramDef.description,
+    });
+
+    // Invalidate the global cache row AND every user-scope cache that falls back to it.
+    // (user:*:{module}:{param} would otherwise keep returning the old global value.)
+    this.invalidateGlobalAndFallbacks(module, paramName);
     return result;
   }
 
@@ -230,6 +277,46 @@ export class ConfigParamService implements IConfigParamService {
     };
   }
 
+  // ── 实例级配置视图(system_admin 用, scope=global) ──
+
+  async getInstanceConfigView(module: string, paramNames?: string[]): Promise<InstanceConfigView> {
+    const moduleDef = getModuleDef(this.registry, module);
+    if (!moduleDef) {
+      throw new MetadataError("unknown_module", `unknown module: ${module}`);
+    }
+
+    if (paramNames && paramNames.length > 0) {
+      for (const pn of paramNames) {
+        if (!getParamDef(this.registry, module, pn)) {
+          throw new MetadataError("invalid_param_key", `unknown param: ${module}.${pn}`);
+        }
+      }
+    }
+
+    const targetParams = paramNames && paramNames.length > 0
+      ? moduleDef.params.filter((p) => paramNames.includes(p.param_name))
+      : moduleDef.params;
+
+    const items: UserConfigViewItem[] = [];
+    for (const paramDef of targetParams) {
+      // userId undefined → getEffectiveParam skips user-row lookup and reads scope=global.
+      const effectiveValue = await this.getEffectiveParam(module, paramDef.param_name, undefined);
+      items.push({
+        module,
+        param_name: paramDef.param_name,
+        param_key: `${module}.${paramDef.param_name}`,
+        description: paramDef.description,
+        effective_value: effectiveValue,
+      });
+    }
+
+    return {
+      module,
+      module_description: moduleDef.description,
+      items,
+    };
+  }
+
   // ── AssetType 快捷方法 ──
 
   async isAssetTypeEnabledForUser(userId: string, assetType: AssetType): Promise<boolean> {
@@ -272,6 +359,21 @@ export class ConfigParamService implements IConfigParamService {
     return { ok: true };
   }
 
+  async getInstanceConfigForCaller(
+    data: { module: string; param_name?: string },
+  ): Promise<InstanceConfigView> {
+    return this.getInstanceConfigView(
+      data.module,
+      data.param_name ? [data.param_name] : undefined,
+    );
+  }
+
+  async setInstanceConfigForCaller(
+    data: { module: string; param_name: string; param_value: string },
+  ): Promise<ConfigParamEntity> {
+    return this.setGlobalParam(data.module, data.param_name, data.param_value);
+  }
+
   // ── 内部辅助 ──
 
   private async getGlobalValue(module: string, paramName: string, paramDef: ParamDef): Promise<string> {
@@ -285,9 +387,12 @@ export class ConfigParamService implements IConfigParamService {
     return value;
   }
 
-  private validateParamValue(_moduleDef: ModuleDef, paramDef: ParamDef, value: string): void {
+  private validateParamValue(scope: "global" | "user", paramDef: ParamDef, value: string): void {
     const isBooleanParam = paramDef.param_value === "0" || paramDef.param_value === "1";
-    if (paramDef.allowed_scopes.includes("user") && isBooleanParam) {
+    // Only validate bool-shape params in scopes they're actually writable in.
+    // (A param with allowed_scopes=['global'] shouldn't skip the check just because
+    // the historical setUserParam code path keyed on user-writable.)
+    if (isBooleanParam && paramDef.allowed_scopes.includes(scope)) {
       if (value !== "0" && value !== "1") {
         throw new MetadataError(
           "invalid_param_value",
@@ -315,6 +420,19 @@ export class ConfigParamService implements IConfigParamService {
     const prefix = `user:${userId}:${module}:`;
     for (const key of this.cache.keys()) {
       if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
+  /** Called when a scope=global row is written: wipes the global cache row
+   *  plus every per-user cache entry for the same (module, paramName), since
+   *  user reads without an override cache the fallback global value. */
+  private invalidateGlobalAndFallbacks(module: string, paramName: string): void {
+    this.cache.delete(`global:${module}:${paramName}`);
+    const userSuffix = `:${module}:${paramName}`;
+    for (const key of this.cache.keys()) {
+      if (key.startsWith("user:") && key.endsWith(userSuffix)) {
         this.cache.delete(key);
       }
     }

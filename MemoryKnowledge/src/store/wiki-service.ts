@@ -40,9 +40,13 @@ import {
   upsertSource,
   listSources,
   deleteSources,
-  sha256,
+  sha256Bytes,
   type SourceStatus,
 } from "../engines/wiki/index-db.js";
+import { previewModeOf, toPreviewFormat, type PreviewFormat } from "../document-converter/format-registry.js";
+import { getWikiBinaryFileMaxBytes } from "../config.js";
+import { toSourceText } from "../document-converter/index.js";
+import { ConvertError } from "../document-converter/errors.js";
 
 export interface WikiBuildContext {
   wikiId: string;
@@ -144,10 +148,21 @@ export interface RawWriteResult {
   size: number;
 }
 
+/** 写入 raw 的内容形态：字符串按 utf-8 编码，Buffer 原样落盘。 */
+export type RawContent = string | Buffer;
+
 export interface RawReadItem {
   filename: string;
   content?: string;
   not_found?: boolean;
+  /** true = `content` 是原始字节的 base64（native/client 形态），否则为纯文本/HTML。 */
+  binary?: boolean;
+  /** 预览实际使用的 converter id（仅 binary 且转换成功时出现），便于排障。 */
+  converterId?: string;
+  /** 预览失败的错误码（仅 binary 且转换失败时出现，见 document-converter/errors.ts）。 */
+  preview_error?: string;
+  /** 预览形态：由格式注册表决定，前端据此选渲染器。 */
+  preview_format?: PreviewFormat;
 }
 
 export interface RawWriteManyItem {
@@ -213,7 +228,25 @@ export type WriteOutcome<T> =
   | "too_large";
 
 const PAGE_WRITE_MAX_BYTES = 512 * 1024;
-const RAW_WRITE_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * raw 落盘上限（字节）。
+ *
+ * 早期是硬编码 5MB，与路由层的按格式上限（`maxBytesOf`，默认文本档 512KB /
+ * 富文档档 10MB、可按格式覆盖）**不一致**：一个 8MB 的 docx 能通过路由校验，
+ * 却在 service 层被 5MB 拒绝 —— 用户看到的是"上传成功但写入失败"。
+ *
+ * 现改为取富文档档上限（所有格式的**上界**），使 service 层退化为纯粹的
+ * 兜底防线（防误用/内部调用），真正的按格式校验由路由层 `maxBytesOf` 负责。
+ */
+function rawWriteMaxBytes(): number {
+  return getWikiBinaryFileMaxBytes();
+}
+
+/** 归一化写入内容：字符串按 utf-8 编码，Buffer 原样返回（落盘即原始字节）。 */
+function toRawBuffer(content: RawContent): Buffer {
+  return typeof content === "string" ? Buffer.from(content, "utf-8") : content;
+}
 const PAGE_RM_MAX = 20;
 const RAW_RM_MAX = 50;
 const RAW_READ_MAX = 50;
@@ -575,12 +608,12 @@ export class WikiService {
    * - 超 RAW_READ_MAX → 抛错（router 转 400）
    * 单个文件不存在不报错，对应 item 标 not_found:true（spec：整体仍 200）。
    */
-  rawReadMany(
+  async rawReadMany(
     serviceId: string,
     teamId: string,
     wikiId: string,
     filenames: string[],
-  ): WriteOutcome<RawReadItem[]> {
+  ): Promise<WriteOutcome<RawReadItem[]>> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
     if (filenames.length > RAW_READ_MAX) {
@@ -597,9 +630,49 @@ export class WikiService {
     const items: RawReadItem[] = [];
     for (let i = 0; i < filenames.length; i++) {
       const filename = filenames[i];
+
+      // 预览形态由**格式注册表**决定（单一真源），此处只做分发，不枚举扩展名。
+      const mode = previewModeOf(filename);
+      // binary = 本次返回的是**原始字节**（base64）而非纯文本；由预览形态决定，
+      // 与"文件是否二进制"无关（md 也是纯文本，但走 markdown 分支返回原文）。
+      const binary = mode === "native" || mode === "client";
+
+      // ① native / client：都返回**原始字节**，后端零转换。
+      //    native = 浏览器内置渲染器（PDF 等），client = 前端专用库（docx/xlsx）。
+      if (mode === "native" || mode === "client") {
+        let bytes: Buffer;
+        try {
+          bytes = readFileSync(safePaths[i]);
+        } catch {
+          items.push({ filename, not_found: true });
+          continue;
+        }
+        items.push({
+          filename,
+          content: bytes.toString("base64"),
+          binary,
+          preview_format: toPreviewFormat(mode),
+        });
+        continue;
+      }
+
+      // ② converted：无可靠前端方案，经转换层转 HTML。
+      if (mode === "converted") {
+        let bytes: Buffer;
+        try {
+          bytes = readFileSync(safePaths[i]);
+        } catch {
+          items.push({ filename, not_found: true });
+          continue;
+        }
+        items.push(await this.previewSource(filename, bytes, binary));
+        continue;
+      }
+
+      // ③ markdown：直读原文，前端按 Markdown 渲染（保留样式）。
       try {
         const content = readFileSync(safePaths[i], "utf-8");
-        items.push({ filename, content });
+        items.push({ filename, content, preview_format: toPreviewFormat("markdown") });
       } catch {
         items.push({ filename, not_found: true });
       }
@@ -619,7 +692,7 @@ export class WikiService {
     teamId: string,
     wikiId: string,
     filename: string,
-    content: string,
+    content: RawContent,
     userId?: string,
   ): WriteOutcome<RawWriteResult> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
@@ -631,16 +704,17 @@ export class WikiService {
     // 结果被 runBuild 检查点丢弃；新任务重新按 sha256 差分扫描全部 raw
     // （已 ingested 且 sha 未变者跳过），因此不存在脏数据落库。
 
-    const size = Buffer.byteLength(content, "utf-8");
-    if (size > RAW_WRITE_MAX_BYTES) return "too_large";
+    const buf = toRawBuffer(content);
+    const size = buf.length;
+    if (size > rawWriteMaxBytes()) return "too_large";
 
     const sourcesDir = join(this.dirFor(serviceId, teamId, wikiId), "raw", "sources");
     const safe = this.resolveRawPath(sourcesDir, filename);
     if (!safe) return "invalid_path";
 
     mkdirSync(sourcesDir, { recursive: true });
-    writeFileSync(safe, content, "utf-8");
-    this.registerSources(serviceId, teamId, wikiId, [{ filename, content, size }], userId);
+    writeFileSync(safe, buf);
+    this.registerSources(serviceId, teamId, wikiId, [{ filename, content: buf, size }], userId);
     return { filename, size };
   }
 
@@ -655,7 +729,7 @@ export class WikiService {
     serviceId: string,
     teamId: string,
     wikiId: string,
-    files: { filename: string; content: string }[],
+    files: { filename: string; content: RawContent }[],
     userId?: string,
   ): WriteOutcome<RawWriteManyItem[]> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
@@ -669,31 +743,32 @@ export class WikiService {
     type Plan = {
       filename: string;
       safePath: string;
-      content: string;
+      content: Buffer;
       size: number;
-      preExistingContent: string | null; // 落盘前已有则记下来，回滚要还原
+      preExistingContent: Buffer | null; // 落盘前已有则记下来，回滚要还原
     };
     const plans: Plan[] = [];
     for (const { filename, content } of files) {
-      if (typeof content !== "string") return "invalid_path";
-      const size = Buffer.byteLength(content, "utf-8");
-      if (size > RAW_WRITE_MAX_BYTES) return "too_large";
+      if (typeof content !== "string" && !Buffer.isBuffer(content)) return "invalid_path";
+      const buf = toRawBuffer(content);
+      const size = buf.length;
+      if (size > rawWriteMaxBytes()) return "too_large";
       const safe = this.resolveRawPath(sourcesDir, filename);
       if (!safe) return "invalid_path";
-      let pre: string | null = null;
+      let pre: Buffer | null = null;
       try {
-        pre = readFileSync(safe, "utf-8");
+        pre = readFileSync(safe);
       } catch {
         pre = null;
       }
-      plans.push({ filename, safePath: safe, content, size, preExistingContent: pre });
+      plans.push({ filename, safePath: safe, content: buf, size, preExistingContent: pre });
     }
 
     mkdirSync(sourcesDir, { recursive: true });
     const written: Plan[] = [];
     try {
       for (const p of plans) {
-        writeFileSync(p.safePath, p.content, "utf-8");
+        writeFileSync(p.safePath, p.content);   // Buffer → 原始字节落盘
         written.push(p);
       }
     } catch (err) {
@@ -1104,11 +1179,38 @@ export class WikiService {
    * （先查再更新：新建 uploaded / sha 变则重置 uploaded / sha 未变幂等）。
    * 登记失败不阻断写盘主流程（文件已落盘）——记 warn，交由后续 ingest/rawLs 兜底。
    */
+  /**
+   * 生成 `converted` 形态的预览内容（经转换层转 HTML）。
+   *
+   * 转换失败**不抛错**：整体响应仍 200，只在 item 上带 `preview_error`，
+   * 让"预览失败"与"文件不存在"在前端可区分。
+   */
+  private async previewSource(
+    filename: string,
+    bytes: Buffer,
+    binary: boolean,
+  ): Promise<RawReadItem> {
+    try {
+      // format:"html" —— converted 形态要的是可直接渲染的 HTML，不是纯文本
+      const out = await toSourceText({ filename, bytes, format: "html" });
+      return {
+        filename,
+        content: out.text,
+        binary,
+        converterId: out.converterId,
+        preview_format: toPreviewFormat("converted"),
+      };
+    } catch (err) {
+      const code = err instanceof ConvertError ? err.code : "CONVERT_FAILED";
+      return { filename, binary, preview_error: code };
+    }
+  }
+
   private registerSources(
     serviceId: string,
     teamId: string,
     wikiId: string,
-    files: { filename: string; content: string; size: number }[],
+    files: { filename: string; content: RawContent; size: number }[],
     userId?: string,
   ): void {
     const dir = this.dirFor(serviceId, teamId, wikiId);
@@ -1118,7 +1220,8 @@ export class WikiService {
         for (const f of files) {
           upsertSource(db, {
             filename: f.filename,
-            sha256: sha256(f.content),
+            // sha 打在**原始字节**上：与磁盘扫描口径一致，换解析库不改变 sha
+            sha256: sha256Bytes(toRawBuffer(f.content)),
             size: f.size,
             userId: userId ?? null,
           });

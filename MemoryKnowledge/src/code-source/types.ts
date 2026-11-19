@@ -14,7 +14,10 @@ import type { AuthMethod, AuthMethodKind } from "./auth-methods/types.js";
 /** 前端下拉展示用的来源元数据（KS 下发给 Panel，含表单驱动信息）。 */
 export interface CodeSourceMeta {
   id: string;
-  /** 认证方式类型，前端据此渲染凭据表单。 */
+  /**
+   * 认证方式类型，前端据此渲染凭据表单。
+   * `ssh-key` → form_fields 为空数组，前端据此不渲染任何输入框。
+   */
   auth_method: AuthMethodKind;
   /** 该方式的表单字段清单（前端根据这个动态渲染 input）。 */
   form_fields: ReadonlyArray<{ name: string; secret: boolean; required: boolean }>;

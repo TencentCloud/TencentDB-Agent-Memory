@@ -39,6 +39,24 @@ export interface WikiListResult {
   total: number;
 }
 
+/**
+ * KS 下发给 Panel 的单条文件格式项（**wire 契约**，由 `toWireFormats()` 投影）。
+ *
+ * 字段兼容性策略：
+ * - 保留 `converter` / `note`：Panel 旧契约已声明，向后兼容
+ * - 剔除 `htmlPostProcessor` / `markdownPostProcessor` / `nonHtmlPassthrough`：
+ *   KS 内部实现细节，Panel 从未声明，不应通过 API 泄漏
+ */
+export interface WikiFileFormat {
+  ext: string;
+  sizeTier: 'text' | 'binary';
+  /** 单文件大小上限（字节）。可选：降级快照可能缺失。 */
+  maxBytes?: number;
+  preview: 'native' | 'client' | 'converted' | 'markdown';
+  converter: 'officeparser' | 'passthrough' | 'none';
+  note?: string;
+}
+
 export interface WikiIngestResult {
   wiki_id: string;
   /** 设计 2026-09-21 §3.3：新增 'cancelling' 中间态（旧任务取消中，新任务已排队）。 */
@@ -67,11 +85,30 @@ export interface WikiRawReadItem {
   filename: string;
   content?: string;
   not_found?: boolean;
+  /**
+   * true = 非文本源文件（docx/pdf/...）。
+   * 此时 `content` 是**转换后的纯文本预览**，不是原始字节。
+   */
+  binary?: boolean;
+  /** 预览实际使用的 converter id（仅 binary 且转换成功时出现）。 */
+  converterId?: string;
+  /** 预览失败的错误码（仅 binary 且转换失败时出现）。 */
+  preview_error?: string;
+  /**
+   * 预览产物形态，前端据此选渲染器：
+   * `native` = 原始字节 base64，交浏览器原生渲染（无损，PDF/HTML/文本）；
+   * `client` = 原始字节 base64，交前端专用库渲染（高保真，docx/xlsx）；
+   * `html` = 转换后的完整 HTML（有损，pptx/ODF/csv 等）；
+   * `markdown` = Markdown（文本类源）。
+   */
+  preview_format?: 'native' | 'client' | 'html' | 'markdown';
 }
 
 export interface WikiRawWriteFile {
   filename: string;
   content: string;
+  /** 缺省 'utf8'：手工粘贴 MD 场景直接按 utf8 落盘；文件上传路径显式传 'base64'。 */
+  encoding?: 'utf8' | 'base64';
 }
 
 export interface WikiRawWriteItem {
@@ -171,11 +208,24 @@ export interface SourceProviderFormField {
 
 export interface SourceProviderMeta {
   id: string;
-  /** 认证方式类型（bearer / basic / ...），前端据此可做 i18n 差异化提示。 */
-  auth_method: "bearer" | "basic";
+  /**
+   * 认证方式类型，前端据此可做 i18n 差异化提示。
+   * `ssh-key` → form_fields 为空数组，前端据此不渲染任何输入框。
+   */
+  auth_method: "bearer" | "basic" | "ssh-key";
   /** 表单字段清单，前端按此动态渲染凭据 input。 */
   form_fields: readonly SourceProviderFormField[];
   token_doc_url?: string | null;
+}
+
+// ── SSH 密钥（每用户一对；SSH 仓库 clone 用）──
+
+export interface SshKeyInfo {
+  /** 公钥内容（`ssh-rsa AAAA...`）—— KS 只回这一个字段，私钥永不出 KS。 */
+  public_key: string;
+  /** true = 本次新生成；false = 复用既有密钥。 */
+  created: boolean;
+  username: string;
 }
 
 export interface SourceProviderList {
@@ -254,6 +304,12 @@ export interface KnowledgeClientPort {
   wikiDelete(wikiIds: string[]): Promise<BatchDeleteResult>;
   wikiList(teamId: string, opts?: { status?: string; limit?: number; offset?: number }): Promise<WikiListResult>;
   wikiUpdateMeta(wikiId: string, patch: { name?: string; summary?: string | null }): Promise<WikiDetail>;
+  /**
+   * 拉取 KS 侧的格式注册表（单一真源）。
+   * Panel 的大小分档 / 上传通道判据、前端的白名单均由此派生，
+   * 避免两端各自硬编码扩展名清单。
+   */
+  wikiFormats(): Promise<{ items: WikiFileFormat[] }>;
 
   // Wiki — raw 文件层（ls/read 仅资产 id；write/rm 带 IdFields）
   wikiRawLs(wikiId: string): Promise<{ items: RawFileEntry[] }>;
@@ -286,6 +342,14 @@ export interface KnowledgeClientPort {
   codeGraphDelete(codeGraphIds: string[]): Promise<BatchDeleteResult>;
   codeGraphUpdateMeta(codeGraphId: string, patch: { repo_name?: string; summary?: string | null }): Promise<CodeGraphDetail>;
   codeGraphQuery(codeGraphId: string, tool: string, params: Record<string, unknown>): Promise<CodeGraphToolResult>;
+
+  /**
+   * 取（必要时生成）该用户的 SSH 密钥对，只回公钥。
+   * 身份用 `actor.userId` —— 绝不接受前端传入的 user_id。
+   */
+  sshKeyEnsure(actor: { teamId: string; userId: string }): Promise<SshKeyInfo>;
+  /** 只读：取已存在的公钥；未生成时 KS 返回 404（由 runKs 转成错误）。 */
+  sshKeyGet(actor: { teamId: string; userId: string }): Promise<SshKeyInfo>;
 
   // 外部来源（凭据挂在资源上，按 resource_type + resource_id 定位；team 门控由 KS 校验）
   sourceProviderListCode(): Promise<SourceProviderList>;

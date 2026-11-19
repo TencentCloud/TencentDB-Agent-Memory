@@ -1,7 +1,8 @@
 /**
- * Code-Graph Routes — 13 endpoints (Hono rewrite).
+ * Code-Graph Routes — 14 endpoints (Hono rewrite).
  *
- * Management (5): create / list / get / sync / delete
+ * Management (6): create / list / get / sync / build / delete
+ *   - build：本地目录构建（不拉取，只重建索引；可把 failed 修复为 ready）
  * Query (8): search / explore / callers / callees / impact / node / status / files
  *
  * Query endpoints delegate to engines/code executeTool, return {text, isError}.
@@ -27,6 +28,7 @@ import {
   type BatchDeleteResult,
 } from "../api-helpers.js";
 import type { CodeGraphInstancePool } from "../module.js";
+import { SSH_PROVIDER_ID } from "../code-source/providers/ssh.js";
 
 export interface CodeGraphRouteDeps {
   cgService: CodeGraphService;
@@ -191,10 +193,16 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
 
     // 私有仓：可选 provider_id + secret，与 create 同请求传入，入队前落凭据（消除时序窗口）。
+    //
+    // 例外：provider_id = "ssh" 时不要求 secret —— SSH 用每用户私钥（GIT_SSH_COMMAND），
+    // 没有用户可填的令牌。secret 缺失在此被放行，下游 CodeGraphService 也会对该
+    // provider 跳过落凭据分支。
     const providerId = typeof body.provider_id === "string" ? body.provider_id : undefined;
     const secret = typeof body.secret === "string" ? body.secret : undefined;
     const username = typeof body.username === "string" ? body.username : undefined;
-    if (providerId && !secret) return c.json(wrapError(400, "secret is required when provider_id is set"), 400);
+    if (providerId && providerId !== SSH_PROVIDER_ID && !secret) {
+      return c.json(wrapError(400, "secret is required when provider_id is set"), 400);
+    }
 
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
@@ -285,6 +293,43 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     if (result.kind === "busy") {
       // 并发拒绝：干净最小的 409 响应体（调用方用 code 判断，不 parse message）。
       return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
+    }
+    return c.json(wrapOk({ code_graph_id: result.row.code_graph_id, status: result.row.status }), 202);
+  });
+
+  /**
+   * POST /build —— 本地目录构建：**不拉取**，用该资源已有目录的内容重建索引。
+   *
+   * 与 /sync 的区别：不 clone/fetch、不需要凭据、不走 SSRF 与协议白名单。
+   * 典型用途：目录内容已就位只想重建索引；或把 failed 的资源修复为 ready
+   * （成功分支无条件写 ready + 清 sync_error）。
+   *
+   * 仅内部/调试使用：鉴权沿用 /v3 的 KNOWLEDGE_SERVICE_KEY（fail-closed）。
+   * 设计文档：MemoryKnowledge/docs/design/2026-10-12-codegraph-build-local-dir.md
+   */
+  app.post("/build", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    const serviceId = c.req.header("x-tdai-service-id");
+    if (!isValidIdSegment(serviceId)) return c.json(wrapError(400, "x-tdai-service-id header is required"), 400);
+    const cgId = body.code_graph_id;
+    if (!isValidIdSegment(cgId)) return c.json(wrapError(400, "code_graph_id is required"), 400);
+    const requesterUserId = typeof body.user_id === "string" && body.user_id ? body.user_id : undefined;
+
+    const row = cgService.getById(serviceId, cgId);
+    if (!row) return c.json(wrapError(404, "code graph not found"), 404);
+
+    const result = cgService.build(serviceId, row.team_id, cgId, requesterUserId);
+    if (result.kind === "not_found") return c.json(wrapError(404, "code graph not found"), 404);
+    if (result.kind === "busy") {
+      // 并发拒绝：与 /sync 同口径的 409（调用方用 code 判断，不 parse message）。
+      return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
+    }
+    if (result.kind === "empty_dir") {
+      // 目录缺失或为空：入队前就拒绝，避免产生一条必然 failed 的记录。
+      return c.json(
+        wrapError(400, "code directory is missing or empty"),
+        400,
+      );
     }
     return c.json(wrapOk({ code_graph_id: result.row.code_graph_id, status: result.row.status }), 202);
   });

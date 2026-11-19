@@ -93,6 +93,33 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     }
   });
 
+  // SSH 密钥 —— 每用户一对；SSH 仓库 clone 用（KS 是唯一真相源，Panel 只转发）
+  //
+  // 门控要点：user_id 只取 `gate.userId`，**绝不接受 body 里的 user_id** ——
+  // 否则 A 可冒用 B 的身份拿到 B 的公钥。
+
+  api.post('/knowledge/code-graph/ssh-key/ensure', mw, async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const teamId = str(body, 'team_id');
+    if (!teamId) return respondControlError(c, 400, 'MISSING_TEAM_ID');
+    const gate = await requireTeamMember(deps, c, ctx, teamId);
+    if ('error' in gate) return gate.error;
+    const kc = deps.knowledgeClientFactory(ctx.instanceId);
+    return runKs(c, () => kc.sshKeyEnsure({ teamId, userId: gate.userId }));
+  });
+
+  api.post('/knowledge/code-graph/ssh-key/get', mw, async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const teamId = str(body, 'team_id');
+    if (!teamId) return respondControlError(c, 400, 'MISSING_TEAM_ID');
+    const gate = await requireTeamMember(deps, c, ctx, teamId);
+    if ('error' in gate) return gate.error;
+    const kc = deps.knowledgeClientFactory(ctx.instanceId);
+    return runKs(c, () => kc.sshKeyGet({ teamId, userId: gate.userId }));
+  });
+
   // C3b register-meta — code ready 后 owner 登记 meta（create 时不写 meta）
   api.post('/knowledge/code-graph/register-meta', mw, async (c) => {
     const ctx = buildCtx(c);

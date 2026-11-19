@@ -124,6 +124,25 @@ export interface CodeGraphDetail {
   updated_at: string;
 }
 
+/**
+ * KS 下发给前端的单条文件格式项（**wire 契约**，由 `toWireFormats()` 投影）。
+ *
+ * 字段兼容性策略：
+ * - 保留 `converter` / `note`：旧契约已声明，向后兼容（前端未读也不删，防
+ *   外部 integration 读到 undefined）
+ * - 剔除 `htmlPostProcessor` / `markdownPostProcessor` / `nonHtmlPassthrough`：
+ *   KS 内部实现细节，旧契约从未声明，仅因 spread 不小心泄漏
+ */
+export interface WikiFileFormat {
+  ext: string;
+  sizeTier: 'text' | 'binary';
+  /** 单文件大小上限（字节）。可选：降级快照可能缺失。 */
+  maxBytes?: number;
+  preview: 'native' | 'client' | 'converted' | 'markdown';
+  converter: 'officeparser' | 'passthrough' | 'none';
+  note?: string;
+}
+
 // ---- 兼容旧类型（平滑过渡） ----
 
 /** @deprecated 用 WikiDetail 替代 */
@@ -148,11 +167,23 @@ export interface SourceProviderFormField {
 
 export interface SourceProviderMeta {
   id: string;
-  /** 认证方式类型（bearer / basic / ...）。 */
-  auth_method: 'bearer' | 'basic';
+  /**
+   * 认证方式类型（bearer / basic / ssh-key）。
+   * `ssh-key` 时 form_fields 为空数组 —— 前端据此不渲染任何输入框，
+   * 改为走「获取并配置 SSH 公钥」流程。
+   */
+  auth_method: 'bearer' | 'basic' | 'ssh-key';
   /** 表单字段清单：前端按此动态渲染。 */
   form_fields: readonly SourceProviderFormField[];
   token_doc_url?: string | null;
+}
+
+/** SSH 密钥信息（服务端只回公钥，私钥永不出服务端）。 */
+export interface SshKeyInfo {
+  public_key: string;
+  /** true = 本次新生成；false = 复用既有密钥。 */
+  created: boolean;
+  username: string;
 }
 
 /** wiki 远端节点（扁平，含目录节点）。 */
@@ -482,8 +513,9 @@ export const knowledgeApi = {
     importAndIngest: (params: {
       wiki_id: string;
       mode: 'files' | 'markdown' | 'external' | 'reingest';
-      files?: { filename: string; content: string }[];
-      markdown?: { filename: string; content: string }[];
+      // encoding 透传给 Knowledge：默认 base64，手工粘贴 MD 需显式 'utf8'。
+      files?: { filename: string; content: string; encoding?: 'utf8' | 'base64' }[];
+      markdown?: { filename: string; content: string; encoding?: 'utf8' | 'base64' }[];
       source_url?: string;
       provider_id?: string;
       page_ids?: string[];
@@ -532,17 +564,35 @@ export const knowledgeApi = {
       return { files: d.items ?? [] };
     },
 
-    /** raw 文件读取 */
-    rawRead: (wikiId: string, filenames: string[]): Promise<{ items: Array<{ filename: string; content?: string; not_found?: boolean }> }> =>
+    /**
+     * raw 文件读取（预览用途）。
+     *
+     * 形态由后端 `preview_format` 告知：`native`/`client` 返回原始字节 base64，
+     * `html` 返回转换后的 HTML，`markdown` 返回原文。转换失败时只带
+     * `preview_error`，无 content。
+     */
+    rawRead: (wikiId: string, filenames: string[]): Promise<{ items: Array<{ filename: string; content?: string; not_found?: boolean; binary?: boolean; converterId?: string; preview_error?: string; preview_format?: 'native' | 'client' | 'html' | 'markdown' }> }> =>
       panelPost('/wiki/raw/read', { wiki_id: wikiId, filenames }),
 
     /** 删除 raw 原始文档 */
     rawDelete: (wikiId: string, filenames: string[]): Promise<void> =>
       panelPost('/wiki/raw/rm', { wiki_id: wikiId, filenames }),
 
-    /** raw 文件上传 */
-    upload: (opts: { teamId: string; wikiId: string; filename: string; content: string }): Promise<void> =>
-      panelPost('/wiki/raw/write', { team_id: opts.teamId, wiki_id: opts.wikiId, files: [{ filename: opts.filename, content: opts.content }] }),
+    /**
+     * 拉取格式注册表（KS 侧 `toWireFormats()` 的 wire 契约）。
+     * 前端白名单 / 上传通道 / accept 属性 / 大小校验全部由此派生。
+     */
+    formats: (): Promise<{ items: WikiFileFormat[] }> =>
+      panelPost('/wiki/formats', {}),
+
+    /**
+     * raw 文件上传。
+     *
+     * - `encoding='base64'`：从 File 读的原始字节走 base64（docx/pdf/md/txt 等）
+     * - 缺省：手工粘贴 MD 等纯文本场景，`content` 直接按 UTF-8 落盘
+     */
+    upload: (opts: { teamId: string; wikiId: string; filename: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<void> =>
+      panelPost('/wiki/raw/write', { team_id: opts.teamId, wiki_id: opts.wikiId, files: [{ filename: opts.filename, content: opts.content, encoding: opts.encoding }] }),
 
     allocate: (teamId: string, wikiId: string, agentId: string): Promise<void> =>
       allocateKnowledge(teamId, wikiId, agentId),
@@ -618,6 +668,17 @@ export const knowledgeApi = {
     /** 详情（用于 sync 后轮询） */
     get: (codeGraphId: string): Promise<CodeGraphDetail> =>
       panelPost('/code-graph/get', { code_graph_id: codeGraphId }),
+
+    /**
+     * SSH 公钥：取（必要时生成）。用户身份由后端从会话取，前端不传 user_id。
+     * 注意顺序：注册 SSH 仓库前先调它拿到公钥 → 用户去平台配置 → 再调 create。
+     */
+    sshKeyEnsure: (teamId: string): Promise<SshKeyInfo> =>
+      panelPost('/code-graph/ssh-key/ensure', { team_id: teamId }),
+
+    /** SSH 公钥：只读取回已存在的（不生成）。未生成时后端返回错误。 */
+    sshKeyGet: (teamId: string): Promise<SshKeyInfo> =>
+      panelPost('/code-graph/ssh-key/get', { team_id: teamId }),
 
     allocate: (teamId: string, codeGraphId: string, agentId: string): Promise<void> =>
       allocateKnowledge(teamId, codeGraphId, agentId),

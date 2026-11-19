@@ -69,7 +69,7 @@ export class SkillCoreSink implements SkillCandidatesSink {
       const name = c.name;
       if (!skillId || !name) {
         logger.warn(
-          `[skill-core-sink] worker=${workerId} candidate missing skill_id/name — skip asset register`,
+          `【P2】[skill-core-sink] worker=${workerId} candidate missing skill_id/name — skip asset register`,
         );
         continue;
       }
@@ -84,7 +84,7 @@ export class SkillCoreSink implements SkillCandidatesSink {
         // asset 登记失败不影响主流程 —— skill 已经在 skills 表里，
         // 前端管控页可能显示不到，运维再补
         logger.warn(
-          `[skill-core-sink] worker=${workerId} ensureSkillAsset failed skill_id=${skillId}: ` +
+          `【P2】[skill-core-sink] worker=${workerId} ensureSkillAsset failed skill_id=${skillId}: ` +
             (err instanceof Error ? err.message : String(err)),
         );
       }

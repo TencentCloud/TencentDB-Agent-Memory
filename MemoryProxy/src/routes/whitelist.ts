@@ -171,8 +171,20 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  * 等 codex 端点允许尾斜杠可选（如 `/responses` 是完整路径）。
  * 白名单入口 `/v1/messages`、`/responses` 自身不会被误剥（因为它们不匹配 agent
  * 段——agent 段限定为已知名字）。
+ *
+ * ⚠ 这份名单必须覆盖 `server.ts` 里所有以 `/{agent}[/{spaceId}]/{v1|...}` 注册路由的
+ * agent 段。漏掉一个 agent 时它的路径剥不掉前缀，`matchWhitelistEndpoint` 恒返回 null，
+ * 而两个调用方对 null 的处理不对称，故障只在一处暴露、另一处完全看不出来：
+ *   - `pipeline/stages/resolve-target-full.ts` 有
+ *     `?? (protocol === "anthropic" ? "/messages" : "/chat/completions")` 兜底，
+ *     主端点照常工作；
+ *   - `pipeline/runners/utility.ts` 的 `runUtilityPipeline`（server.ts 里别名成
+ *     `handleAuxiliaryEndpoint`）没有兜底，null 直接判成 404 `Unregistered endpoint`，
+ *     于是该 agent 在 `server.ts` 里**已显式注册**的 aux 路由（`/v1/messages/count_tokens`、
+ *     `/v1/embeddings` 等）永远到不了上游，且启动阶段无任何报错。
+ * 新增 agent 路由时同步补这里；更稳妥的做法是让路由注册与本名单共用同一份来源。
  */
-const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai|pi)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
+const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai|pi|dsh)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。
@@ -264,7 +276,8 @@ export function resolveCostGuardMode(requestPath: string): CostGuardMode {
  * 请求是否走遗留的 `/proxy/{spaceId}` 前缀。
  *
  * 该前缀不带 agent 信息，`agentSource` 只能兜底成 `claude-code`，据此解析出的
- * 会话身份与消息结构对其它客户端并不成立。因此这条入口只承担路由、压缩与计费，
+ * 会话身份与消息结构对其它客户端并不成立。因此这条入口只承担路由、压缩、计费与
+ * 会话上传（session-trace，不区分 subagent，全部记为主线），
  * 记忆类功能（session-init / mem 命令 / injection / L0 / skill）一律关闭——
  * 宁可不注入，也不要按错误的 agent 画像往用户上下文里塞东西。
  */

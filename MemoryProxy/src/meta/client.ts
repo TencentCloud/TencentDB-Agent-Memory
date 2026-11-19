@@ -19,6 +19,7 @@
  */
 
 import type { CoreSkillConfig } from "../types.js";
+import { DependencyError, dependencyStatus, upstreamFailure } from "../common/dependency-error.js";
 
 type Fetcher = typeof fetch;
 
@@ -79,6 +80,36 @@ export interface TaskEntity {
   description?: string | null;
   status?: string;
   source_type?: string;
+}
+
+/**
+ * /v3/meta/user-session-default/get · set · delete 的实体返回。
+ *
+ * 用户级 session 默认 (team, agent, task) 三元组, 一个 user_id 至多一行。
+ *
+ * task_id 字段可能为:
+ *   - 真实 task_id (如 `tsk-xxx`)
+ *   - 字面量字符串 `"default"` (= DEFAULT_TASK_SENTINEL) —— 表示"不绑定任何 Task"
+ *
+ * 这个字面量与 Proxy 侧 `config.sessionInit.defaultTaskId` 契约对称, 下游
+ * injection / participation-log / getTask 等 10+ 处 `task_id !== defaultTaskId`
+ * 短路天然适用, 不需要额外处理。
+ *
+ * 详见设计文档 `docs/design/2026-10-10-user-session-default-design.md` §3.1.1。
+ */
+export interface UserSessionDefaultEntity {
+  user_id: string;
+  team_id: string;
+  agent_id: string;
+  task_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetUserSessionDefaultInput {
+  team_id: string;
+  agent_id: string;
+  task_id: string;
 }
 
 /**
@@ -335,6 +366,80 @@ export class MetadataClient {
     return this.fetch<TaskEntity>("/v3/meta/task/update", body);
   }
 
+  // ── UserSessionDefault (v3.3) ──────────────────────────────────────────
+  //
+  // 用户级 session 默认 (team, agent, task) 三元组。详见 UserSessionDefaultEntity
+  // 类型注释与 docs/design/2026-10-10-user-session-default-design.md。
+
+  /**
+   * 查询用户的默认 (team, agent, task) 配置。
+   *
+   * 行为:
+   *   - 已配置: 返回完整 entity
+   *   - 未配置: 返回 `null`
+   *   - 其他异常 (网络 / 鉴权失败): 原样抛出, 由 caller 决定降级
+   *
+   * ── "未配置"在 Core 侧有两种表达, 必须都吞成 null ──────────────────────
+   *
+   *   1. envelope `{code:0, data:null}` —— **当前线上实际路径**。
+   *      Core router 直接 `return s.userSessionDefault.get(...)`, service 层
+   *      是 `?? null`, 未设置时返回 JS null。而 `fetch()` 对 `data == null`
+   *      **无条件抛** `unexpected null data`(见本文件 fetch 实现)。
+   *
+   *   2. envelope `code=404` (entity_not_found) —— 早期注释假设的形态,
+   *      保留兼容以防 Core 后续改口径。
+   *
+   * ⚠️ 只吞这两种。真正的网络 / 鉴权 / 500 必须照常抛出 —— 否则
+   *    resolveUserSessionDefault 会把"系统故障"和"用户没配默认"混成同一个
+   *    fallbackReason="get_failed": 既污染 ClickHouse 埋点(海量假 get_failed),
+   *    又掩盖真实故障。
+   */
+  async getUserSessionDefault(userId: string): Promise<UserSessionDefaultEntity | null> {
+    try {
+      return await this.fetch<UserSessionDefaultEntity>(
+        "/v3/meta/user-session-default/get",
+        { user_id: userId },
+      );
+    } catch (err) {
+      if (err instanceof Error) {
+        // 形态 1: 未配置 → Core 返 {code:0,data:null}, fetch 抛这个
+        if (err.message.includes("unexpected null data")) return null;
+        // 形态 2: 未配置 → envelope 404
+        if (/\b404\b|entity_not_found/.test(err.message)) return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * 设置 / 覆盖用户默认配置。
+   *
+   * task_id 字段可传真实 task_id 或字面量 `"default"` (= 不绑定任何 Task);
+   * Core Service 识别 "default" 字面量时跳过 task 实体校验。
+   */
+  async setUserSessionDefault(
+    userId: string,
+    input: SetUserSessionDefaultInput,
+  ): Promise<UserSessionDefaultEntity> {
+    return this.fetch<UserSessionDefaultEntity>(
+      "/v3/meta/user-session-default/set",
+      {
+        user_id: userId,
+        team_id: input.team_id,
+        agent_id: input.agent_id,
+        task_id: input.task_id,
+      },
+    );
+  }
+
+  /** 清除用户默认配置。幂等: 不存在也返 ok。 */
+  async deleteUserSessionDefault(userId: string): Promise<{ ok: true }> {
+    return this.fetch<{ ok: true }>(
+      "/v3/meta/user-session-default/delete",
+      { user_id: userId },
+    );
+  }
+
   /**
    * List assets the given user can access in a team, applying kernel-side
    * visibility × ACL filtering (see permission-checker.ts). Paginated aggregation.
@@ -547,24 +652,20 @@ export class MetadataClient {
         signal: AbortSignal.timeout(this.defaultTimeoutMs),
       });
     } catch (err) {
-      throw new Error(`${TAG} ${path} fetch failed: ${(err as Error).message}`);
+      throw new DependencyError(dependencyStatus(err, 503), `${TAG} ${path} fetch failed`);
     }
 
-    if (!resp.ok) {
-      let detail = "";
-      try {
-        detail = await resp.text();
-      } catch { /* ignore */ }
-      console.log(
-        `[wb-debug] metadata-client req path=${path} status=${resp.status} url=${url} serviceId=${this.serviceId} userKey.len=${this.userKey?.length ?? 0} userKey.prefix=${(this.userKey ?? "").slice(0, 20)} serviceToken.len=${this.serviceToken?.length ?? 0} body.len=${detail.length} body.head=${detail.slice(0, 300)}`,
-      );
-      throw new Error(`${TAG} ${path} HTTP ${resp.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+    if (!resp.ok) throw upstreamFailure(resp.status);
+
+    let env: CoreEnvelope<T>;
+    try {
+      env = (await resp.json()) as CoreEnvelope<T>;
+    } catch (err) {
+      throw new DependencyError(dependencyStatus(err), `${TAG} ${path} non-JSON response`);
     }
-
-    const env = (await resp.json()) as CoreEnvelope<T>;
-
+    if (!env || typeof env.code !== "number") throw new DependencyError(502, `${TAG} ${path} invalid envelope`);
     if (env.code !== 0) {
-      throw new Error(`${TAG} ${path} envelope error ${env.code}: ${env.message ?? ""}`);
+      throw new DependencyError(upstreamFailure(env.code).status, `${TAG} ${path} envelope error ${env.code}`);
     }
 
     if (env.data === null || env.data === undefined) {

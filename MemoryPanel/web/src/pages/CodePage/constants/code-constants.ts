@@ -13,12 +13,36 @@ export { formatShortTime } from '@/lib/asset-common';
  * 要求：http/https 协议、host 含点（真实域名）、路径不含空格且以 .git 结尾。
  * 用正则而非 URL 解析 —— new URL() 会接受路径中的空格（如 /a b/repo.git），
  * 且不强制 .git 后缀，均不符合 code graph 注册的严格约束。
- * SSH（git@...）不在此判定为 true —— 由调用方单独提示"暂不支持 SSH"。
+ * SSH（git@...）不在此判定为 true —— SSH 由 isSshGitUrl / isValidGitUrl 判定。
  */
 const GIT_HTTP_URL_RE = /^https?:\/\/[^\s/]+\.[^\s/]+\/[^\s]+\.git$/i;
 export function isValidGitHttpUrl(raw: string): boolean {
   return GIT_HTTP_URL_RE.test(raw.trim());
 }
+
+/**
+ * SSH Git 仓库地址正则。两种写法：
+ *   - scp 写法：`git@host:namespace/repo.git`（host 可以是域名或内网主机名）
+ *   - 标准写法：`ssh://[user@]host[:port]/namespace/repo.git`（端口可选，默认 22）
+ *
+ * 约束与 HTTPS 版对齐：路径不含空格、以 .git 结尾。
+ * 不放开 `git://`（明文、无认证），也不放开 file://（本地路径）。
+ */
+const GIT_SSH_SCP_RE = /^git@[^\s/:@]+:[^\s]+\.git$/i;
+const GIT_SSH_URL_RE = /^ssh:\/\/(?:[^\s/@]+@)?[^\s/:@]+(?::\d+)?\/[^\s]+\.git$/i;
+
+export function isSshGitUrl(raw: string): boolean {
+  const v = (raw ?? '').trim();
+  return GIT_SSH_SCP_RE.test(v) || GIT_SSH_URL_RE.test(v);
+}
+
+/** 注册表单的统一地址校验：HTTP(S) 或 SSH 任一合法即通过。 */
+export function isValidGitUrl(raw: string): boolean {
+  return isValidGitHttpUrl(raw) || isSshGitUrl(raw);
+}
+
+/** SSH 来源在「来源」下拉里的 id（与 KS 的 SSH_PROVIDER_ID 保持一致）。 */
+export const SSH_SOURCE_ID = 'ssh';
 
 /**
  * 从 Git URL 提取可读的仓库名称。
