@@ -33,7 +33,7 @@ function fixture(raw?: string) {
     file, config, original, logger,
     read: () => fs.readFileSync(file, "utf8"),
     run(runtimeConfig?: RuntimeConfig, rootConfig?: unknown) {
-      ensurePluginHookPolicy({ logger, runtimeConfig, rootConfig });
+      return ensurePluginHookPolicy({ logger, runtimeConfig, rootConfig });
     },
     expectPatched() {
       const expected = structuredClone(config);
@@ -45,36 +45,29 @@ function fixture(raw?: string) {
   };
 }
 
-// Drain the asynchronous SDK completion/fallback without relying on sleeps.
-const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
-
 describe("hook policy SDK failure recovery", () => {
   it("falls back when the SDK throws synchronously, preserving unrelated configuration", async () => {
     const h = fixture();
-    expect(() => h.run({ mutateConfigFile() { throw new Error("unsupported SDK signature"); } })).not.toThrow();
-    await settled();
+    await h.run({ mutateConfigFile() { throw new Error("unsupported SDK signature"); } });
     h.expectPatched();
   });
 
   it("falls back when an SDK promise rejects", async () => {
     const h = fixture();
-    h.run({ mutateConfigFile: async () => { throw new Error("SDK unavailable"); } });
-    await settled();
+    await h.run({ mutateConfigFile: async () => { throw new Error("SDK unavailable"); } });
     h.expectPatched();
   });
 
   it.each([undefined, null, true])("falls back on an incompatible SDK return value (%j)", async (value) => {
     const h = fixture();
     const runtime = { mutateConfigFile: () => value } as unknown as RuntimeConfig;
-    expect(() => h.run(runtime)).not.toThrow();
-    await settled();
+    await h.run(runtime);
     h.expectPatched();
   });
 
   it("falls back if the host exposes a non-callable SDK member", async () => {
     const h = fixture();
-    expect(() => h.run({ mutateConfigFile: {} } as unknown as RuntimeConfig)).not.toThrow();
-    await settled();
+    await h.run({ mutateConfigFile: {} } as unknown as RuntimeConfig);
     h.expectPatched();
   });
 
@@ -82,7 +75,7 @@ describe("hook policy SDK failure recovery", () => {
     const h = fixture();
     const writes = vi.spyOn(fs, "writeFileSync");
     const runtime = { mutateConfigFile() { throw new Error("old SDK"); } };
-    for (let i = 0; i < 3; i++) { h.run(runtime); await settled(); }
+    for (let i = 0; i < 3; i++) { await h.run(runtime); }
     h.expectPatched();
     expect(writes).toHaveBeenCalledTimes(1);
   });
@@ -90,8 +83,7 @@ describe("hook policy SDK failure recovery", () => {
   it("leaves a rejected manual write intact and reports the need for manual configuration", async () => {
     const h = fixture();
     vi.spyOn(fs, "writeFileSync").mockImplementation(() => { throw new Error("read-only config"); });
-    h.run({ mutateConfigFile: async () => { throw new Error("SDK unavailable"); } });
-    await settled();
+    await h.run({ mutateConfigFile: async () => { throw new Error("SDK unavailable"); } });
     expect(h.read()).toBe(h.original);
     expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining("Failed to write"));
     expect(h.logger.info.mock.calls.flat().join("\n")).not.toContain("Patched via SDK");
@@ -101,16 +93,14 @@ describe("hook policy SDK failure recovery", () => {
 describe("hook policy fallback boundaries", () => {
   it.each(["null", "[]", "true", "42", '"config"', "{broken"])('preserves invalid config root %s after SDK failure', async (raw) => {
     const h = fixture(raw);
-    expect(() => h.run({ mutateConfigFile() { throw new Error("SDK unavailable"); } })).not.toThrow();
-    await settled();
+    await h.run({ mutateConfigFile() { throw new Error("SDK unavailable"); } });
     expect(h.read()).toBe(raw);
     expect(h.logger.warn.mock.calls.flat().join("\n")).toContain("manually");
   });
 
   it("keeps $include configuration unchanged and provides a manual remedy", async () => {
     const h = fixture('{"$include": "./shared.json"}');
-    h.run({ mutateConfigFile: async () => { throw new Error("SDK unavailable"); } });
-    await settled();
+    await h.run({ mutateConfigFile: async () => { throw new Error("SDK unavailable"); } });
     expect(h.read()).toBe(h.original);
     expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining("Config uses $include"));
   });
@@ -123,8 +113,7 @@ describe("hook policy fallback boundaries", () => {
       expect(params.afterWrite.mode).toBe("restart");
       params.mutate(draft);
     } };
-    h.run(runtime);
-    await settled();
+    await h.run(runtime);
     expect((draft.plugins.entries[pluginId].hooks as Record<string, unknown>).allowConversationAccess).toBe(true);
     expect(h.read()).toBe(h.original);
     expect(h.logger.info).toHaveBeenCalledWith(expect.stringContaining("Patched via SDK"));
@@ -133,8 +122,7 @@ describe("hook policy fallback boundaries", () => {
   it("does not invoke the SDK when the loaded policy is already active", async () => {
     const h = fixture();
     const mutateConfigFile = vi.fn();
-    h.run({ mutateConfigFile }, { plugins: { entries: { [pluginId]: { hooks: { allowConversationAccess: true } } } } });
-    await settled();
+    await h.run({ mutateConfigFile }, { plugins: { entries: { [pluginId]: { hooks: { allowConversationAccess: true } } } } });
     expect(mutateConfigFile).not.toHaveBeenCalled();
     expect(h.read()).toBe(h.original);
   });
@@ -143,8 +131,7 @@ describe("hook policy fallback boundaries", () => {
     const h = fixture();
     process.argv = [process.execPath, "openclaw.mjs", "plugins", "list"];
     const mutateConfigFile = vi.fn();
-    h.run({ mutateConfigFile });
-    await settled();
+    await h.run({ mutateConfigFile });
     expect(mutateConfigFile).not.toHaveBeenCalled();
     expect(h.read()).toBe(h.original);
   });

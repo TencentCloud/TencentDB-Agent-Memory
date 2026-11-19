@@ -165,20 +165,21 @@ function hasPolicyAlready(root: unknown): boolean {
 }
 
 /**
- * Call early in register(). Patches config if missing, triggers restart.
+ * Run in the Gateway's awaitable plugin startup task. Patches config if missing
+ * and reports the restart requirement.
  *
  * Strategy:
  * 1. Try SDK mutateConfigFile (handles path resolution, $include, atomic write,
  *    and triggers gateway restart via afterWrite).
  * 2. Fallback to manual file write if SDK is unavailable or fails.
  */
-export function ensurePluginHookPolicy(params: {
+export async function ensurePluginHookPolicy(params: {
   rootConfig?: unknown;
   runtimeConfig?: {
     mutateConfigFile?: (p: any) => Promise<any>;
   };
   logger: Logger;
-}): void {
+}): Promise<void> {
   const { logger } = params;
   const TAG = "[memory-tdai] [hook-policy]";
 
@@ -197,31 +198,28 @@ export function ensurePluginHookPolicy(params: {
     const runtimeConfig = params.runtimeConfig;
     const mutateConfigFile = runtimeConfig.mutateConfigFile!;
     // The SDK may throw before returning a promise (e.g. a changed signature).
-    // Catch invocation failures as well as rejections so registration can still
+    // Catch invocation failures as well as rejections so startup can still
     // use the manual fallback. Do not claim success for an incompatible return.
-    void (async () => {
-      try {
-        const pending = mutateConfigFile.call(runtimeConfig, {
-          afterWrite: { mode: "restart", reason: "memory-tencentdb hook policy auto-patch" },
-          mutate: (draft: any) => {
-            if (!draft.plugins) draft.plugins = {};
-            if (!draft.plugins.entries) draft.plugins.entries = {};
-            if (!draft.plugins.entries[PLUGIN_ID]) draft.plugins.entries[PLUGIN_ID] = {};
-            if (!draft.plugins.entries[PLUGIN_ID].hooks) draft.plugins.entries[PLUGIN_ID].hooks = {};
-            draft.plugins.entries[PLUGIN_ID].hooks.allowConversationAccess = true;
-          },
-        });
-        if (!pending || typeof pending.then !== "function") {
-          throw new Error("mutateConfigFile did not return a promise");
-        }
-        await pending;
-        logger.info(`${TAG} ✅ Patched via SDK — gateway will restart automatically.`);
-      } catch (err) {
-        logger.warn(`${TAG} SDK mutateConfigFile failed: ${err instanceof Error ? err.message : String(err)}, trying manual fallback...`);
-        manualPatch(logger);
+    try {
+      const pending = mutateConfigFile.call(runtimeConfig, {
+        afterWrite: { mode: "restart", reason: "memory-tencentdb hook policy auto-patch" },
+        mutate: (draft: any) => {
+          if (!draft.plugins) draft.plugins = {};
+          if (!draft.plugins.entries) draft.plugins.entries = {};
+          if (!draft.plugins.entries[PLUGIN_ID]) draft.plugins.entries[PLUGIN_ID] = {};
+          if (!draft.plugins.entries[PLUGIN_ID].hooks) draft.plugins.entries[PLUGIN_ID].hooks = {};
+          draft.plugins.entries[PLUGIN_ID].hooks.allowConversationAccess = true;
+        },
+      });
+      if (!pending || typeof pending.then !== "function") {
+        throw new Error("mutateConfigFile did not return a promise");
       }
-    })();
-    return;
+      await pending;
+      logger.info(`${TAG} ✅ Patched via SDK — gateway will restart automatically.`);
+      return;
+    } catch (err) {
+      logger.warn(`${TAG} SDK mutateConfigFile failed: ${err instanceof Error ? err.message : String(err)}, trying manual fallback...`);
+    }
   }
 
   // Fallback: manual file write

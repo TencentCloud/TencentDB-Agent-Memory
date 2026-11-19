@@ -251,18 +251,26 @@ export default function register(api: OpenClawPluginApi) {
       );
     } else {
       api.logger.debug?.(
-        `${TAG} Hook policy auto-patch applying: ` +
+        `${TAG} Hook policy auto-patch registered for Gateway startup: ` +
         `original=${JSON.stringify(rawVersion)}, parsed=${parsedStr} >= min=${minStr}`,
       );
-      try {
-        ensurePluginHookPolicy({
-          rootConfig: api.config,
-          runtimeConfig: (api.runtime as any)?.config,
-          logger: api.logger,
-        });
-      } catch (err) {
-        api.logger.warn(`${TAG} Hook policy check failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
-      }
+      // Plugin discovery can call register() without running the Gateway.
+      // The host awaits service.start(), so an SDK rejection and its fallback
+      // finish under the Gateway startup lifecycle.
+      api.registerService({
+        id: "memory-tencentdb-hook-policy",
+        async start({ config }) {
+          try {
+            await ensurePluginHookPolicy({
+              rootConfig: config,
+              runtimeConfig: (api.runtime as any)?.config,
+              logger: api.logger,
+            });
+          } catch (err) {
+            api.logger.warn(`${TAG} Hook policy check failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      });
     }
   }
 
