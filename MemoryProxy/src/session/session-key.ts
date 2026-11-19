@@ -4,6 +4,7 @@
  * Shared between handler.ts and anthropicHandler.ts.
  */
 import type { Context } from "hono";
+import { derivePiSessionId, PI_BRANCH_HEADER } from "../agent-adapters/pi.js";
 import { log } from "../report/log.js";
 
 const SESSION_HEADER_PRIORITY = [
@@ -83,7 +84,9 @@ export function resolveConversationId(
 ): string | null {
   const headers: Record<string, string> = {};
   for (const [key, value] of c.req.raw.headers.entries()) headers[key] = value;
-  return extractSessionId(headers, body);
+  const id = extractSessionId(headers, body);
+  if (c.req.param("agent") !== "pi" || headers["x-parent-conversation-id"]?.trim()) return id;
+  return derivePiSessionId(id, headers[PI_BRANCH_HEADER]);
 }
 
 /** Check whether the messages look like a fresh conversation (at most 1 user message, no assistant/tool). */
