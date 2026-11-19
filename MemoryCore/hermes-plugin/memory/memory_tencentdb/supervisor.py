@@ -369,6 +369,29 @@ class GatewaySupervisor:
         )
         return False
 
+    @staticmethod
+    def _terminate_process_tree(proc: subprocess.Popen, grace: float = 10.0, force: bool = False) -> None:
+        """Terminate the whole process tree behind the Gateway wrapper.
+
+        On POSIX the wrapper runs in its own session (start_new_session=True),
+        so killpg reaches the node child. On Windows there is no process group
+        and proc.terminate() only kills the outermost wrapper - the node.exe
+        listener survives and keeps the port (#1381). taskkill /T walks the
+        actual parent-child tree, so it is the reliable kill there.
+        """
+        if os.name == "nt":
+            flag = "/F" if force else ""
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T"] + (["/F"] if force else []),
+                capture_output=True,
+                check=False,
+            )
+            return
+        sig = signal.SIGKILL if force else signal.SIGTERM
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except Exception:
+            proc.kill() if force else proc.terminate()
     def shutdown(self) -> None:
         """Shut down the managed Gateway process (if we started it)."""
         self._shutdown_requested = True
@@ -384,18 +407,12 @@ class GatewaySupervisor:
                 # the whole process group so `pnpm -> tsx -> node server.ts`
                 # does not leave the real listener orphaned after the top-level
                 # wrapper exits.
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except Exception:
-                    proc.terminate()
+                self._terminate_process_tree(proc, grace=10)
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                logger.warning("memory-tencentdb Gateway did not exit in 10s, sending SIGKILL")
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    proc.kill()
+                logger.warning("memory-tencentdb Gateway did not exit in 10s, killing tree")
+                self._terminate_process_tree(proc, force=True)
                 proc.wait(timeout=5)
         except Exception as e:
             logger.warning("Error shutting down memory-tencentdb Gateway: %s", e)
