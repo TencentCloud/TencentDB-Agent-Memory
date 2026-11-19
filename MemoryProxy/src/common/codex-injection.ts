@@ -82,8 +82,8 @@ export interface CodexInjectionInputStructured {
 export type CodexInjectionInput = CodexInjectionInputRaw | CodexInjectionInputStructured;
 
 /**
- * 构建 `<tdai_injections>` wrapper，返回可直接 push 到 codex
- * `body.input[0].content` 数组的 input_text 对象。
+ * 构建 `<tdai_injections>` wrapper，返回包含完整文本的 input_text 对象。
+ * 由调用方放入 Codex Responses 的 system-level `instructions` 字段。
  *
  * - raw 模式：`{raw: "..."}` → 原样嵌入 wrapper 内层，不 escape 不加子 tag
  * - structured 模式：`{skills, memory, ...}` → 每段用对应 tag 包裹 + XML escape，
