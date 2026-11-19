@@ -2,22 +2,21 @@
  * Process-wide byte budget for `/v3/session/add` uploads.
  *
  * A record is serialized when it is submitted, so an in-flight upload holds
- * only its UTF-8 JSON buffer (off the V8 heap), not the turn's message
- * objects. All in-flight payloads
- * share one byte budget; a turn that does not fit is dropped with a log line,
- * since losing a turn is acceptable (session-cos.md §4). An upload keeps its
- * bytes through retry back-off, so an unhealthy Core fills the budget and new
- * turns get dropped.
+ * only its UTF-8 JSON buffer (off the V8 heap), not the call's request and
+ * response objects. All in-flight payloads share one byte budget; a call that
+ * does not fit is dropped with a log line (session-cos.md §5). An upload keeps
+ * its bytes through retry back-off, so an unhealthy Core fills the budget and
+ * new calls get dropped.
  */
 
 import { log } from "../report/log.js";
-import type { SessionTurnBody } from "./record.js";
+import type { SessionCallBody } from "./record.js";
 import {
   prepareSessionUpload,
   sendSessionUpload,
-  type SessionTurnIdentity,
+  type SessionIdentity,
   type SessionUploadOptions,
-  type SessionUploadOutcome,
+  type SessionUploadResult,
   type SessionUploadTarget,
 } from "./uploader.js";
 
@@ -36,25 +35,25 @@ export class SessionUploadQueue {
    */
   submit(
     target: SessionUploadTarget,
-    identity: SessionTurnIdentity,
-    body: SessionTurnBody,
+    identity: SessionIdentity,
+    body: SessionCallBody,
     maxBytes: number,
-  ): Promise<SessionUploadOutcome> {
+  ): Promise<SessionUploadResult> {
     if (this.usedBytes >= maxBytes) {
       this.logOverloaded(maxBytes, { service: identity.serviceId, user: identity.userId, session: identity.sessionId });
-      return Promise.resolve("dropped");
+      return Promise.resolve({ outcome: "dropped" });
     }
     const prepared = prepareSessionUpload(target, identity, body);
-    if (!prepared) return Promise.resolve("dropped");
+    if (!prepared) return Promise.resolve({ outcome: "dropped" });
     if (this.usedBytes + prepared.bytes > maxBytes) {
       this.logOverloaded(maxBytes, { ...prepared.logData, bytes: prepared.bytes });
-      return Promise.resolve("dropped");
+      return Promise.resolve({ outcome: "dropped" });
     }
 
     this.usedBytes += prepared.bytes;
     this.active++;
     return sendSessionUpload(prepared, this.uploadOpts)
-      .catch((): SessionUploadOutcome => "failed")
+      .catch((): SessionUploadResult => ({ outcome: "failed" }))
       .finally(() => {
         this.active--;
         this.usedBytes -= prepared.bytes;
@@ -66,7 +65,7 @@ export class SessionUploadQueue {
   }
 
   private logOverloaded(maxBytes: number, data: Record<string, unknown>): void {
-    log.warn("session-trace:drop_overloaded", {
+    log.warn("【P1】session-trace:drop_overloaded", {
       ...data,
       used_bytes: this.usedBytes,
       max_bytes: maxBytes,

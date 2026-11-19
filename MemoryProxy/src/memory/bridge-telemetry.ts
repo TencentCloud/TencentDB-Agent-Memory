@@ -10,6 +10,37 @@
  *   - body/sub 已由调用方准备好，绝不额外读 session store
  */
 import { writeSkillUsageRow, writeToolCallRow, type SkillUsageLogInput, type ToolCallLogInput } from "../clickhouse.js";
+import { log } from "../report/log.js";
+
+// ── core.auth_failed 日志 ──────────────────────────────────────────────────────
+//
+// proxy→core 内部鉴权失败（401/403）此前零结构化日志（只有全量无级别
+// console.log + 可能消失的 CH 埋点），无法检索/告警。这里补一条 warn，
+// 全局 30s 窗口节流（rate-limit/guard.ts 的 rate_limit.fail_open 同款惯例）：
+// 内部凭证错是全局性问题，持续期间周期重打（可看持续、可计数），防每请求刷屏。
+
+let lastCoreAuthFailedAt = 0;
+
+/**
+ * 记录一次 proxy→core 鉴权失败。同步返回、绝不 throw。
+ * `sub` 为具体接口（如 atomic/search、skill/get），`spaceId`/`serviceId` 按调用方可取到的传。
+ */
+export function logCoreAuthFailed(input: {
+  status: number;
+  sub: string;
+  spaceId?: string;
+  serviceId?: string;
+}): void {
+  const now = Date.now();
+  if (now - lastCoreAuthFailedAt < 30_000) return;
+  lastCoreAuthFailedAt = now;
+  log.warn("【P0】core.auth_failed", {
+    status: input.status,
+    sub: input.sub,
+    ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+    ...(input.serviceId ? { serviceId: input.serviceId } : {}),
+  });
+}
 
 export interface BridgeCallTelemetryInput {
   sessionKey: string;

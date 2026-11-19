@@ -21,11 +21,29 @@ export interface VerifyUserResult {
   rejected: boolean;
   /** Error detail for logging/response when rejected. */
   rejectReason?: string;
+  failureStatus?: 401 | 502 | 503 | 504;
 }
 
 // ── Module state ──────────────────────────────────────────────────────────────
 
 let config: AuthConfig | null = null;
+
+/**
+ * auth.invalid_user_key 日志节流：按 serviceId 维度 30s 窗口（cos-storage 同款）。
+ * 同一把错 key 会每请求都触发 401，不去重会随请求量刷屏；不同实例的错 key
+ * 是独立事件，故按 serviceId 分维度而非全局单时间戳。容量上限防维度膨胀。
+ */
+const invalidUserKeyLoggedAt = new Map<string, number>();
+const INVALID_USER_KEY_LOG_CAP = 1_000;
+
+function logInvalidUserKey(serviceId: string): void {
+  const now = Date.now();
+  const last = invalidUserKeyLoggedAt.get(serviceId);
+  if (last !== undefined && now - last < 30_000) return;
+  if (invalidUserKeyLoggedAt.size >= INVALID_USER_KEY_LOG_CAP) invalidUserKeyLoggedAt.clear();
+  invalidUserKeyLoggedAt.set(serviceId, now);
+  log.warn("【P0】auth.invalid_user_key", { serviceId });
+}
 
 /**
  * Initialize the auth client.
@@ -36,10 +54,8 @@ export function initAuth(cfg: AuthConfig): void {
     config = null;
     return;
   }
-  if (!cfg.url) {
-    log.warn("auth.init.skipped", { reason: "empty url" });
-    config = null;
-    return;
+  if (!cfg.url.trim()) {
+    throw new Error("auth.url is required when auth is enabled");
   }
   config = cfg;
   log.info("auth.init", { url: cfg.url });
@@ -69,9 +85,11 @@ export function isAuthEnabled(): boolean {
  */
 export async function verifyUserKey(userKey: string, serviceId: string): Promise<VerifyUserResult> {
   if (!config) return { userId: "", rejected: false };
-  if (!serviceId) return { userId: "", rejected: true, rejectReason: "missing service_id (spaceId not in request path)" };
-  if (!userKey) return { userId: "", rejected: true, rejectReason: "missing user_key" };
+  if (!serviceId) return { userId: "", rejected: true, failureStatus: 401, rejectReason: "missing service_id (spaceId not in request path)" };
+  if (!userKey) return { userId: "", rejected: true, failureStatus: 401, rejectReason: "missing user_key" };
 
+  let readingResponse = false;
+  const signal = config.timeoutMs > 0 ? AbortSignal.timeout(config.timeoutMs) : undefined;
   try {
     const fetchOpts: RequestInit = {
       method: "POST",
@@ -81,40 +99,35 @@ export async function verifyUserKey(userKey: string, serviceId: string): Promise
       },
       body: JSON.stringify({ user_key: userKey }),
     };
-    if (config.timeoutMs > 0) {
-      fetchOpts.signal = AbortSignal.timeout(config.timeoutMs);
-    }
+    fetchOpts.signal = signal;
 
     const url = config.url.replace(/\/+$/, "") + "/v3/meta/auth/verify";
     const resp = await fetch(url, fetchOpts);
 
     if (!resp.ok) {
       const reason = `auth service returned HTTP ${resp.status}`;
-      log.warn("auth.verify.httpError", { status: resp.status, serviceId });
-      return { userId: "", rejected: true, rejectReason: reason };
+      log.warn("【P0】auth.verify.httpError", { status: resp.status, serviceId });
+      return { userId: "", rejected: true, failureStatus: resp.status === 504 ? 504 : resp.status === 503 ? 503 : 502, rejectReason: reason };
     }
 
+    readingResponse = true;
     const body = await resp.json() as {
       code?: number;
-      data?: { valid?: boolean; user?: { user_id?: string } };
-    };
-
-    // Only accept: code=0 AND valid=true AND user_id present
-    if (body.code === 0 && body.data?.valid === true && body.data.user?.user_id) {
+      data?: { valid?: boolean; user?: { user_id?: unknown } };
+    } | null;
+    if (body?.code === 0 && body.data?.valid === true && typeof body.data.user?.user_id === "string" && body.data.user.user_id.trim()) {
       return { userId: body.data.user.user_id, rejected: false };
     }
-
-    // Everything else is a rejection
-    const reason = body.data?.valid === false
-      ? "invalid user_key"
-      : `unexpected verify response (code=${body.code})`;
-    return { userId: "", rejected: true, rejectReason: reason };
+    if (body?.code === 0 && body.data?.valid === false) {
+      logInvalidUserKey(serviceId);
+      return { userId: "", rejected: true, failureStatus: 401, rejectReason: "invalid user_key" };
+    }
+    return { userId: "", rejected: true, failureStatus: 502, rejectReason: "unexpected verify response" };
   } catch (err: unknown) {
-    const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
-    const reason = isTimeout
-      ? `auth service timeout (${config.timeoutMs}ms)`
-      : `auth service error: ${err instanceof Error ? err.message : String(err)}`;
-    log.warn("auth.verify.error", { error: reason, serviceId });
-    return { userId: "", rejected: true, rejectReason: reason };
+    const isTimeout = signal?.aborted || (err instanceof Error && err.name === "TimeoutError");
+    const failureStatus = isTimeout ? 504 : readingResponse ? 502 : 503;
+    const reason = isTimeout ? "auth service timeout" : readingResponse ? "invalid auth service response" : "auth service unavailable";
+    log.warn("【P0】auth.verify.error", { status: failureStatus, serviceId });
+    return { userId: "", rejected: true, failureStatus, rejectReason: reason };
   }
 }

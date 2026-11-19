@@ -52,7 +52,7 @@ v3 接口按鉴权方式分四层（均需 `Authorization: Bearer <KERNEL_AUTH_T
 | 内部运维面 | `/v3/internal/meta/*` | 仅 Bearer，**不解析** user-key |
 | 实例销毁 | `/v3/instance/destroy` | 仅 Bearer apiKey（v1 风格，运维接口） |
 
-> 隔离字段说明：数据面接口的 `team_id / agent_id / user_id / task_id` 可从 **body 或 Header** 传入（`x-tdai-team-id` / `x-tdai-agent-id` / `x-tdai-user-id` / `x-tdai-task-id`），body 优先。v3 数据面**强制** team + agent + user 三元组隔离（缺省回落到 `default` 桶）。例外：`/v3/session/add` 的隔离字段**只从 Header 取**（`x-tdai-user-id` / `x-tdai-session-id` 必填、`x-tdai-team-id` 可选、无 agent），body 传 `user` / `session` 即拒绝，缺必填 Header 返回 `400`，见该接口说明。
+> 隔离字段说明：数据面接口的 `team_id / agent_id / user_id / task_id` 可从 **body 或 Header** 传入（`x-tdai-team-id` / `x-tdai-agent-id` / `x-tdai-user-id` / `x-tdai-task-id`），body 优先。v3 数据面**强制** team + agent + user 三元组隔离（缺省回落到 `default` 桶）。例外：`/v3/session/add` 的隔离字段**只从 Header 取**（`x-tdai-user-id` / `x-tdai-session-id` 必填、`x-tdai-team-id` 可选、无 agent），body 传 `instance` / `team` / `user` / `session` 即拒绝，缺必填 Header 返回 `400`，见该接口说明。
 
 ### 1.5 错误码语义（数据面通用）
 
@@ -327,19 +327,19 @@ L3 计数（**仅 v3**）。
 
 ### POST /v3/session/add
 
-写入一个会话轮次（一轮 = 用户一次提问 + agent 为它做的全部事情），一次调用写一个对象。在线会话由 MemoryProxy 在轮次结束时调用（`source: online`），冷启动导入逐条调用（`source: offline`）。对象路径与记录格式见 `docs/cos-format.md`，设计说明见 `docs/session-api.md`。
+写入一条会话记录，一次请求写一个对象。在线会话由 MemoryProxy 在每次 LLM 调用结束时调用（`source: online`，一个对象 = 一次调用的请求体与回复），冷启动导入逐条调用（`source: offline`，一个对象 = 一个轮次的末次调用）。对象路径与记录格式见 `docs/cos-format.md`，设计说明见 `docs/session-api.md`。
 
-Core **不做协议转换**，只校验路径段和记录顶层字段，`messages` / `output` 内容原样保存。
+Core **不做协议转换**，只校验路径段和记录顶层字段，`request` / `response` / `messages` / `output` 内容原样保存。
 
 **请求头**（隔离字段只从 Header 取，**不接受 body 传入**，与其它数据面接口不同）
 
 | 名称 | 必填 | 说明 |
 |---|---|---|
 | `Authorization` | 是* | `Bearer <KERNEL_AUTH_TOKEN>`，`apiKey` 未配置时不强制 |
-| `x-tdai-service-id` | 是 | 实例 ID |
+| `x-tdai-service-id` | 是 | 实例 ID，即 online 对象里的 `instance` |
 | `x-tdai-user-id` | 是 | 用户 ID，即对象里的 `user`。未知时传 `unknown` |
 | `x-tdai-session-id` | 是 | 会话 ID，即对象里的 `session`。子 agent 传父会话的 ID |
-| `x-tdai-team-id` | 否 | 团队 ID。缺省或空串时写入 `_unassigned` |
+| `x-tdai-team-id` | 否 | 团队 ID，即 online 对象里的 `team`。缺省或空串时写入 `_unassigned` |
 
 ID 类取值（含 body 中的 `subagent`）会成为路径的一段：非空、不超过 256 字节、不含 `/`、`\` 或控制字符、不等于 `.` / `..`。Core 不做 trim 和转义，不满足返回 `400`。本接口不做用户级鉴权，信任 Bearer + `x-tdai-service-id`。
 
@@ -347,18 +347,34 @@ ID 类取值（含 body 中的 `subagent`）会成为路径的一段：非空、
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| source | string | 是 | `online` \| `offline` |
-| started_at | string | 是 | 本轮开始时刻，固定格式 `YYYY-MM-DDTHH:MM:SS.sssZ`，同时决定文件名 |
-| ended_at | string | 是 | 本轮结束时刻，格式同上 |
+| source | string | 是 | `online` \| `offline`，决定其余字段 |
+| started_at | string | 是 | 开始时刻，固定格式 `YYYY-MM-DDTHH:MM:SS.sssZ`，同时决定文件名 |
+| ended_at | string | 是 | 结束时刻，格式同上 |
+| model | string | 是 | 调用的模型，非空 |
+| subagent | string | 否 | 子 agent 的 ID，仅子 agent 的记录传；出现时必须是非空串，不能是 `null` |
+
+`source: online` 另有（cos-format.md §4.2）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| agent | string | 是 | 客户端 agent，非空；URL 不带 agent 时为 `unknown` |
+| protocol | string | 是 | `anthropic` \| `openai` \| `responses` |
+| status | integer | 是 | 上游 HTTP 状态码，非负整数，没拿到响应时为 `0` |
+| request_id | string | 否 | 调用方的请求 ID；出现时必须是非空串 |
+| request | object | 是 | 发往上游的请求体，内容不校验 |
+| response | object \| string | 是 | 上游回复，内容不校验 |
+
+`source: offline` 另有（cos-format.md §3.2）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
 | user_query | string | 是 | 本轮用户提问（纯文本），可以为空串 |
-| model | string | 是 | 本轮末次调用的模型，非空 |
 | messages | array | 是 | 本轮末次调用发出的消息数组，至少一条，内容不校验 |
 | output | object | 是 | 本轮末次调用的模型回复，内容不校验 |
-| subagent | string | 否 | 子 agent 的 ID，仅子 agent 的轮次传；出现时必须是非空串，不能是 `null` |
 
-不接受上表以外的字段，传 `user` / `session` 同样拒绝。
+不接受该来源以外的字段，传 `instance` / `team` / `user` / `session` 同样拒绝。
 
-**落盘**：body 去掉 `source`，补上 Header 里的 `user` / `session`，序列化为 UTF-8 JSON，同步写入实例根目录下的：
+**落盘**：body 去掉 `source`，补上 Header 里的身份字段（online 为 `instance` / `team` / `user` / `session`，offline 为 `user` / `session`），序列化为 UTF-8 JSON，同步写入实例根目录下的：
 
 ```
 sessions/<source>/<team-id>/<user-id>/<session-id>/<started-at>-<id>.json
@@ -384,7 +400,7 @@ sessions/<source>/<team-id>/<user-id>/<session-id>/subagents/<subagent-id>/<star
 | 401 | 鉴权失败 |
 | 413 | 请求体超过上限 |
 | 415 | 不支持的 `Content-Encoding`（支持 gzip / deflate） |
-| 422 | body 不是 JSON 对象，必填字段缺失、类型或格式错误，含未定义字段或 `user` / `session` |
+| 422 | body 不是 JSON 对象，必填字段缺失、类型或格式错误，含未定义字段或 `instance` / `team` / `user` / `session` |
 | 503 | 存储不可用（COS 凭证 / 网络异常，本地磁盘写失败），可重试 |
 | 500 | 内部错误 |
 
@@ -398,12 +414,14 @@ sessions/<source>/<team-id>/<user-id>/<session-id>/subagents/<subagent-id>/<star
 // Header: x-tdai-session-id: 8df5f09b4c614ed19f49697201c39b0b
 {
   "source": "online",
+  "agent": "codebuddy",
   "started_at": "2026-06-11T02:18:20.359Z",
-  "ended_at": "2026-06-11T02:18:47.945Z",
-  "user_query": "怎样将当前二进制发布到机器 10.0.0.1",
+  "ended_at": "2026-06-11T02:18:23.102Z",
+  "protocol": "openai",
   "model": "deepseek-v4-flash-ioa",
-  "messages": [ { "role": "user", "content": "怎样将当前二进制发布到机器 10.0.0.1" } ],
-  "output": { "role": "assistant", "content": "发布步骤如下：…" }
+  "status": 200,
+  "request": { "model": "deepseek-v4-flash-ioa", "messages": [ { "role": "user", "content": "怎样将当前二进制发布到机器 10.0.0.1" } ] },
+  "response": { "object": "chat.completion", "choices": [ { "index": 0, "finish_reason": "stop", "message": { "role": "assistant", "content": "发布步骤如下：…" } } ] }
 }
 
 // 响应

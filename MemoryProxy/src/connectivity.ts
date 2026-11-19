@@ -60,7 +60,7 @@ export async function checkConnectivity(config: ProxyConfig): Promise<void> {
   if (allOk) {
     log.info("connectivity.check", { result: "all_ok", ...summary });
   } else {
-    log.warn("connectivity.check", { result: "some_failed", ...summary });
+    log.warn("【P1】connectivity.check", { result: "some_failed", ...summary });
   }
 }
 

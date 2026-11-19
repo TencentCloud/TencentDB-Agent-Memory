@@ -7,11 +7,17 @@
  */
 
 import type { MemoryPromptMode } from "../../config.js";
+import { renderL3TemplateSlot, type TemplateRenderContext } from "../memory-prompt/template.js";
 
 export interface PersonaPromptParams {
   mode: "first" | "incremental";
   /** Prompt family for L3 generation (default: chat). */
   promptMode?: MemoryPromptMode;
+  /**
+   * Tenant output template (custom memory prompt in template mode).
+   * When absent the system prompt is byte-identical to the built-in one.
+   */
+  template?: TemplateRenderContext;
   currentTime: string;
   totalProcessed: number;
   sceneCount: number;
@@ -264,6 +270,35 @@ const TEAM_MEMORY_SYSTEM_PROMPT = `# Team Operating Doctrine Architect
 - ✅ 只操作 \`persona.md\``;
 
 // ============================
+// Template mode: replace built-in output-template slot (to end of prompt)
+// ============================
+
+const L3_TEMPLATE_SUBSTITUTIONS: Record<MemoryPromptMode, Array<[string, string]>> = {
+  chat: [
+    [
+      "`persona.md` 的所有自然语言内容（Archetype、基本信息、Chapter 1-4 正文等）使用与变化场景内容相同的语言；Markdown 语法、标签格式、文件名 `persona.md` 保持英文。模板里 Chapter 标识保留作骨架，非中文输出时请改用目标语言的对照说明。",
+      "`persona.md` 的正文内容使用与变化场景内容相同的语言；输出模板中的标题与标签保持原样；文件名 `persona.md` 保持英文。",
+    ],
+  ],
+  code: [],
+};
+
+const L3_OUTPUT_TEMPLATE_START = /^## (?:📝 )?输出模板/m;
+
+/** Apply the tenant template to a built-in L3 system prompt. Throws if slot anchor is missing. */
+export function applyL3Template(
+  base: string,
+  template: TemplateRenderContext,
+  promptMode: MemoryPromptMode = "chat",
+): string {
+  let out = base;
+  for (const [from, to] of L3_TEMPLATE_SUBSTITUTIONS[promptMode]) out = out.replace(from, () => to);
+  const match = L3_OUTPUT_TEMPLATE_START.exec(out);
+  if (!match) throw new Error("persona-generation: output-template slot anchor not found");
+  return `${out.slice(0, match.index)}${renderL3TemplateSlot(template, promptMode)}`;
+}
+
+// ============================
 // User Prompt builder (dynamic data)
 // ============================
 
@@ -271,6 +306,7 @@ export function buildPersonaPrompt(params: PersonaPromptParams): PersonaPromptRe
   const {
     mode,
     promptMode = "chat",
+    template,
     currentTime,
     totalProcessed,
     sceneCount,
@@ -322,8 +358,9 @@ ${changedScenesContent}
 ${existingPersonaSection}
 ${iterationGuide}`;
 
+  const baseSystemPrompt = isCodeMode ? TEAM_MEMORY_SYSTEM_PROMPT : PERSONA_SYSTEM_PROMPT;
   return {
-    systemPrompt: isCodeMode ? TEAM_MEMORY_SYSTEM_PROMPT : PERSONA_SYSTEM_PROMPT,
+    systemPrompt: template ? applyL3Template(baseSystemPrompt, template, promptMode) : baseSystemPrompt,
     userPrompt,
   };
 }

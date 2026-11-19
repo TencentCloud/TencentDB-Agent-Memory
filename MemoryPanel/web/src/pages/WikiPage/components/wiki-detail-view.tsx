@@ -43,6 +43,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
     setSubView,
     fetchSources,
     displayIngestState,
+    resumeIngestPolling,
     ingestCardCleared,
     setIngestCardCleared,
     activeTab,
@@ -186,13 +187,25 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
               <div className="_wiki-detail-ingest">
                 <div className="_wiki-detail-ingest-head">
                   <Text className="_wiki-detail-ingest-title">
-                    {displayIngestState.active ? (
+                    {displayIngestState.paused ? (
+                      // 暂停：不再转圈（转圈会让用户以为还在自动检查），
+                      // 改成明确的"已停止"图标，配合下方文案与「重新检查」。
+                      <CloseCircleIcon size={14} />
+                    ) : displayIngestState.active ? (
                       <LoadingIcon size={14} />
                     ) : (
                       <CheckCircleIcon size={14} />
                     )}{' '}
                     {t('wiki.detail.ingestTitle', { name: displayIngestState.wiki })}
                   </Text>
+                  {displayIngestState.paused && (
+                    <Button
+                      type="text"
+                      onClick={() => resumeIngestPolling(displayIngestState.wikiId)}
+                    >
+                      {t('wiki.detail.recheck')}
+                    </Button>
+                  )}
                   {!displayIngestState.active && (
                     <Button
                       type="text"

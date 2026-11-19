@@ -19,6 +19,7 @@
  */
 
 import type { CoreSkillConfig } from "../types.js";
+import { DependencyError, dependencyStatus, upstreamFailure } from "../common/dependency-error.js";
 
 type Fetcher = typeof fetch;
 
@@ -651,24 +652,20 @@ export class MetadataClient {
         signal: AbortSignal.timeout(this.defaultTimeoutMs),
       });
     } catch (err) {
-      throw new Error(`${TAG} ${path} fetch failed: ${(err as Error).message}`);
+      throw new DependencyError(dependencyStatus(err, 503), `${TAG} ${path} fetch failed`);
     }
 
-    if (!resp.ok) {
-      let detail = "";
-      try {
-        detail = await resp.text();
-      } catch { /* ignore */ }
-      console.log(
-        `[wb-debug] metadata-client req path=${path} status=${resp.status} url=${url} serviceId=${this.serviceId} userKey.len=${this.userKey?.length ?? 0} userKey.prefix=${(this.userKey ?? "").slice(0, 20)} serviceToken.len=${this.serviceToken?.length ?? 0} body.len=${detail.length} body.head=${detail.slice(0, 300)}`,
-      );
-      throw new Error(`${TAG} ${path} HTTP ${resp.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+    if (!resp.ok) throw upstreamFailure(resp.status);
+
+    let env: CoreEnvelope<T>;
+    try {
+      env = (await resp.json()) as CoreEnvelope<T>;
+    } catch (err) {
+      throw new DependencyError(dependencyStatus(err), `${TAG} ${path} non-JSON response`);
     }
-
-    const env = (await resp.json()) as CoreEnvelope<T>;
-
+    if (!env || typeof env.code !== "number") throw new DependencyError(502, `${TAG} ${path} invalid envelope`);
     if (env.code !== 0) {
-      throw new Error(`${TAG} ${path} envelope error ${env.code}: ${env.message ?? ""}`);
+      throw new DependencyError(upstreamFailure(env.code).status, `${TAG} ${path} envelope error ${env.code}`);
     }
 
     if (env.data === null || env.data === undefined) {

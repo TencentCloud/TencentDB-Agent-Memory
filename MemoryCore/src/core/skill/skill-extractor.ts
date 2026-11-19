@@ -185,7 +185,7 @@ export class SkillExtractor {
         });
       } catch (e) {
         // list 挂 → 后续分支也没数据可用, 直接进 none 分支。
-        this.logger?.warn(`${TAG} prefix list failed: ${(e as Error).message}`);
+        this.logger?.warn(`【P2】${TAG} prefix list failed: ${(e as Error).message}`);
       }
       if (recentPage && recentPage.items.length > 0) {
         if (recentPage.total <= this.prefixSkillsLimit) {
@@ -202,7 +202,7 @@ export class SkillExtractor {
               prefixQuery = relevant.query;
             }
           } catch (e) {
-            this.logger?.warn(`${TAG} buildRelevantSkillsBlock failed: ${(e as Error).message}`);
+            this.logger?.warn(`【P2】${TAG} buildRelevantSkillsBlock failed: ${(e as Error).message}`);
           }
           if (!prefixBlock) {
             // Case recent: relevant 失败, 用一开始拿到的 top-N 兜底, 附带
@@ -293,7 +293,7 @@ export class SkillExtractor {
       // 一条 warn 汇总失败，包含 task_id / err_name / dur —— Worker 侧再按分类
       // (transient / permanent) 决定 requeue 还是 DLQ。这里不吞异常。
       const dur = Date.now() - t0;
-      obsLogger.warn("skill.extractor.extract", {
+      obsLogger.warn("【P2】skill.extractor.extract", {
         task_id: input.task_id,
         dur_ms: dur,
         msg_count: messages.length,
@@ -386,7 +386,7 @@ export class SkillExtractor {
         top_k: this.prefixSkillsLimit,
       });
     } catch (e) {
-      this.logger?.warn(`${TAG} relevant search failed for query='${query}': ${(e as Error).message}`);
+      this.logger?.warn(`【P2】${TAG} relevant search failed for query='${query}': ${(e as Error).message}`);
       return null;
     }
     if (!hits.length) return null;
@@ -628,7 +628,7 @@ export function createExtractorAdapter(
       const agentId = (input as { agent_id?: string }).agent_id;
       if (!agentId) {
         logger?.warn(
-          `${TAG} V2 adapter: input.agent_id missing — skipping extract (returns empty candidates)`,
+          `【P2】${TAG} V2 adapter: input.agent_id missing — skipping extract (returns empty candidates)`,
         );
         return { candidates: [] };
       }

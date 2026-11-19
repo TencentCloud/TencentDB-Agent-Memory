@@ -1574,33 +1574,40 @@ async function handleSessionInitInner(
       // 逻辑与本文件 line 1135-1193 (asset_confirm choice===true 且 1-team 单 team) 完全对称;
       // 与 CC advanceFromTeamPicked (session/claude-code/init.ts:220-285) 语义一致。
       //
-      // CB 老一发同问路径 (useSplitStage=false) 不进这段, 因为 CB 老 form 不做断言,
-      // agent 只有 1 个时正常弹只列该 agent 的 agent_task form。
+      // CB 老一发同问路径 (useSplitStage=false) 不进"单 agent 自动选"分支, 因为 CB
+      // 老 form 不做断言, agent 只有 1 个时正常弹只列该 agent 的 agent_task form.
+      // 但 agents=0 这条必须对 **所有** 客户端生效 —— CB 老路径的 agent_task form
+      // 在 agents=0 时会退化成只问 task 的 form (form.ts:164 agent 题前有 length>0 gate),
+      // 而 extractFromOptionText 又严格要求 agent+task 双命中, 用户必然卡 3 次 retry
+      // (TAPD bug 1070195170166095423, 现场见 docs/… 或测试
+      // src/__tests__/session/codebuddy-team-no-agents.test.ts).
       const selectedTeam = cachedTeamsForMore.find((t) => t.team_id === teamId);
-      if (useSplitStage && selectedTeam && selectedTeam.agents.length <= 1) {
-        // 分支 A: agents.length === 0 → bypass (team 无 agent, 无法建立绑定)
-        if (selectedTeam.agents.length === 0) {
-          await store.set(compositeKey, {
-            ...state,
-            status: "initialized",
-            selectedTeamId: teamId,
-            sessionInfo: null,
-            agentDetail: null,
-            taskDetail: null,
-            bypassed: true,
-          } as SessionInitState);
-          console.log(
-            `[session-init:cb] session=${compositeKey} team=${teamId} has 0 agents → bypass`,
-          );
-          return {
-            intercepted: false,
-            messages: messages as Record<string, unknown>[],
-            bypassed: true,
-            justRegistered: true,
-            resetFlow: state?.resetFlow ?? false,
-          };
-        }
+      // 分支 A: agents.length === 0 → bypass (team 无 agent, 无法建立绑定).
+      // CC advanceFromTeamPicked (claude-code/init.ts:237) 对应镜像. 对所有客户端生效,
+      // 不门控 useSplitStage, 覆盖 CB 老路径这条 TAPD 现场.
+      if (selectedTeam && selectedTeam.agents.length === 0) {
+        await store.set(compositeKey, {
+          ...state,
+          status: "initialized",
+          selectedTeamId: teamId,
+          sessionInfo: null,
+          agentDetail: null,
+          taskDetail: null,
+          bypassed: true,
+        } as SessionInitState);
+        console.log(
+          `[session-init:cb] session=${compositeKey} team=${teamId} has 0 agents → bypass`,
+        );
+        return {
+          intercepted: false,
+          messages: messages as Record<string, unknown>[],
+          bypassed: true,
+          justRegistered: true,
+          resetFlow: state?.resetFlow ?? false,
+        };
+      }
 
+      if (useSplitStage && selectedTeam && selectedTeam.agents.length <= 1) {
         // 分支 B: agents.length === 1 → auto-select agent, 级联判 task
         const soloAgent = selectedTeam.agents[0];
         const nextState: SessionInitState = {

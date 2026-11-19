@@ -1,66 +1,75 @@
 /**
- * Turn-end judgment and the `/v3/session/add` request body.
+ * The `/v3/session/add` request body of one online LLM call
+ * (MemoryCore/docs/cos-format.md, online call record).
  *
- * Only the call that ends a turn is recorded (session-cos.md §1, §4): the
- * reply carries a stop signal and asks for no further tool calls. Judging on
- * "no tool call" rather than one specific value keeps truncated turns
- * (`length` / `max_tokens`) in. A reply without any stop signal is an
- * interrupted stream and is not recorded.
+ * Every call is recorded as it happened: the body sent upstream and the reply
+ * the upstream gave, nothing filtered or rewritten. Turns, user queries and
+ * system prompts are left for downstream to derive.
  */
 
-import type { ModelReply } from "./assemble.js";
-import type { SessionProtocol } from "./messages.js";
-import { stripSystemMessages } from "./messages.js";
+export type SessionProtocol = "openai" | "anthropic" | "responses";
 
-const TOOL_STOP_REASONS: Record<SessionProtocol, ReadonlySet<string>> = {
-  openai: new Set(["tool_calls", "function_call"]),
-  anthropic: new Set(["tool_use", "pause_turn"]),
-  responses: new Set(),
-};
-
-const RESPONSES_TERMINAL_STATUSES = new Set(["completed", "incomplete"]);
-
-export function isTurnEnd(protocol: SessionProtocol, reply: ModelReply): boolean {
-  if (reply.stopReason === null || reply.toolCallCount > 0) return false;
-  if (protocol === "responses") return RESPONSES_TERMINAL_STATUSES.has(reply.stopReason);
-  return !TOOL_STOP_REASONS[protocol].has(reply.stopReason);
-}
-
-export interface SessionTurnBody {
+export interface SessionCallBody {
   source: "online";
+  agent: string;
   started_at: string;
   ended_at: string;
-  user_query: string;
+  protocol: SessionProtocol;
   model: string;
-  messages: unknown[];
-  output: Record<string, unknown>;
+  /** Upstream HTTP status; 0 when no response was received. */
+  status: number;
+  trace_id?: string;
+  upstream_request_id?: string;
+  request: Record<string, unknown>;
+  response: Record<string, unknown> | string;
   subagent?: string;
+  /** One entry per remote compression call made while preparing `request`. */
+  compression_observations?: Record<string, unknown>[];
 }
 
-export interface TurnBodyInput {
+export interface CallBodyInput {
+  agent: string;
   startedAt: string;
   endedAt: string;
-  userQuery: string;
+  protocol: SessionProtocol;
   model: string;
-  /** The message array sent upstream, system messages included. */
-  messages: unknown[];
-  reply: ModelReply;
+  status: number;
+  traceId?: string;
+  upstreamRequestId?: string;
+  request: Record<string, unknown>;
+  response: Record<string, unknown> | string;
   subagentId?: string;
+  compressionObservations?: Record<string, unknown>[];
 }
 
-/** Returns null when nothing is left after dropping system / developer messages. */
-export function buildTurnBody(input: TurnBodyInput): SessionTurnBody | null {
-  const messages = stripSystemMessages(input.messages);
-  if (messages.length === 0) return null;
-  const body: SessionTurnBody = {
+export function buildCallBody(input: CallBodyInput): SessionCallBody {
+  const body: SessionCallBody = {
     source: "online",
+    agent: input.agent,
     started_at: input.startedAt,
     ended_at: input.endedAt,
-    user_query: input.userQuery,
+    protocol: input.protocol,
     model: input.model,
-    messages,
-    output: input.reply.output,
+    status: input.status,
+    request: input.request,
+    response: input.response,
   };
+  if (input.traceId) body.trace_id = input.traceId;
+  if (input.upstreamRequestId) body.upstream_request_id = input.upstreamRequestId;
   if (input.subagentId) body.subagent = input.subagentId;
+  if (input.compressionObservations?.length) body.compression_observations = input.compressionObservations;
   return body;
+}
+
+/** An upstream body as stored: the parsed JSON object, or the raw text when it is not one. */
+export function responseFromText(text: string): Record<string, unknown> | string {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // not JSON — keep the text
+  }
+  return text;
 }

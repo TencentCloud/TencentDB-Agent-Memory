@@ -337,7 +337,7 @@ export async function requireWecomIdentity(
     // CK is an attribution dependency, not a traffic dependency. Preserve the
     // pre-feature behaviour when it is unavailable; Opik/Langfuse fall back
     // to the existing keyId dimension for this request.
-    log.warn("wecom_identity.lookup_failed_open", {
+    log.warn("【P2】wecom_identity.lookup_failed_open", {
       error: error instanceof Error ? error.message : String(error),
     });
     return { kind: "resolved", name: "" };
@@ -368,7 +368,7 @@ export async function requireWecomIdentity(
       // 428, so the user still gets an input field.
       return { kind: "intercept", response: formResponse(protocol, body.stream === true) };
     }
-    log.warn("wecom_identity.answer_too_long", {
+    log.warn("【P2】wecom_identity.answer_too_long", {
       source: submitted.source,
       answerLength: name.length,
       maxNameLength,
@@ -396,7 +396,7 @@ export async function requireWecomIdentity(
   } catch (error) {
     // The user did provide a valid name. Use it for this request even when CK
     // cannot persist it; a later request will retry the normal CK lookup.
-    log.warn("wecom_identity.save_failed_open", {
+    log.warn("【P2】wecom_identity.save_failed_open", {
       error: error instanceof Error ? error.message : String(error),
     });
     return { kind: "resolved", name };

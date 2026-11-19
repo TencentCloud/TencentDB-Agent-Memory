@@ -30,6 +30,11 @@ export interface PutObjectOptions {
   metadata?: Record<string, string>;
   /** Object tags used by COS lifecycle rules. Ignored by local filesystem storage. */
   tags?: Record<string, string>;
+  /**
+   * Once aborted, the backend gives up the write and rejects with `signal.reason`.
+   * A write already on the wire may still land. Backends that cannot cancel may ignore it.
+   */
+  signal?: AbortSignal;
 }
 
 /** A retrieved storage object. */

@@ -75,6 +75,42 @@ export interface PersonaConfig {
   triggerEveryN: number;
   /** Max scene blocks (default: 20) */
   maxScenes: number;
+  /**
+   * Max bytes for a single scene block file (default: 262144 = 256KB).
+   *
+   * Scene count alone cannot bound prompt size: once the count ceiling is hit
+   * the LLM is told "UPDATE only, no CREATE", so every new memory is appended
+   * into existing files and they grow without bound (observed: 3.2MB files
+   * producing 459K-char prompts and 100s+ LLM calls).
+   *
+   * This limit is enforced in two places:
+   *   1. Prompt — oversized scenes are listed and the LLM is told to compact
+   *      them instead of appending.
+   *   2. Write-back — an update that grows an already-oversized scene is
+   *      rejected and the previous content is restored, so a misbehaving LLM
+   *      cannot blow past the budget.
+   */
+  maxSceneBytes: number;
+  /**
+   * L2 scene-extraction LLM timeout in milliseconds (default: 480000 = 8 min).
+   *
+   * Scene extraction runs a multi-step tool-calling agent over every scene
+   * file, so it needs a longer budget than single-shot calls (llm.timeoutMs).
+   * Large scenes routinely exceeded the former 5-minute hard-coded limit.
+   * The worker renews its lock and PEL claim during execution, so this may
+   * exceed worker.lockTtlMs; it only bounds a single LLM run.
+   */
+  sceneTimeoutMs: number;
+  /**
+   * Max L1 records fed into a single L2 run (default: 200).
+   *
+   * A backlog (e.g. L2 stalled for days) used to be sent to the LLM in one
+   * prompt, which then timed out on every retry. Records beyond this limit
+   * are left past the cursor and drained by an immediately re-enqueued L2.
+   */
+  l2MaxRecordsPerRun: number;
+  /** Max total L1 content characters per L2 run (default: 60000). At least one record is always taken. */
+  l2MaxCharsPerRun: number;
   /** Persona backup count (default: 3) */
   backupCount: number;
   /** Scene blocks backup count (default: 10) */
@@ -662,6 +698,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     persona: {
       triggerEveryN: num(personaGroup, "triggerEveryN") ?? 50,
       maxScenes: num(personaGroup, "maxScenes") ?? 15,
+      maxSceneBytes: num(personaGroup, "maxSceneBytes") ?? 262144,
+      sceneTimeoutMs: num(personaGroup, "sceneTimeoutMs") ?? 480_000,
+      l2MaxRecordsPerRun: Math.max(1, num(personaGroup, "l2MaxRecordsPerRun") ?? 200),
+      l2MaxCharsPerRun: Math.max(1, num(personaGroup, "l2MaxCharsPerRun") ?? 60_000),
       backupCount: num(personaGroup, "backupCount") ?? 3,
       sceneBackupCount: num(personaGroup, "sceneBackupCount") ?? 10,
       model: optStr(personaGroup, "model"),

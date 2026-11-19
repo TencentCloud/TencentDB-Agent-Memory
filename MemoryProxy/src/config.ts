@@ -70,6 +70,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     flushIntervalMs: 5000,
     flushThreshold: 50,
     ttlDays: 0,
+    cluster: "",
   },
   wecomIdentity: {
     enabled: false,
@@ -360,6 +361,13 @@ export function buildConfig(
       forwardTimeoutMs:
         yaml.server?.forwardTimeoutMs ??
         DEFAULT_CONFIG.server.forwardTimeoutMs,
+      // 缺省交给 installUpstreamDispatcher 取默认值（30min / 10min）。
+      ...(yaml.server?.upstreamBodyTimeoutMs !== undefined
+        ? { upstreamBodyTimeoutMs: yaml.server.upstreamBodyTimeoutMs }
+        : {}),
+      ...(yaml.server?.upstreamHeadersTimeoutMs !== undefined
+        ? { upstreamHeadersTimeoutMs: yaml.server.upstreamHeadersTimeoutMs }
+        : {}),
     },
     upstream: {
       url:
@@ -417,6 +425,7 @@ export function buildConfig(
       flushIntervalMs: yaml.clickhouse?.flushIntervalMs ?? DEFAULT_CONFIG.clickhouse.flushIntervalMs,
       flushThreshold: yaml.clickhouse?.flushThreshold ?? DEFAULT_CONFIG.clickhouse.flushThreshold,
       ttlDays: yaml.clickhouse?.ttlDays ?? DEFAULT_CONFIG.clickhouse.ttlDays,
+      cluster: yaml.clickhouse?.cluster ?? DEFAULT_CONFIG.clickhouse.cluster,
     },
     wecomIdentity: {
       enabled: yaml.wecomIdentity?.enabled ?? defaultWecomIdentity.enabled,

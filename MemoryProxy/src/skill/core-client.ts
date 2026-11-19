@@ -24,6 +24,8 @@
  */
 
 import type { CoreSkillConfig } from "../types.js";
+import { DependencyError, dependencyStatus, upstreamFailure } from "../common/dependency-error.js";
+import { logCoreAuthFailed } from "../memory/bridge-telemetry.js";
 
 type Fetcher = typeof fetch;
 
@@ -434,24 +436,27 @@ export class CoreSkillClient {
         signal: AbortSignal.timeout(timeout),
       });
     } catch (err) {
-      throw new Error(`${TAG} ${path} fetch failed: ${(err as Error).message}`);
+      throw new DependencyError(dependencyStatus(err, 503), `${TAG} ${path} fetch failed`);
     }
 
     if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      throw new Error(`${TAG} ${path} HTTP ${resp.status}: ${text.slice(0, 200)}`);
+      // core 拒绝（内部鉴权失败）→ 结构化 warn；抛错/降级行为不变
+      if (resp.status === 401 || resp.status === 403) {
+        logCoreAuthFailed({ status: resp.status, sub: path, serviceId: opts.serviceId || this.serviceId });
+      }
+      throw upstreamFailure(resp.status);
     }
 
     let env: CoreEnvelope<T>;
     try {
       env = (await resp.json()) as CoreEnvelope<T>;
     } catch (err) {
-      throw new Error(`${TAG} ${path} non-JSON response: ${(err as Error).message}`);
+      throw new DependencyError(dependencyStatus(err), `${TAG} ${path} non-JSON response`);
     }
 
+    if (!env || typeof env.code !== "number") throw new DependencyError(502, `${TAG} ${path} invalid envelope`);
     if (env.code !== 0) {
-      const msg = env.error?.message ?? env.message ?? `code=${env.code}`;
-      throw new Error(`${TAG} ${path} envelope error ${env.code}: ${msg}`);
+      throw new DependencyError(upstreamFailure(env.code).status, `${TAG} ${path} envelope error ${env.code}`);
     }
 
     return (env.data ?? ({} as T));

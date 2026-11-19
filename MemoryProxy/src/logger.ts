@@ -91,7 +91,7 @@ function writeLogNow(config: ProxyConfig, entry: LogEntry): void {
   ensureDir(dir)
     .then(() => appendFile(logPath, line, "utf-8"))
     .catch((err: unknown) => {
-      log.error("usage_log.write_failed", { path: logPath }, err instanceof Error ? err : new Error(String(err)));
+      log.error("【P2】usage_log.write_failed", { path: logPath }, err instanceof Error ? err : new Error(String(err)));
     });
 }
 
@@ -293,8 +293,18 @@ export function createPipeline(
 
     error(stage, err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.error("pipeline.error", { ...ids(), stage, error: msg }, err instanceof Error ? err : new Error(msg));
-      pipeLog(`  ✗ ${stage}`, msg);
+      // undici 把超时、对端断开都包成 `TypeError: terminated`，真正原因在 cause 里
+      // （BodyTimeoutError / SocketError: other side closed ...）。
+      const rawCause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+      const cause = rawCause instanceof Error
+        ? `${(rawCause as Error & { code?: string }).code ?? rawCause.name}: ${rawCause.message}`
+        : rawCause !== undefined && rawCause !== null ? String(rawCause) : undefined;
+      log.error(
+        "【P0】pipeline.error",
+        { ...ids(), stage, error: msg, ...(cause ? { cause } : {}) },
+        err instanceof Error ? err : new Error(msg),
+      );
+      pipeLog(`  ✗ ${stage}`, cause ? `${msg} (cause: ${cause})` : msg);
     },
 
     summary() {

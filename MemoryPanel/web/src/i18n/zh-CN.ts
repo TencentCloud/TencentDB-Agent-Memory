@@ -681,7 +681,8 @@ export const zhCN = {
 
   // ===== ImportSkillDialog =====
   'importSkill.caption': '导入 Skill',
-  'importSkill.hint': '上传 SKILL.md 目录，或粘贴一段对话让系统自动提炼出 skill。',
+  'importSkill.hint':
+    '上传 SKILL.md 目录、一个或多个 Skill 压缩包，或粘贴一段对话让系统自动提炼出 skill。',
   'importSkill.agent': '归属 Agent（必选）',
   'importSkill.agent.extra':
     'Skill 将作为该 agent 的固定资产 —— 仅当 task 关联了该 agent 时才会被加载。',
@@ -689,6 +690,7 @@ export const zhCN = {
   'importSkill.agent.noAgent':
     '当前 team 暂无 agent，无法导入。请先到团队管理中创建至少一个 agent。',
   'importSkill.mode.directory': '目录导入',
+  'importSkill.mode.zip': '压缩包导入',
   'importSkill.mode.session': '对话导入',
   'importSkill.directory.label': '选择本地目录（应包含 SKILL.md 和可选的 files/ 子目录）',
   'importSkill.directory.selectFile': '选择文件夹',
@@ -698,6 +700,40 @@ export const zhCN = {
   'importSkill.directory.resources': '资源文件：{{count}} 个',
   'importSkill.directory.warning':
     '目录中找不到 SKILL.md。请确保至少有一个 SKILL.md 在根目录或 <skill-name>/ 下。',
+  'importSkill.zip.label': '选择压缩包（.zip，可多选；一个压缩包 = 一个 Skill）',
+  'importSkill.zip.multiHint':
+    '支持一次选择多个 .zip。包内目录结构需与目录导入一致：SKILL.md 在压缩包根目录或 <skill-name>/ 下，其余文件作为资源文件导入。单个包对应一个 Skill，包含多个 SKILL.md 的包会被跳过。',
+  'importSkill.zip.dropHint': '将 .zip 压缩包拖拽到此处，或点击下方按钮选择（可多选）',
+  'importSkill.zip.selectFile': '选择压缩包',
+  'importSkill.zip.clear': '清空',
+  'importSkill.zip.picked': '已选择 {{count}} 个压缩包',
+  'importSkill.zip.parsing': '解析中…',
+  'importSkill.zip.ready': '{{count}} 个资源文件，结构校验通过',
+  'importSkill.zip.invalid': '结构校验未通过',
+  'importSkill.zip.submit': '导入 {{count}} 个 Skill',
+  'importSkill.zip.done': '完成',
+  'importSkill.zip.summary': '导入完成：成功 {{ok}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个',
+  'importSkill.zip.result.ok': '{{count}} 个资源文件',
+  'importSkill.zip.result.skipped': '已跳过：{{reason}}',
+  'importSkill.zip.result.failed': '导入失败：{{reason}}',
+  'importSkill.zip.error.notZip': '不是有效的 .zip 压缩包',
+  'importSkill.zip.error.empty': '压缩包内没有文件',
+  'importSkill.zip.error.noSkillMd':
+    '压缩包内未找到 SKILL.md（需位于根目录或 <skill-name>/ 下）',
+  'importSkill.zip.error.noFrontmatter':
+    'SKILL.md 缺少 YAML frontmatter（文件需以 --- 开头的 name/description 块开始）',
+  'importSkill.zip.error.noDescription': 'SKILL.md 的 frontmatter 缺少必填字段 description',
+  'importSkill.zip.error.invalidName':
+    'SKILL.md 的 name「{{name}}」不合法（只能是小写字母/数字/连字符，且以字母或数字开头，最长 64 字符）',
+  'importSkill.zip.error.bodyTooLong': 'SKILL.md 正文超过 {{size}} 字符上限',
+  'importSkill.zip.error.multiSkill':
+    '压缩包内包含多个 SKILL.md，一个压缩包只能对应一个 Skill，请拆分后重试',
+  'importSkill.zip.error.unsafePath': '压缩包内存在非法路径（绝对路径或包含 ".."）：{{path}}',
+  'importSkill.zip.error.tooLarge': '压缩包超过 {{size}} 上限',
+  'importSkill.zip.error.totalTooLarge':
+    '解压后总大小超过 {{size}} 上限（受接口请求体限制）。请精简资源文件后重新打包。',
+  'importSkill.zip.error.tooManyEntries': '压缩包内文件数量超过 {{count}} 个上限',
+  'importSkill.zip.error.noReady': '没有结构校验通过的压缩包，请检查包内是否包含 SKILL.md。',
   'importSkill.session.hintPrefix':
     '粘贴一段与该 agent 的对话，系统会自动从中提炼可复用的 skill 沉淀到该 agent 下。对话 JSON 需包含 ',
   'importSkill.session.hintSuffix': ' 数组。',
@@ -715,6 +751,8 @@ export const zhCN = {
   'importSkill.error.tooManyMessages':
     '对话消息过多（{{count}} 条），接口最多支持 500 条，请删减后重试。',
   'importSkill.error.noMainFile': '请选择包含 SKILL.md 的目录。',
+  'importSkill.error.payloadTooLarge':
+    '内容过大（约 {{actual}}），超过单次导入上限 {{size}}。请减少资源文件体积后重试。',
   'importSkill.error.noName':
     '无法从 SKILL.md 或目录结构推断 skill 名称，请检查 frontmatter 或目录布局。',
   'importSkill.result.session':
@@ -1252,6 +1290,11 @@ export const zhCN = {
   'wiki.ingest.warning': '已有 Wiki 正在提取，请等待当前任务完成后再试。',
   'wiki.ingest.stateRecovery': '状态恢复：{{stage}}{{pageHint}}',
   'wiki.ingest.currentPage': '，当前 {{count}} 页',
+  // 自动检查暂停（issue #1917：轮询必须有界）。文案必须如实说明"只是停止自动
+  // 检查"，既不宣称完成也不宣称失败 —— 后台可能仍在处理。
+  'wiki.ingest.pollPaused.timeout': '已自动检查 {{minutes}} 分钟，自动检查已暂停；抽取可能仍在后台进行，可点「重新检查」再次获取状态。',
+  'wiki.ingest.pollPaused.network': '连续多次无法读取抽取状态，自动检查已暂停；请检查网络后点「重新检查」。',
+  'wiki.detail.recheck': '重新检查',
   'wiki.notify.readRawFailed': '读取原始文档失败',
   'wiki.notify.rawNotFound': '原始文档不存在或已被删除',
   'wiki.notify.uploadCancelled': '获取已有文档失败，已取消上传',

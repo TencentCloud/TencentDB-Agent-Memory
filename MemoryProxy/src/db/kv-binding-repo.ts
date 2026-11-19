@@ -44,9 +44,17 @@ interface StoredBinding {
 export class KvBindingRepo implements BindingRepo {
   constructor(private readonly storage: ProxyStorage) {}
 
-  async getBinding(spaceId: string, sessionId: string): Promise<SessionBinding | null> {
+  async getBinding(spaceId: string, sessionId: string, options?: { strict?: boolean }): Promise<SessionBinding | null> {
     try {
-      const raw = await this.storage.getJSON<StoredBinding>(keyOf(spaceId, sessionId));
+      let raw: StoredBinding | null;
+      if (options?.strict) {
+        const text = await this.storage.getText(keyOf(spaceId, sessionId));
+        if (text === null) return null;
+        raw = JSON.parse(text) as StoredBinding;
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid stored binding");
+      } else {
+        raw = await this.storage.getJSON<StoredBinding>(keyOf(spaceId, sessionId));
+      }
       if (!raw) return null;
       return {
         outcome: raw.outcome ?? "initialized",
@@ -57,7 +65,8 @@ export class KvBindingRepo implements BindingRepo {
         agentSource: raw.agentSource,
         userKey: raw.userKey,
       };
-    } catch {
+    } catch (err) {
+      if (options?.strict) throw err;
       return null;
     }
   }
