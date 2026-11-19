@@ -628,7 +628,7 @@ export function BlockDetail({
               </span>
             )}
             {block.uploaded_by_user_id && (
-              <span className="_memory-detail-meta-item">
+              <span className="_memory-detail-meta-item" title={t('memory.detail.ownerHint')}>
                 {t('memory.list.uploadedBy')}
                 <span className="_memory-detail-mono" title={block.uploaded_by_user_id}>
                   {uploaderName || block.uploaded_by_user_id}
