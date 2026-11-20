@@ -27,6 +27,8 @@ export interface ChatMemoryLayerItem {
   role?: string;
   title: string;
   body: string;
+  /** L1 optimistic-concurrency version. */
+  version?: number;
   tags?: string[];
   refs?: string[];
   /** 条目创建/记录时间（ISO8601），backend 从 recorded_at_ms / created_time_ms / updated_at 转换 */
@@ -168,7 +170,7 @@ export const chatMemoryApi = {
   updateLayer: (
     blockId: string,
     layer: 'L1' | 'L2' | 'L3',
-    params: { id?: string; content: string; summary?: string },
+    params: { id?: string; content: string; summary?: string; expectedVersion?: number },
   ) =>
     chatMemoryCall<{
       id?: string;
@@ -181,6 +183,9 @@ export const chatMemoryApi = {
       ...(params.id ? { id: params.id } : {}),
       content: params.content,
       ...(params.summary !== undefined ? { summary: params.summary } : {}),
+      ...(params.expectedVersion !== undefined
+        ? { expected_version: params.expectedVersion }
+        : {}),
     }),
 
   /** 分层语义 / 关键字搜索（agent 维度跨 session 召回，命中项带 score）：

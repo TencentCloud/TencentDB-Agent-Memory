@@ -273,6 +273,7 @@ export class MemoryClient {
       id: params.id,
       content: params.content,
       background: params.background,
+      expected_version: params.expected_version,
     }));
   }
 
