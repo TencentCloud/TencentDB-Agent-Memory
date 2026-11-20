@@ -22,7 +22,7 @@ import { Alert, Button, Input, Modal, Select, TabPanel, Tabs, Text } from 'tea-c
 import { tea } from '@/lib/tea-bridge';
 import { AttachIcon } from 'tea-icons-react';
 import { isAllowedFile, acceptAttr, maxBytesForFile } from '../utils/wiki-format-store';
-import { readUploadFile } from '../utils/wiki-upload-utils';
+import { uploadFilename } from '../utils/wiki-upload-utils';
 import { WikiSourcePageTree } from './wiki-source-page-tree';
 import type {
   SourceProviderFormField,
@@ -51,6 +51,7 @@ export interface WikiRawFileInput {
 export interface ImportSubmitPayload {
   mode: ImportMode;
   files?: WikiRawFileInput[];
+  localFiles?: File[];
   markdown?: WikiRawFileInput[];
   source_url?: string;
   provider_id?: string;
@@ -126,6 +127,10 @@ export function ImportAndIngestModal({
   const [mdFilename, setMdFilename] = useState('');
   const [mdContent, setMdContent] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const inFlight = useRef(false);
+  const [preparing, setPreparing] = useState(false);
+  const busy = submitting || preparing;
 
   // 打开时重置手工输入（external 状态由 openAddDocExternal 在打开时初始化）
   useEffect(() => {
@@ -163,7 +168,11 @@ export function ImportAndIngestModal({
       );
     }
     const accepted = allowed.filter((f) => !oversize.includes(f));
-    if (accepted.length > 0) setFiles((prev) => [...prev, ...accepted]);
+    if (accepted.length > 0) setFiles((prev) => {
+      const selected = new Map(prev.map((file) => [uploadFilename(file), file]));
+      for (const file of accepted) selected.set(uploadFilename(file), file);
+      return [...selected.values()];
+    });
   };
 
   const hasFileInput = files.length > 0;
@@ -209,58 +218,63 @@ export function ImportAndIngestModal({
     return null;
   })();
 
-  const canSubmit = !submitting && !missingHint && (hasInput || (!isExternal && !hasAnyInput) || !hasInput);
+  const canSubmit = !busy && !missingHint && (hasInput || (!isExternal && !hasAnyInput) || !hasInput);
 
   const handleSubmit = async () => {
-    if (submitting) return;
-
-    const payload: ImportSubmitPayload = { mode };
-    if (mode === 'files') {
-      // 兜底：正常路径已在 addFiles 拦掉超限文件，此处再查一次可防绕过
-      // （如已选文件后被改动）。拦截在 base64 编码**之前**，避免大文件白编码。
-      const oversize = files.filter((f) => {
-        const max = maxBytesForFile(f.name);
-        return max !== undefined && f.size > max;
-      });
-      if (oversize.length) {
-        for (const f of oversize) {
+    if (busy || inFlight.current) return;
+    inFlight.current = true;
+    setPreparing(true);
+    try {
+      const payload: ImportSubmitPayload = { mode };
+      if (mode === 'files') {
+        // 兜底：正常路径已在 addFiles 拦掉超限文件，此处再查一次可防绕过
+        // （如已选文件后被改动）。拦截在 base64 编码**之前**，避免大文件白编码。
+        const oversize = files.filter((f) => {
+          const max = maxBytesForFile(f.name);
+          return max !== undefined && f.size > max;
+        });
+        if (oversize.length) {
+          for (const f of oversize) {
+            tea.notify.error(
+              t('wiki.detail.upload.fileTooLarge', {
+                filename: f.name,
+                maxMB: ((maxBytesForFile(f.name) ?? 0) / 1024 / 1024).toFixed(1),
+              }),
+            );
+          }
+          return;
+        }
+        // 统一 base64 通道：所有格式都以 base64 传输，服务端解码后按原始字节落盘
+        payload.localFiles = [...files];
+      } else if (mode === 'markdown') {
+        // 与 files tab 同源预校验：手工粘贴的 MD 也按 text 档上限拦（默认 512KB）。
+        // 此前无此检查，超长文本要走完整请求才被后端拒，且报错文案写死 512KB。
+        const fname = mdFilename.trim();
+        const max = maxBytesForFile(fname);
+        const size = new Blob([mdContent]).size;
+        if (max !== undefined && size > max) {
           tea.notify.error(
             t('wiki.detail.upload.fileTooLarge', {
-              filename: f.name,
-              maxMB: ((maxBytesForFile(f.name) ?? 0) / 1024 / 1024).toFixed(1),
+              filename: fname,
+              maxMB: (max / 1024 / 1024).toFixed(1),
             }),
           );
+          return;
         }
-        return;
+        // ⚠️ 必须显式 encoding:'utf8'：Knowledge 侧默认按 base64 解码并做严格
+        // 校验（routes/wiki.ts:329/336-341），手工粘贴的纯文本 MD 不带此标记会
+        // 被判为非法 base64 → `invalid base64 content: <filename>`。
+        payload.markdown = [{ filename: fname, content: mdContent, encoding: 'utf8' }];
+      } else if (mode === 'external' && ext) {
+        payload.source_url = ext.formSourceUrl.trim();
+        payload.provider_id = ext.formSourceType;
+        payload.page_ids = ext.selectedPageIds;
       }
-      // 统一 base64 通道：所有格式都以 base64 传输，服务端解码后按原始字节落盘
-      const items = await Promise.all(files.map(readUploadFile));
-      payload.files = items;
-    } else if (mode === 'markdown') {
-      // 与 files tab 同源预校验：手工粘贴的 MD 也按 text 档上限拦（默认 512KB）。
-      // 此前无此检查，超长文本要走完整请求才被后端拒，且报错文案写死 512KB。
-      const fname = mdFilename.trim();
-      const max = maxBytesForFile(fname);
-      const size = new Blob([mdContent]).size;
-      if (max !== undefined && size > max) {
-        tea.notify.error(
-          t('wiki.detail.upload.fileTooLarge', {
-            filename: fname,
-            maxMB: (max / 1024 / 1024).toFixed(1),
-          }),
-        );
-        return;
-      }
-      // ⚠️ 必须显式 encoding:'utf8'：Knowledge 侧默认按 base64 解码并做严格
-      // 校验（routes/wiki.ts:329/336-341），手工粘贴的纯文本 MD 不带此标记会
-      // 被判为非法 base64 → `invalid base64 content: <filename>`。
-      payload.markdown = [{ filename: fname, content: mdContent, encoding: 'utf8' }];
-    } else if (mode === 'external' && ext) {
-      payload.source_url = ext.formSourceUrl.trim();
-      payload.provider_id = ext.formSourceType;
-      payload.page_ids = ext.selectedPageIds;
+      await onSubmit(payload);
+    } finally {
+      inFlight.current = false;
+      setPreparing(false);
     }
-    await onSubmit(payload);
   };
 
   return (
@@ -268,8 +282,8 @@ export function ImportAndIngestModal({
       visible={visible}
       caption={t('wiki.import.caption')}
       size="m"
-      onClose={onClose}
-      disableEscape={submitting}
+      onClose={() => { if (!busy) onClose(); }}
+      disableEscape={busy}
     >
       <Modal.Body>
         <Tabs
@@ -288,11 +302,11 @@ export function ImportAndIngestModal({
             <div className="_wiki-detail-upload-panel">
               <div
                 className="_wiki-detail-dropzone"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => { if (!busy) fileInputRef.current?.click(); }}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
-                  addFiles(Array.from(e.dataTransfer.files));
+                  if (!busy) addFiles(Array.from(e.dataTransfer.files));
                 }}
               >
                 <AttachIcon size={20} />
@@ -300,6 +314,7 @@ export function ImportAndIngestModal({
               </div>
               <input
                 ref={fileInputRef}
+                disabled={busy}
                 type="file"
                 accept={acceptAttr()}
                 multiple
@@ -309,12 +324,30 @@ export function ImportAndIngestModal({
                   e.target.value = '';
                 }}
               />
+              <Button disabled={busy} onClick={() => folderInputRef.current?.click()}>
+                {t('wiki.import.chooseFolder')}
+              </Button>
+              <Text theme="weak">{t('wiki.import.folderHint')}</Text>
+              <input
+                ref={folderInputRef}
+                aria-label={t('wiki.import.chooseFolder')}
+                type="file"
+                multiple
+                disabled={busy}
+                {...{ webkitdirectory: '' }}
+                className="_wiki-detail-hidden-input"
+                onChange={(e) => {
+                  addFiles(Array.from(e.target.files ?? []));
+                  e.target.value = '';
+                }}
+              />
               {files.length > 0 && (
                 <ul className="_wiki-detail-file-list">
                   {files.map((f, i) => (
-                    <li key={`${f.name}-${i}`}>
-                      {f.name}
+                    <li key={`${uploadFilename(f)}-${i}`}>
+                      {uploadFilename(f)}
                       <Button
+                        disabled={busy}
                         type="link"
                         onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
                       >
@@ -503,7 +536,7 @@ export function ImportAndIngestModal({
         )}
         {/* 设计 §2.3：不再保留两阶段能力 —— 只有这一个主按钮，无次要按钮。
             树底不再放独立「导入」按钮，统一由 footer 主按钮提交。 */}
-        <Button type="primary" onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
+        <Button type="primary" onClick={handleSubmit} disabled={!canSubmit} loading={busy}>
           {primaryLabel(mode, hasInput, hasAnyInput, t)}
         </Button>
       </Modal.Footer>

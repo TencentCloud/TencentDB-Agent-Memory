@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync 
 import { join, basename, relative } from "node:path";
 import { parseFrontmatter, buildPage } from "./frontmatter.js";
 import { slugify } from "./slug.js";
+import { isInsideRoot } from "./safe-path.js";
 
 export interface DeleteSourceFilesResult {
   /** 被级联删除的 wiki page 绝对路径。 */
@@ -71,10 +72,13 @@ export async function deleteSourceFiles(
   sourceFullPaths: string[],
   _opts: DeleteSourceFilesOptions = {},
 ): Promise<DeleteSourceFilesResult> {
-  // 待删源的文件名集合（page 的 sources 里记的是文件名）。
+  // 与抽取时的 sources 身份一致：raw/sources 下的完整相对路径。
   const deletedNames = new Set<string>();
   for (const p of sourceFullPaths) {
-    deletedNames.add(basename(p));
+    const sourcesDir = join(projectPath, "raw", "sources");
+    deletedNames.add(isInsideRoot(sourcesDir, p)
+      ? relative(sourcesDir, p).replace(/\\/g, "/")
+      : basename(p));
     try {
       if (existsSync(p)) rmSync(p, { force: true });
     } catch {

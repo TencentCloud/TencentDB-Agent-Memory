@@ -292,6 +292,8 @@ export const enUS = {
   // ===== Wiki =====
   // 设计 2026-09-21：合并后的单一导入入口（替代原「添加」+「Ingest」）
   'wiki.detail.import': 'Import Docs',
+  'wiki.import.chooseFolder': 'Choose folder',
+  'wiki.import.folderHint': 'Folder paths are preserved. Reselect the same folder to update changed documents or retry an interrupted upload. Omitted files are kept.',
   'wiki.import.caption': 'Import Docs',
   'wiki.import.uploadAndIngest': 'Upload and ingest',
   'wiki.import.importAndIngest': 'Import and ingest',

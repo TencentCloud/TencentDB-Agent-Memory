@@ -25,7 +25,59 @@ export async function readAsBase64(file: File): Promise<string> {
 export async function readUploadFile(
   file: File,
 ): Promise<{ filename: string; content: string; encoding: 'base64' }> {
-  return { filename: file.name, content: await readAsBase64(file), encoding: 'base64' };
+  return { filename: uploadFilename(file), content: await readAsBase64(file), encoding: 'base64' };
+}
+
+/** Keep the selected root as a namespace; reselecting it preserves source identity. */
+export function uploadFilename(file: File): string {
+  return file.webkitRelativePath || file.name;
+}
+
+export type WikiUploadItem = Awaited<ReturnType<typeof readUploadFile>>;
+
+/** Upload bounded batches, then enqueue extraction once. Retrying the same
+ * selection overwrites the same source paths; unchanged hashes stay ingested. */
+export async function uploadWikiFiles<T>(
+  files: readonly File[],
+  writeBatch: (items: WikiUploadItem[]) => Promise<unknown>,
+  finish: () => Promise<T>,
+): Promise<T> {
+  const maxFiles = 10;
+  const maxBytes = 20 * 1024 * 1024;
+  const snapshot = [...files];
+  const paths = new Set<string>();
+  // Validate the entire selection before making any writes.
+  for (const file of snapshot) {
+    const name = uploadFilename(file);
+    if (
+      name.includes('\\') ||
+      name.includes('\0') ||
+      name.split('/').some((part) => !part || part === '.' || part === '..')
+    ) {
+      throw new Error(`Invalid file path: ${name}`);
+    }
+    const key = name.normalize('NFC').toLowerCase();
+    if (paths.has(key)) throw new Error(`Conflicting file paths: ${name}`);
+    paths.add(key);
+    if (file.size > maxBytes) throw new Error(`File exceeds the 20 MB upload limit: ${name}`);
+  }
+  if (snapshot.length === 0) throw new Error('Select files to upload.');
+
+  let batch: File[] = [];
+  let bytes = 0;
+  const flush = async () => {
+    if (!batch.length) return;
+    await writeBatch(await Promise.all(batch.map(readUploadFile)));
+    batch = [];
+    bytes = 0;
+  };
+  for (const file of snapshot) {
+    if (batch.length === maxFiles || bytes + file.size > maxBytes) await flush();
+    batch.push(file);
+    bytes += file.size;
+  }
+  await flush();
+  return finish();
 }
 
 export function findExistingRawFilenames(
