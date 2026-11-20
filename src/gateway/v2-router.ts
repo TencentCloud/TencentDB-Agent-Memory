@@ -67,7 +67,7 @@ import {
   type CoreFile,
   type CoreWriteData,
 } from "./v2-schemas.js";
-import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
+import { clampSceneNavigationSummaries, stripSceneNavigation } from "../core/scene/scene-navigation.js";
 
 const TAG = "[tdai-gateway][v2]";
 const V2_PREFIX = "/v2";
@@ -1031,8 +1031,21 @@ async function handleCoreRead(_body: unknown, _auth: V2AuthContext, requestId: s
   const stat = await storage.stat(StoragePaths.persona);
   const now = new Date().toISOString();
 
+  // Clients that read L3 through this endpoint (openclaw-plugin, hermes v2, the
+  // SDKs) inject the stored body verbatim, including the scene navigation block
+  // written by an older L2 round. Clamp its summaries here so a legacy persona
+  // cannot bypass the cap. Read-only: nothing is written and `updated_at` still
+  // reflects the file on disk. `handleCoreWrite` strips the block on the way
+  // back in, so this cannot lose data on a read-modify-write round trip.
+  const bounded = clampSceneNavigationSummaries(content);
+  if (bounded !== content) {
+    deps.logger.debug?.(
+      `${TAG} [core/read] clamped legacy scene navigation summaries (${content.length}→${bounded.length} chars)`,
+    );
+  }
+
   return successEnvelope<CoreFile>({
-    content,
+    content: bounded,
     created_at: stat ? new Date(stat.createdAt).toISOString() : now,
     updated_at: stat ? new Date(stat.lastModified).toISOString() : now,
   }, requestId);

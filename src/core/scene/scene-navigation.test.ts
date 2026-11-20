@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { generateSceneNavigation, stripSceneNavigation } from "./scene-navigation.js";
+import { clampSceneNavigationSummaries, generateSceneNavigation, stripSceneNavigation } from "./scene-navigation.js";
 import type { SceneIndexEntry } from "./scene-index.js";
 import { SCENE_SUMMARY_LIMITS, measureSceneSummary } from "./scene-summary.js";
 
@@ -89,5 +89,79 @@ describe("stripSceneNavigation after clamping", () => {
     const nav = generateSceneNavigation([entry({ summary: LONG_SUMMARY })]);
     const persona = `${body}\n\n${nav}\n`;
     expect(stripSceneNavigation(persona).trimEnd()).toBe(body);
+  });
+});
+
+describe("clampSceneNavigationSummaries", () => {
+  const BODY = "# 用户画像\n\n用户在后端团队负责记忆管线，偏好 Python 与 Rust。";
+
+  /**
+   * A navigation block as an *older* L2 round left it on disk — built by hand on
+   * purpose, because `generateSceneNavigation()` already clamps its input.
+   */
+  function storedNav(summary: string, eol = "\n"): string {
+    return [
+      "---",
+      "## 🗺️ Scene Navigation (Scene Index)",
+      "*以下是当前场景记忆的索引，可根据需要 read 读取详细内容。*",
+      "",
+      "### Path: scene_blocks/backend-arch.md",
+      "**热度**: 12 | **更新**: 2026-02-01T00:00:00.000Z",
+      `Summary: ${summary}`,
+      "",
+      "📌 使用说明：",
+      "- Path 是 scene block 的绝对路径",
+    ].join(eol);
+  }
+
+  it("clamps a legacy summary already stored in persona.md", () => {
+    // The stored block predates the cap, so its Summary line is still long:
+    // this is the path `POST /v2/core/read` clients inject verbatim.
+    const persona = `${BODY}\n\n${storedNav(LONG_SUMMARY)}\n`;
+    const out = clampSceneNavigationSummaries(persona);
+
+    const before = summaryLine(persona).slice("Summary: ".length);
+    const after = summaryLine(out).slice("Summary: ".length);
+    expect(after.length).toBeLessThan(before.length);
+    expect(measureSceneSummary(after).exceeds).toBe(false);
+    // Structure and body are untouched.
+    expect(out.startsWith(BODY)).toBe(true);
+    expect(out).toContain("### Path: scene_blocks/backend-arch.md");
+    expect(out).toContain("**热度**: 12 | **更新**: 2026-02-01T00:00:00.000Z");
+    expect(out).toContain("📌 使用说明：");
+  });
+
+  it("is idempotent", () => {
+    const persona = `${BODY}\n\n${storedNav(LONG_SUMMARY)}\n`;
+    const once = clampSceneNavigationSummaries(persona);
+    expect(once).not.toBe(persona);
+    expect(clampSceneNavigationSummaries(once)).toBe(once);
+  });
+
+  it("returns content without a navigation block unchanged", () => {
+    const persona = `# 用户画像\n\nSummary: 正文里也可能出现这个词。`;
+    expect(clampSceneNavigationSummaries(persona)).toBe(persona);
+  });
+
+  it("never rewrites Summary: lines that appear before the header", () => {
+    const persona = `# 用户画像\n\nSummary: ${LONG_SUMMARY}\n\n正文段落。`;
+    expect(clampSceneNavigationSummaries(persona)).toBe(persona);
+  });
+
+  it("keeps a summary that already fits verbatim", () => {
+    const persona = `${BODY}\n\n${storedNav("用户偏好 Python 异步后端。")}\n`;
+    expect(clampSceneNavigationSummaries(persona)).toBe(persona);
+  });
+
+  it("preserves CRLF line endings", () => {
+    const body = BODY.replace(/\n/g, "\r\n");
+    const nav = storedNav(LONG_SUMMARY, "\r\n");
+    const persona = `${body}\r\n${nav}\r\n`;
+    const out = clampSceneNavigationSummaries(persona);
+
+    expect(out).not.toBe(persona);
+    expect(out).not.toMatch(/[^\r]\n/);
+    const value = summaryLine(out).slice("Summary: ".length);
+    expect(measureSceneSummary(value).exceeds).toBe(false);
   });
 });

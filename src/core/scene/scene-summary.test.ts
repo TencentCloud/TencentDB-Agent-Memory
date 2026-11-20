@@ -1,12 +1,14 @@
 /**
  * Unit tests for the scene META summary governor.
  *
- * These cover the two review findings that motivated the module:
+ * These cover the review findings that motivated the module:
  *   1. `^summary:\s*(.*)$` swallows the next META line when the value is empty.
  *   2. A whole-file replace rewrites body lines that start with `summary:`.
+ *   3. Over-budget summaries are compacted into a jieba keyword index instead of
+ *      keeping the first whole sentence (an index, not prose).
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   SCENE_SUMMARY_LIMITS,
   clampSceneSummary,
@@ -15,6 +17,7 @@ import {
   measureSceneSummary,
   normalizeSummary,
 } from "./scene-summary.js";
+import { _resetJiebaForTest, _setJiebaForTest } from "../text/jieba.js";
 
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
@@ -25,6 +28,20 @@ function assertWithinLimits(text: string) {
   expect(m.exceeds).toBe(false);
   expect(LONE_SURROGATE_RE.test(text)).toBe(false);
 }
+
+/**
+ * `b` must be a character subsequence of `a`: the clamped summary may only drop
+ * text, never reorder or invent it.
+ */
+function isSubsequence(b: string, a: string): boolean {
+  let i = 0;
+  for (const ch of a) {
+    if (i < b.length && b[i] === ch) i++;
+  }
+  return i === b.length;
+}
+
+const ELLIPSIS_RE = /(?:…|\.\.\.)$/;
 
 const LONG_CJK =
   "用户在后端开发中偏好 Python 异步框架，近期开始接触 Rust 的所有权模型，本次会话中反复讨论内存安全与零拷贝解析，" +
@@ -37,6 +54,16 @@ const LONG_EN =
   "and memory safety while rejecting any patch style fix in favour of a full decoupling " +
   "of the ingestion pipeline from the storage layer, plus a long list of deployment " +
   "constraints around image size and cold start latency.";
+
+// Function words are placed early so they would survive a naive prefix cut.
+const FUNCTION_WORDS_CJK =
+  "因为 我们 的 项目 使用 TypeScript 和 Vitest 在 CI 运行 单元 测试 ， 并且 拒绝 本地 集成 测试 ， 所以 " +
+  "维护 成本 时常 增加 ， 部署 环境 存在 容器 镜像 体积 上限 与 启动 时间 要求 ， 团队 内部 代码 评审 规范 " +
+  "也 有 变更 ， 需要 持续 跟进 记录 迁移 方案 。";
+
+afterEach(() => {
+  _resetJiebaForTest();
+});
 
 describe("measureSceneSummary", () => {
   it("treats empty input as zero cost", () => {
@@ -85,20 +112,39 @@ describe("clampSceneSummary", () => {
     expect(clampSceneSummary(text)).toBe(text);
   });
 
-  it("keeps whole sentences and marks the cut for long CJK text", () => {
+  it("compacts an over-budget CJK summary into keywords in original order", () => {
     const out = clampSceneSummary(LONG_CJK);
     assertWithinLimits(out);
     expect(out.endsWith("…")).toBe(true);
-    // Prefers a sentence/clause boundary over an arbitrary character cut.
-    expect(out).not.toMatch(/[，,、；;：:—]$/);
-    expect(LONG_CJK.startsWith(out.replace(/…$/, ""))).toBe(true);
+
+    // Every kept character comes from the original, in the original order.
+    const body = out.replace(ELLIPSIS_RE, "");
+    expect(body.length).toBeGreaterThan(20);
+    expect(isSubsequence(body, LONG_CJK)).toBe(true);
+    // Content words survive; the char count stays near the ~60 CJK budget.
+    expect(out).toContain("Rust");
+    expect(Array.from(body).length).toBeGreaterThan(40);
   });
 
-  it("keeps whole words and marks the cut for long English text", () => {
+  it("drops function words instead of spending the budget on them", () => {
+    const out = clampSceneSummary(FUNCTION_WORDS_CJK);
+    assertWithinLimits(out);
+    expect(out).not.toContain("因为");
+    expect(out).not.toContain("并且");
+    expect(out).not.toContain("所以");
+    expect(out).toContain("TypeScript");
+    expect(out.length).toBeLessThan(FUNCTION_WORDS_CJK.length);
+  });
+
+  it("compacts an over-budget English summary into keywords", () => {
     const out = clampSceneSummary(LONG_EN);
     assertWithinLimits(out);
     expect(out.endsWith("...")).toBe(true);
-    expect(LONG_EN.startsWith(out.slice(0, -3).trimEnd())).toBe(true);
+    const body = out.replace(ELLIPSIS_RE, "").trimEnd();
+    expect(isSubsequence(body, LONG_EN)).toBe(true);
+    // English function words are dropped as well.
+    expect(/\bthe\b/i.test(body)).toBe(false);
+    expect(body).toContain("Rust");
   });
 
   it("hard cuts a punctuation-free blob on a code point boundary", () => {
@@ -127,7 +173,15 @@ describe("clampSceneSummary", () => {
   });
 
   it("is idempotent across every sample", () => {
-    const samples = [LONG_CJK, LONG_EN, "x".repeat(500), "", "短摘要", "。".repeat(300)];
+    const samples = [
+      LONG_CJK,
+      LONG_EN,
+      FUNCTION_WORDS_CJK,
+      "x".repeat(500),
+      "",
+      "短摘要",
+      "。".repeat(300),
+    ];
     for (const s of samples) {
       const once = clampSceneSummary(s);
       expect(clampSceneSummary(once)).toBe(once);
@@ -144,6 +198,7 @@ describe("clampSceneSummary", () => {
       `${"word ".repeat(80)}`,
       "\n\n\n",
       "🙂".repeat(300),
+      "的".repeat(600),
     ];
     for (const s of samples) {
       assertWithinLimits(clampSceneSummary(s));
@@ -155,20 +210,40 @@ describe("clampSceneSummary", () => {
     // tens of KB is reachable. Cutting one code point at a time while
     // re-measuring the whole string is O(n²) (≈30s at 50k chars), which would
     // stall the L2 round; the budget pre-slice keeps this in the millisecond
-    // range.
+    // range, and the keyword loop stops at the first overflow.
     const huge = "用".repeat(200_000);
     const startedAt = Date.now();
     const out = clampSceneSummary(huge);
     const elapsedMs = Date.now() - startedAt;
 
     assertWithinLimits(out);
-    expect(out.endsWith("…")).toBe(true);
+    expect(out.length).toBeGreaterThan(0);
     expect(elapsedMs).toBeLessThan(2_000);
   });
 
   it("degrades to an empty string instead of throwing on degenerate limits", () => {
     expect(clampSceneSummary("abcdef", { maxWordEquivalent: 0, maxChars: 0 })).toBe("");
     expect(() => clampSceneSummary("用用用", { maxWordEquivalent: 1, maxChars: 2 })).not.toThrow();
+  });
+});
+
+describe("clampSceneSummary without jieba", () => {
+  it("falls back to a hard cut that still respects the hard cap", () => {
+    _setJiebaForTest(null);
+
+    const out = clampSceneSummary(LONG_CJK);
+    assertWithinLimits(out);
+    expect(out.endsWith("…")).toBe(true);
+    // Hard cut keeps a prefix of the original (no keyword compaction).
+    expect(LONG_CJK.startsWith(out.replace(ELLIPSIS_RE, ""))).toBe(true);
+  });
+
+  it("does not throw when the summary is nothing but function words", () => {
+    // With jieba every token is a stop word, so the keyword pass returns an
+    // empty string and the caller must fall back without throwing.
+    const out = clampSceneSummary("的".repeat(600));
+    assertWithinLimits(out);
+    expect(out.length).toBeGreaterThan(0);
   });
 });
 
