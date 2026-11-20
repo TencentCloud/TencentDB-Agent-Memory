@@ -153,6 +153,29 @@ TDAI_MEMORY_API_KEY=<the same API key configured on the Gateway>
 TDAI_MEMORY_INSTANCE_ID=default
 ```
 
+#### Local OpenClaw recall visibility
+
+For the in-process `memory-tencentdb` plugin (`mode: "local"`), set
+`plugins.entries["memory-tencentdb"].config.recall.showInjected` to `true` in
+`openclaw.json` to retain the `<relevant-memories>` block in user-message history:
+
+```json
+{
+  "mode": "local",
+  "recall": { "showInjected": true }
+}
+```
+
+Place this fragment inside the plugin's `config` and reload the plugin. The
+default is `false`, which strips recalled context before user messages are saved.
+Both string and multipart user messages are supported; assistant/tool messages
+are unchanged. L0 capture still removes recalled context to prevent it from being
+learned again as a new conversation. Previously stripped history is not restored.
+Retaining recall increases saved history size and can add tokens when history is replayed.
+Display depends on the host/channel's history renderer; this option does not send
+a separate notification or enable additional recall. It applies to the local
+plugin, not the separate Gateway client adapter.
+
 ### Hermes
 
 `hermes-plugin/` provides the Hermes Memory Provider. It follows the same adapter model and uses the Gateway for conversation capture and memory recall.
