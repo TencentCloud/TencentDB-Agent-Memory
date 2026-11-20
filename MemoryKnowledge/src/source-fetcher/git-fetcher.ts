@@ -13,7 +13,7 @@
  * 私钥经 `GIT_SSH_COMMAND` 注入，仅活在子进程 env 里，不落盘、不进日志。
  */
 
-import simpleGit, { CleanOptions, ResetMode, type SimpleGit } from "simple-git";
+import { simpleGit, CleanOptions, ResetMode, type SimpleGit } from "simple-git";
 import type { ISourceFetcher, FetchResult, SourceType, GitFetchOptions } from "./types.js";
 import { isSshUrl, parseSshHost, buildSshCommand } from "./ssh-options.js";
 
