@@ -86,7 +86,7 @@ code=$(printf '%s' "$r" | tail -1); b=$(printf '%s' "$r" | sed '$d')
 if [[ "$code" == "400" ]] && printf '%s' "$b" | grep -q "upstream_disabled"; then
   ok "P0-D2" "blocked(default_disabled) → 400 upstream_disabled (anthropic envelope)"
 else
-  bad "P0-D2" "期望 400+upstream_disabled, 实际 $code｜$(printf '%s' "$b" | head -c 120)"
+  bad "P0-D2" "期望 400+upstream_disabled, 实际 ${code}｜$(printf '%s' "$b" | head -c 120)"
 fi
 
 # D2 blocked（custom 组 disabled）—— openai 形态
@@ -96,7 +96,7 @@ code=$(printf '%s' "$r" | tail -1); b=$(printf '%s' "$r" | sed '$d')
 if [[ "$code" == "400" ]] && printf '%s' "$b" | jq -e '.error_code=="UPSTREAM_DISABLED"' >/dev/null 2>&1; then
   ok "P0-D2" "blocked(custom_disabled) → 400 UPSTREAM_DISABLED (openai envelope)"
 else
-  bad "P0-D2" "期望 400+UPSTREAM_DISABLED, 实际 $code｜$(printf '%s' "$b" | head -c 120)"
+  bad "P0-D2" "期望 400+UPSTREAM_DISABLED, 实际 ${code}｜$(printf '%s' "$b" | head -c 120)"
 fi
 
 # D3 unmanaged —— openai 形态
@@ -106,7 +106,7 @@ code=$(printf '%s' "$r" | tail -1); b=$(printf '%s' "$r" | sed '$d')
 if [[ "$code" == "400" ]] && printf '%s' "$b" | jq -e '.error_code=="AGENT_NOT_CONFIGURED"' >/dev/null 2>&1; then
   ok "P0-D3" "unmanaged → 400 AGENT_NOT_CONFIGURED (openai envelope)"
 else
-  bad "P0-D3" "期望 400+AGENT_NOT_CONFIGURED, 实际 $code｜$(printf '%s' "$b" | head -c 120)"
+  bad "P0-D3" "期望 400+AGENT_NOT_CONFIGURED, 实际 ${code}｜$(printf '%s' "$b" | head -c 120)"
 fi
 
 # D3 unmanaged —— anthropic 形态
@@ -116,7 +116,7 @@ code=$(printf '%s' "$r" | tail -1); b=$(printf '%s' "$r" | sed '$d')
 if [[ "$code" == "400" ]] && printf '%s' "$b" | grep -q "agent_not_configured"; then
   ok "P0-D3" "unmanaged → 400 agent_not_configured (anthropic envelope)"
 else
-  bad "P0-D3" "期望 400+agent_not_configured, 实际 $code｜$(printf '%s' "$b" | head -c 120)"
+  bad "P0-D3" "期望 400+agent_not_configured, 实际 ${code}｜$(printf '%s' "$b" | head -c 120)"
 fi
 
 printf '\n  PASS=%d FAIL=%d\n\n' "$PASS" "$FAIL"
