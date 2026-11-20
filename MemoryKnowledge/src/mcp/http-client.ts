@@ -37,34 +37,38 @@ export async function callApi(
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
 
-  log.debug(`POST ${url}`);
+
+  log.debug("POST knowledge API");
 
   let resp: Response;
   try {
     resp = await fetch(url, {
       method: "POST",
+      redirect: "error",
       headers,
       body: JSON.stringify(body),
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error(`fetch failed for ${endpoint}: ${msg}`);
-    throw err;
+  } catch {
+    // URLs, transport errors and backend fields may contain credentials or
+    // memory. Do not pass their text through MCP tool responses or logs.
+    log.error("Knowledge API request failed");
+    throw new Error("Knowledge API request failed");
   }
 
-  let json: ApiResponse;
+  let json: unknown;
   try {
-    json = (await resp.json()) as ApiResponse;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error(`JSON parse failed for ${endpoint} (status=${resp.status}): ${msg}`);
+    json = await resp.json();
+  } catch {
+    log.error(`Knowledge API returned invalid JSON (status=${resp.status})`);
     throw new Error(`API error: ${resp.status} (invalid JSON)`);
   }
 
-  if (resp.status >= 400 || json.code !== 0) {
-    log.warn(`API error on ${endpoint}: status=${resp.status} code=${json.code} message="${json.message}"`);
-    throw new Error(json.message || `API error: ${resp.status}`);
+  if (resp.status < 200 || resp.status >= 300
+      || typeof json !== "object" || json === null
+      || !("code" in json) || json.code !== 0) {
+    log.warn(`Knowledge API request rejected (status=${resp.status})`);
+    throw new Error(`API error: ${resp.status} (request rejected)`);
   }
 
-  return json.data;
+  return "data" in json ? json.data : undefined;
 }
