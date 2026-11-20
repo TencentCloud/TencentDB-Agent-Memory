@@ -40,6 +40,13 @@ HEALTH_CHECK_RETRIES = 3     # retries for is_running check
 
 # Log file rotation parameters
 LOG_TAIL_BYTES_ON_CRASH = 2048  # bytes of stderr log to surface on startup crash
+# Runtime disk bound for Gateway stdout/stderr logs (issue #583): when an
+# active stream exceeds LOG_ACTIVE_MAX_BYTES, keep the last
+# LOG_TAIL_KEEP_BYTES as a bounded diagnostic tail in "<path>.1" and truncate
+# the active file in place (keeps the child's inherited descriptor valid).
+LOG_ACTIVE_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB per stream
+LOG_TAIL_KEEP_BYTES = 1 * 1024 * 1024    # 1 MiB diagnostic tail preserved in .1
+LOG_GUARD_INTERVAL_S = 0.25              # guard poll interval
 
 # Startup single-flight state. The thread lock prevents multiple supervisor
 # instances in the same Python process from spawning the same Gateway
@@ -119,7 +126,9 @@ class GatewaySupervisor:
         # Gateway's event loop would block on write() after ~64 KB of logs).
         self._stdout_log: Optional[IO[bytes]] = None
         self._stderr_log: Optional[IO[bytes]] = None
+        self._stdout_log_path: Optional[str] = None
         self._stderr_log_path: Optional[str] = None
+        self._log_guard_thread: Optional[threading.Thread] = None
         self._shutdown_requested = False
 
         # Resolve Gateway command
@@ -258,6 +267,7 @@ class GatewaySupervisor:
                     # Append mode: preserve previous runs for postmortem.
                     self._stdout_log = open(stdout_path, "ab", buffering=0)
                     self._stderr_log = open(stderr_path, "ab", buffering=0)
+                    self._stdout_log_path = stdout_path
                     self._stderr_log_path = stderr_path
                     stdout_target: object = self._stdout_log
                     stderr_target: object = self._stderr_log
@@ -280,6 +290,7 @@ class GatewaySupervisor:
             # Keep the lock until the spawned process becomes healthy; otherwise
             # a second waiter can observe the port as down during cold start and
             # launch a duplicate process that immediately hits EADDRINUSE.
+            self._start_log_guard()
             return self._wait_for_health()
 
     def _resolve_log_dir(self) -> str:
@@ -304,8 +315,64 @@ class GatewaySupervisor:
             return os.path.join(home, ".hermes", "logs", "memory_tencentdb")
         return os.path.join(os.getcwd(), ".memory-tencentdb-logs")
 
+    # ── Runtime log-size guard (issue #583) ─────────────────────────────
+    # Gateway stdout/stderr logs grow without bound in append mode; a runaway
+    # log can exhaust disk (observed ~63 GiB). A daemon thread polls each
+    # active stream and, when it exceeds LOG_ACTIVE_MAX_BYTES, preserves the
+    # last LOG_TAIL_KEEP_BYTES as "<path>.1" and truncates the active file in
+    # place — keeping the child's inherited descriptor valid.
+
+    def _start_log_guard(self) -> None:
+        if self._log_guard_thread and self._log_guard_thread.is_alive():
+            return
+        self._log_guard_thread = threading.Thread(
+            target=self._log_guard_loop,
+            name="tdai-gateway-log-guard",
+            daemon=True,
+        )
+        self._log_guard_thread.start()
+
+    def _log_guard_loop(self) -> None:
+        while not self._shutdown_requested:
+            self._rotate_if_oversized(self._stdout_log_path, self._stdout_log)
+            self._rotate_if_oversized(self._stderr_log_path, self._stderr_log)
+            time.sleep(LOG_GUARD_INTERVAL_S)
+
+    def _rotate_if_oversized(self, path: Optional[str], handle: Optional[IO[bytes]]) -> None:
+        if not path or handle is None:
+            return
+        try:
+            size = os.fstat(handle.fileno()).st_size
+            if size <= LOG_ACTIVE_MAX_BYTES:
+                return
+            # Preserve the final diagnostic bytes before truncating. The
+            # append-mode handle is not readable, so read through a separate
+            # handle.
+            with open(path, "rb") as reader:
+                reader.seek(max(0, size - LOG_TAIL_KEEP_BYTES))
+                tail = reader.read(LOG_TAIL_KEEP_BYTES)
+            with open(path + ".1", "wb") as f:
+                f.write(tail)
+            # Truncate in place so the child process keeps writing to the same
+            # descriptor (renaming the path would orphan the old inode).
+            handle.seek(0)
+            handle.truncate(0)
+            handle.seek(0, os.SEEK_END)
+            logger.warning(
+                "Rotated oversized Gateway log %s (%.1f MiB → tail preserved in %s.1)",
+                path, size / (1024 * 1024), path,
+            )
+        except Exception as e:
+            logger.warning("Failed to rotate Gateway log %s: %s", path, e)
+
+    def _stop_log_guard(self) -> None:
+        if self._log_guard_thread and self._log_guard_thread.is_alive():
+            self._log_guard_thread.join(timeout=2)
+            self._log_guard_thread = None
+
     def _close_log_handles(self) -> None:
         """Close log file handles; safe to call multiple times."""
+        self._stop_log_guard()
         for attr in ("_stdout_log", "_stderr_log"):
             handle: Optional[IO[bytes]] = getattr(self, attr, None)
             if handle is not None:
@@ -372,6 +439,7 @@ class GatewaySupervisor:
     def shutdown(self) -> None:
         """Shut down the managed Gateway process (if we started it)."""
         self._shutdown_requested = True
+        self._stop_log_guard()
         if self._process is None:
             return
 
