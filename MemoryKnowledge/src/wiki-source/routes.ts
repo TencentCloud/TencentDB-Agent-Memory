@@ -11,12 +11,14 @@
 import { Hono } from "hono";
 
 import { wrapOk, wrapError, isValidIdSegment } from "../api-helpers.js";
+import type { IKnowledgeStore } from "../store/types.js";
 import type { ICredentialStore } from "../source-auth/types.js";
 import type { WikiSourceRegistry } from "./registry.js";
 import type { WikiServiceLike } from "./import-runner.js";
 import { runImport } from "./import-runner.js";
 
 export interface WikiSourceRouteDeps {
+  store: Pick<IKnowledgeStore, "getWikiById">;
   registry: WikiSourceRegistry;
   credentialStore: ICredentialStore;
   wikiService: WikiServiceLike;
@@ -86,6 +88,11 @@ export function createWikiSourceRoutes(deps: WikiSourceRouteDeps): Hono {
     }
 
     // 凭据按 wiki_id 取；不存在 → 401 NEED_CREDENTIAL（前端弹填写页）
+    // Check ownership before reading credentials or contacting the provider.
+    const wiki = deps.store.getWikiById(a.serviceId, wikiId);
+    if (!wiki || wiki.team_id !== a.teamId) {
+      return c.json(wrapError(404, "resource not found"));
+    }
     const ref = { type: "wiki" as const, serviceId: a.serviceId, resourceId: wikiId };
     const cred = deps.credentialStore.get(ref);
     if (!cred) {
@@ -143,6 +150,11 @@ export function createWikiSourceRoutes(deps: WikiSourceRouteDeps): Hono {
     if (!sourceUrl) return c.json(wrapError(400, "source_url is required"));
     if (!providerId) return c.json(wrapError(400, "provider_id is required"));
 
+    // Check ownership before reading credentials or contacting the provider.
+    const wiki = deps.store.getWikiById(a.serviceId, wikiId);
+    if (!wiki || wiki.team_id !== a.teamId) {
+      return c.json(wrapError(404, "resource not found"));
+    }
     const ref = { type: "wiki" as const, serviceId: a.serviceId, resourceId: wikiId };
     const cred = deps.credentialStore.get(ref);
     if (!cred) {
