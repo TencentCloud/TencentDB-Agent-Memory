@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 10  # seconds
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Fail closed instead of forwarding service credentials to redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class MemoryTencentdbSdkClient:
     """HTTP client for the memory-tencentdb Gateway sidecar."""
 
@@ -34,6 +41,7 @@ class MemoryTencentdbSdkClient:
         self._timeout = timeout
         self._api_key = (api_key or "").strip() or None
         self._service_id = service_id or "default"
+        self._opener = urllib.request.build_opener(_NoRedirect())
 
     def _build_headers(self, *, content_type: bool) -> Dict[str, str]:
         headers: Dict[str, str] = {}
@@ -57,19 +65,16 @@ class MemoryTencentdbSdkClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self._timeout) as resp:
+            with self._opener.open(req, timeout=timeout or self._timeout) as resp:
                 raw = json.loads(resp.read().decode("utf-8"))
                 return self._unwrap_v3(raw, path)
         except urllib.error.HTTPError as e:
-            body_text = ""
-            try:
-                body_text = e.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
-            logger.warning("memory-tencentdb Gateway %s returned %d: %s", path, e.code, body_text[:500])
+            # Response bodies can contain memory or credentials. Leave them on the
+            # exception for the caller, but do not copy them into persistent logs.
+            logger.warning("memory-tencentdb Gateway %s returned %d", path, e.code)
             raise
         except Exception as e:
-            logger.debug("memory-tencentdb Gateway %s failed: %s", path, e)
+            logger.debug("memory-tencentdb Gateway %s failed (%s)", path, type(e).__name__)
             raise
 
     def _get(self, path: str, timeout: Optional[int] = None) -> Dict[str, Any]:
@@ -81,10 +86,10 @@ class MemoryTencentdbSdkClient:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self._timeout) as resp:
+            with self._opener.open(req, timeout=timeout or self._timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as e:
-            logger.debug("memory-tencentdb Gateway GET %s failed: %s", path, e)
+            logger.debug("memory-tencentdb Gateway GET %s failed (%s)", path, type(e).__name__)
             raise
 
     @staticmethod
@@ -95,8 +100,8 @@ class MemoryTencentdbSdkClient:
         """
         code = raw.get("code", -1)
         if code != 0:
-            msg = raw.get("message", "unknown")
-            logger.warning("memory-tencentdb Gateway %s returned code=%d: %s", path, code, msg)
+            safe_code = code if type(code) is int else "invalid"
+            logger.warning("memory-tencentdb Gateway %s returned code=%s", path, safe_code)
         return raw
 
     # -- API methods ----------------------------------------------------------
