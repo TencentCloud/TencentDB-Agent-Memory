@@ -106,7 +106,7 @@ class HttpStub(Stub):
             url=f"{self.endpoint}{path}",
             json=body,
             headers=self.headers,
-            timeout=timeout or self.client.timeout,
+            timeout=self.client.timeout if timeout is None else timeout,
         )
         logger.debug("Response %s %s", path, resp.text)
         return _decode_response(resp)
@@ -116,7 +116,7 @@ class HttpStub(Stub):
             url=f"{self.endpoint}{path}",
             params=query or {},
             headers=self.headers,
-            timeout=timeout or self.client.timeout,
+            timeout=self.client.timeout if timeout is None else timeout,
         )
         logger.debug("Response %s %s", path, resp.text)
         return _decode_response(resp)
@@ -155,7 +155,7 @@ class AsyncHttpStub:
             url=f"{self.endpoint}{path}",
             json=body,
             headers=self.headers,
-            timeout=timeout or self.client.timeout,
+            timeout=self.client.timeout if timeout is None else timeout,
         )
         logger.debug("Response %s %s", path, resp.text)
         return _decode_response(resp)
@@ -165,7 +165,7 @@ class AsyncHttpStub:
             url=f"{self.endpoint}{path}",
             params=query or {},
             headers=self.headers,
-            timeout=timeout or self.client.timeout,
+            timeout=self.client.timeout if timeout is None else timeout,
         )
         logger.debug("Response %s %s", path, resp.text)
         return _decode_response(resp)
