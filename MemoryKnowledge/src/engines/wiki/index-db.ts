@@ -70,7 +70,7 @@ function applyPragmas(db: Database.Database): void {
 
 /** 建 4 张表（幂等）。仅在 initIndexDb（wiki 显式创建）时调用。 */
 function initSchema(db: Database.Database): void {
-  // ① BM25：FTS5 虚拟表。存预分词后的空格 token 串，中文 bigram 逻辑留在 JS tokenize()，
+  // ① BM25：FTS5 虚拟表。存预分词后的空格 token 串，中文分词（jieba，降级 bigram）留在 JS tokenize()，
   //    FTS5 用 unicode61 仅按空格/标点切（与 __tests__/bm25-comparison 验证过的配置一致）。
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
