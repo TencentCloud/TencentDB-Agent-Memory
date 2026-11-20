@@ -261,6 +261,14 @@ export class VectorStore implements IMemoryStore {
   private stmtQueryBySessionKeySince!: StatementSync;
   private stmtQueryAll!: StatementSync;
   private stmtQueryAllSince!: StatementSync;
+  /**
+   * L1 query by primary key. The number of placeholders varies with the
+   * requested id count, so statements are cached per arity instead of being
+   * prepared once at init() time.
+   */
+  private stmtQueryByRecordIds = new Map<number, StatementSync>();
+  /** Column list shared by every L1 read statement. */
+  private l1QueryCols!: string;
 
   // Prepared statements — L0 (initialized in init())
   private stmtL0UpsertMeta!: StatementSync;
@@ -1058,10 +1066,11 @@ export class VectorStore implements IMemoryStore {
     // L1 query statements (for l1-reader)
     // user_id / agent_id surfaced in every L1 read so callers (router /
     // candidate-pool / l1-reader) can enforce isolation downstream.
-    const l1QueryCols = `record_id, content, type, priority, scene_name, session_key, session_id,
+    this.l1QueryCols = `record_id, content, type, priority, scene_name, session_key, session_id,
       team_id, task_id, user_id, agent_id, version,
       timestamp_str, timestamp_start, timestamp_end,
       created_time, updated_time, metadata_json`;
+    const l1QueryCols = this.l1QueryCols;
 
     this.stmtQueryBySessionId = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
@@ -1097,6 +1106,10 @@ export class VectorStore implements IMemoryStore {
       WHERE updated_time > ?
       ORDER BY updated_time ASC
     `);
+
+    // L1 lookup by primary key. Placeholder count varies with the id count,
+    // so the prepared statement is cached per arity (see stmtQueryByRecordIds).
+    this.stmtQueryByRecordIds.clear();
 
     this.stmtL1QueryMigrationCursor = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
@@ -1646,6 +1659,31 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error (degraded mode, DB issues).
    */
+  /**
+   * L1 lookup by primary key.
+   *
+   * `queryL1Records` used to ignore `recordIds` entirely and fall back to a
+   * full-table scan, so a primary-key lookup returned the *first row of the
+   * table* instead of the requested record. Callers that trusted the result
+   * (`/v2/atomic/update`, L1 version merging in `l1-writer`) then read — and
+   * could overwrite — an unrelated record.
+   *
+   * Statements are cached per placeholder count because the arity varies with
+   * the number of requested ids.
+   */
+  private queryL1ByRecordIds(ids: string[]): L1RecordRow[] {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(",");
+    let stmt = this.stmtQueryByRecordIds.get(ids.length);
+    if (!stmt) {
+      stmt = this.db.prepare(
+        `SELECT ${this.l1QueryCols} FROM l1_records WHERE record_id IN (${placeholders})`,
+      );
+      this.stmtQueryByRecordIds.set(ids.length, stmt);
+    }
+    return stmt.all(...ids) as unknown as L1RecordRow[];
+  }
+
   queryL1Records(filter?: L1QueryFilter): L1RecordRow[] {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L1-query] SKIPPED (degraded mode)`);
@@ -1653,11 +1691,17 @@ export class VectorStore implements IMemoryStore {
     }
     try {
       const { sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
+      const recordIds = filter?.recordIds;
 
       let raw: Record<string, unknown>[];
 
-      // Priority: sessionId > sessionKey (sessionId is more specific)
-      if (sessionId && updatedAfter) {
+      // Priority: recordIds (primary key lookup) > sessionId > sessionKey.
+      // recordIds must win first — otherwise a primary-key lookup silently
+      // degrades to "first row of the whole table", which makes the caller
+      // read (and possibly overwrite) an unrelated record.
+      if (recordIds && recordIds.length > 0) {
+        raw = this.queryL1ByRecordIds(recordIds) as unknown as Record<string, unknown>[];
+      } else if (sessionId && updatedAfter) {
         raw = this.stmtQueryBySessionIdSince.all(sessionId, updatedAfter) as Record<string, unknown>[];
       } else if (sessionId) {
         raw = this.stmtQueryBySessionId.all(sessionId) as Record<string, unknown>[];
