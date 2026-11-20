@@ -1,0 +1,43 @@
+{
+  "name": "@tencentdb-agent-memory/tcvdb-text",
+  "version": "0.1.1",
+  "description": "TypeScript port of tcvdb_text — BM25 sparse vector encoder for Tencent Cloud VectorDB",
+  "keywords": [
+    "bm25",
+    "sparse-vector",
+    "vector-database",
+    "vectordb",
+    "hybrid-search",
+    "text-retrieval",
+    "information-retrieval",
+    "jieba",
+    "tokenizer"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "data"
+  ],
+  "dependencies": {
+    "@node-rs/jieba": "^2.0.1",
+    "murmurhash": "^2.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^4.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "test": "npm run build && vitest run"
+  },
+  "license": "MIT"
+}

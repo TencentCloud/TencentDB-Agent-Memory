@@ -49,7 +49,7 @@ import type {
 import { DEFAULT_ISOLATION_ID } from "../types.js";
 import { TcvdbClient, TcvdbApiError } from "./client.js";
 import type { BM25LocalEncoder } from "../bm25-local.js";
-import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
+import type { SparseVector } from "#tcvdb-text";
 import type {
   MemoryPromptListFilter,
   MemoryPromptRecord,
