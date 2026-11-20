@@ -17,6 +17,7 @@
  */
 
 import { Hono } from "hono";
+import { createOkfExportRoutes } from "./okf-export.js";
 
 import type { WikiService, RawContent } from "../store/index.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
@@ -32,6 +33,8 @@ import {
 } from "../api-helpers.js";
 
 export interface WikiRouteDeps {
+  /** Full-file export is disabled unless this configured service key is supplied. */
+  serviceAuth?: { serviceKey: string };
   wikiService: WikiService;
   wikiMgr: WikiSourceManager;
   /** Public base URL for service_url; should already include the API prefix (e.g. http://host:8421/v3). */
@@ -51,6 +54,7 @@ function maybeWriteError(outcome: unknown): Response | null {
 export function createWikiRoutes(deps: WikiRouteDeps): Hono {
   const app = new Hono();
   const { wikiService, wikiMgr, publicBaseUrl } = deps;
+  app.route("/okf", createOkfExportRoutes(wikiService, deps.serviceAuth?.serviceKey ?? ""));
 
   // ═══════════════════ Asset Layer ═══════════════════
 
