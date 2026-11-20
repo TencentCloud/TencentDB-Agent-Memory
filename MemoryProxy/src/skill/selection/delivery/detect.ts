@@ -195,6 +195,7 @@ const EXECUTORS: ExecutorTool[] = [
   { name: "bash", buildInput: (command, skillName) => ({ command, description: `Load skill: ${skillName}` }) },
   { name: "exec_command", buildInput: (command) => ({ cmd: command }) },
   { name: "shell", buildInput: (command) => ({ command: ["bash", "-lc", command] }) },
+  { name: "terminal", buildInput: (command) => ({ command }) },
 ];
 
 /** 提取 tools[] 中声明的工具名（三协议形状：{name} / {function:{name}} / {type:"function",name}）。 */

@@ -9,6 +9,7 @@ import type {
   TdaiMessage,
 } from "./types.js";
 import { log } from "../report/log.js";
+import { createHash } from "node:crypto";
 
 interface TdaiEnvelope<T = unknown> {
   code?: number;
@@ -18,6 +19,80 @@ interface TdaiEnvelope<T = unknown> {
 
 const TDAI_MESSAGE_CONTENT_MAX_CHARS = 8192;
 const TDAI_CONVERSATION_MAX_MESSAGES = 100;
+
+// ── L0 user 消息去重 ──────────────────────────────────────────────────────
+// 背景：agent 客户端（DSH / Claude Code / Hermes 等）是「一个提问 → N 步工具
+// 循环 → N 个 HTTP 请求」，每步都携带同一条 user 消息；而 addConversation 按
+// 「每个请求」调用，于是同一条 user 消息被反复写入 L0（实测 22–309 倍），
+// 下游 L1 抽取为这些重复内容重复付费。
+// 语义：同一存储身份（endpoint / serviceId / team / user / agent / session /
+// task）下，内容相同的 user 消息在 TTL 窗口内只写一次；assistant 消息不受影响
+// （保证最终回复不丢）。水位在写入成功后才记录，失败重试仍会真正写入
+// （宁重勿丢）；进程重启水位清空，最多多写一轮。
+// 存储身份必须进入 key：同一进程可能同时持有指向不同实例 / 租户 / spaceId 的
+// 多个 TdaiClient（多租户部署、多 endpoint 转发），若 key 只含 agent/session/
+// task，A 实例写入后 B 实例的同一内容会被误判为「已写过」而丢弃，那条 user
+// 消息永远不会落到 B 实例。
+// TTL / 上限目前为常量，可按需调整。
+const L0_USER_DEDUP_TTL_MS = 10 * 60 * 1000;
+const L0_USER_DEDUP_MAX_ENTRIES = 4096;
+const l0UserDedupSeen = new Map<string, number>();
+
+/**
+ * 去重水位 key = 完整存储身份 + 内容指纹。
+ *
+ * 用 JSON 数组做元组编码：JSON 会转义字段内出现的引号/分隔符，
+ * `["a|b","c"]` 与 `["a","b|c"]` 编码结果不同 —— 避免朴素 `a|b|c` 拼接时
+ * 字段含分隔符导致的歧义碰撞。
+ */
+function l0UserDedupKey(config: TdaiMemoryConfig, identity: TdaiIdentity, userContent: string): string {
+  const hash = createHash("sha1").update(userContent).digest("hex").slice(0, 16);
+  return JSON.stringify([
+    config.endpoint,
+    config.serviceId,
+    identity.teamId,
+    identity.userId,
+    identity.agentId,
+    identity.sessionId,
+    identity.taskId ?? "",
+    hash,
+  ]);
+}
+
+/** 命中 = 该存储身份 + 内容在 TTL 内已写过。只读，不改 Map。 */
+function l0UserDedupHit(key: string, now: number): boolean {
+  const seenAt = l0UserDedupSeen.get(key);
+  return seenAt !== undefined && now - seenAt < L0_USER_DEDUP_TTL_MS;
+}
+
+/** 记录水位并维持容量上限：接近上限时先淘汰，再落水位。 */
+function l0UserDedupRecord(key: string, now: number): void {
+  if (!l0UserDedupSeen.has(key) && l0UserDedupSeen.size >= L0_USER_DEDUP_MAX_ENTRIES) {
+    l0UserDedupEvict(now);
+  }
+  l0UserDedupSeen.set(key, now);
+}
+
+/**
+ * 容量淘汰：保证 Map 严格低于上限。
+ *
+ * 1) 从头部起清扫过期项 —— Map 迭代顺序 = 插入顺序，旧条目在前，遇到第一个
+ *    未过期的即可停止（无需全表扫描）；
+ * 2) 若全部条目都未过期（或清扫后仍达上限），按插入顺序删除最旧条目。
+ *    缺少第 2 步时，「满表 + 全部未过期」会让清理空转 —— size 不降却继续
+ *    set，缓存没有真正的上限，且每个新 key 都白扫一遍整张 Map。
+ */
+function l0UserDedupEvict(now: number): void {
+  for (const [k, t] of l0UserDedupSeen) {
+    if (now - t < L0_USER_DEDUP_TTL_MS) break;
+    l0UserDedupSeen.delete(k);
+  }
+  while (l0UserDedupSeen.size >= L0_USER_DEDUP_MAX_ENTRIES) {
+    const oldest = l0UserDedupSeen.keys().next();
+    if (oldest.done) break;
+    l0UserDedupSeen.delete(oldest.value);
+  }
+}
 
 /**
  * Split messages to fit the gateway schema without losing content or breaking
@@ -141,16 +216,39 @@ export class TdaiClient {
   async addConversation(identity: TdaiIdentity, messages: TdaiMessage[]): Promise<void> {
     if (!this.isEnabled() || !this.config.writeL0 || messages.length === 0) return;
 
-    const chunkedMessages = chunkConversationMessages(messages);
+    const userLenForLog = (messages[0]?.content ?? "").length;
+
+    // L0 user 去重：命中则本轮只写 assistant（若有），不再重复写 user。
+    const now = Date.now();
+    let outgoing = messages;
+    let pendingDedupKey: string | null = null;
+    const userIdx = messages.findIndex((m) => m.role === "user" && m.content.trim().length > 0);
+    if (userIdx >= 0) {
+      const dedupKey = l0UserDedupKey(this.config, identity, messages[userIdx].content);
+      if (l0UserDedupHit(dedupKey, now)) {
+        outgoing = messages.filter((_, i) => i !== userIdx);
+        log.info("tdai-recorder:write-l0-dedup", {
+          session: identity.sessionId,
+          agent: identity.agentId,
+          userLen: messages[userIdx].content.length,
+          remaining: outgoing.length,
+        });
+      } else {
+        pendingDedupKey = dedupKey;
+      }
+    }
+    if (outgoing.length === 0) return;
+
+    const chunkedMessages = chunkConversationMessages(outgoing);
     log.info("tdai-recorder:write-l0", {
       team: identity.teamId,
       agent: identity.agentId,
       user: identity.userId,
       session: identity.sessionId,
       task: identity.taskId,
-      msgs: messages.length,
+      msgs: outgoing.length,
       chunks: chunkedMessages.length,
-      userLen: (messages[0]?.content ?? "").length,
+      userLen: userLenForLog,
     });
 
     for (let offset = 0; offset < chunkedMessages.length; offset += TDAI_CONVERSATION_MAX_MESSAGES) {
@@ -171,6 +269,9 @@ export class TdaiClient {
         { includeSession: true, includeTask: true, throwOnError: true },
       );
     }
+
+    // 写入成功后才记录水位：失败重试时不会误跳过 user 消息。
+    if (pendingDedupKey) l0UserDedupRecord(pendingDedupKey, now);
   }
 
   async searchL1(identity: TdaiIdentity, query: string): Promise<TdaiL1Memory[]> {

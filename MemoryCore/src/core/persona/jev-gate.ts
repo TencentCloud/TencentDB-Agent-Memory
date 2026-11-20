@@ -11,9 +11,17 @@ import type { Logger } from "../types.js";
 import { createDecisionProvider } from "../decision/registry.js";
 import { DecisionProviderError, type ChoiceQuestion } from "../decision/types.js";
 import { emitJevDiagnostic, type JevCorrelation } from "./jev-diagnostics.js";
+import {
+  JEV_STATE_LIMIT_CHARS_DEFAULT,
+  resolveJevOverflowPolicy,
+  resolveJevStateLimit,
+  trimJevStateForLimit,
+  type JevTrimResult,
+} from "./jev-state-trim.js";
 
 export const JEV_PROMPT_VERSION = "l3-memory-change-v1";
-export const JEV_STATE_LIMIT_CHARS = 32_000;
+/** Default JEV state budget; the effective value resolves from env at call time. */
+export const JEV_STATE_LIMIT_CHARS = JEV_STATE_LIMIT_CHARS_DEFAULT;
 const QUESTION_ID = "memory_change";
 
 export const JEV_INSTRUCTIONS = "Compare each changed scene's current durable conclusion against current_persona, then return exactly one label using strict priority. Classify conflict only if ANY scene invalidates, contradicts, or replaces a fact or principle that current_persona still asserts. Classify boundary_change only if ANY scene durably changes the applicability of a rule still present in current_persona. A newly stated restriction or expansion of an existing rule's scope is boundary_change, not new_rule. Classify new_rule only if ANY scene adds a separate durable persona-level rule that current_persona does not already contain and that is not merely an applicability change to an existing rule. Otherwise classify reinforcement when the scenes only support or restate what current_persona already says, and none when they add no durable persona-level information. Historical statements inside a scene are context, not active beliefs by themselves: if current_persona already contains the replacement conclusion, a scene that narrates the old-to-new history is reinforcement, not conflict. Never let reinforcing or irrelevant scenes outvote a genuine higher-priority change. Priority is conflict > boundary_change > new_rule > reinforcement > none.";
@@ -184,7 +192,15 @@ export async function evaluateL3JevGate(opts: {
     })),
   };
   const state = JSON.stringify(stateObject);
-  const inputTooLarge = state.length > JEV_STATE_LIMIT_CHARS;
+  const stateLimit = resolveJevStateLimit();
+  const overflowPolicy = resolveJevOverflowPolicy();
+  let sentState = state;
+  let trimResult: JevTrimResult | null = null;
+  if (state.length > stateLimit && overflowPolicy === "trim") {
+    trimResult = trimJevStateForLimit(stateObject, stateLimit);
+    if (trimResult) sentState = trimResult.state;
+  }
+  const inputTooLarge = sentState.length > stateLimit;
   const callExpected = hasCandidateInput && !inputIncomplete && !inputTooLarge;
   const selectedNames = changedScenes.map((scene) => scene.filename);
   const l2Names = l2ChangedNames(opts.context?.sceneDiff);
@@ -253,20 +269,33 @@ export async function evaluateL3JevGate(opts: {
     unexpected_in_jev: unexpectedInJev,
     persona_sha256: sha256(personaBody),
     persona_chars: personaBody.length,
-    state_sha256: sha256(state),
-    state_chars: state.length,
-    input_limit_chars: JEV_STATE_LIMIT_CHARS,
-    truncated: false,
+    state_sha256: sha256(sentState),
+    state_chars: sentState.length,
+    input_limit_chars: stateLimit,
+    truncated: trimResult !== null,
+    ...(trimResult ? {
+      state_chars_untrimmed: state.length,
+      trimmed_scenes: trimResult.trimmedScenes,
+      trimmed_chars: trimResult.trimmedChars,
+    } : {}),
     ...(mode === "full" ? {
       current_persona: personaBody,
       changed_scenes: changedScenes,
-      state,
+      state: sentState,
     } : {}),
   });
 
+  if (trimResult) {
+    opts.logger.warn(
+      `[memory-tdai] [l3-jev] input too large (${state.length} > ${stateLimit}); ` +
+      `trimmed to ${sentState.length} chars (${trimResult.trimmedScenes.length} scene(s)) before decision`,
+    );
+  }
+
   if (inputTooLarge) {
     opts.logger.warn(
-      `[memory-tdai] [l3-jev] input too large (${state.length} > ${JEV_STATE_LIMIT_CHARS}); deferring L3`,
+      `[memory-tdai] [l3-jev] input too large (${sentState.length} > ${stateLimit}); deferring L3` +
+      (overflowPolicy === "trim" ? " (trim infeasible)" : ""),
     );
     emitDecision(opts, correlation, {
       label: "unavailable",
@@ -308,7 +337,7 @@ export async function evaluateL3JevGate(opts: {
   const attemptStarted = Date.now();
   const callStarted = true;
   try {
-    const answers = await client.askChoices(state, [question]);
+    const answers = await client.askChoices(sentState, [question]);
     throwIfAborted(opts.context?.signal);
     const answer = answers.get(QUESTION_ID);
     if (!answer?.choice) {
