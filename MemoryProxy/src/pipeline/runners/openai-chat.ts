@@ -1441,13 +1441,10 @@ export async function runOpenaiChatPipeline(
       protocol: "openai",
       branch: "client_pipeline",
     });
-    // tap 必须与客户端解耦：客户端常常在流尾直接 abort 连接（dsh/pi-ai 每轮消费完都
-    // 无条件 abort），而 pipeThrough 的 flush 在流被 cancel 时按规范不执行，L0 就整轮丢。
-    // 所以照 anthropic 通道的做法 tee 出一支独立消费：客户端怎么断都不影响它读到结尾。
-    const [upstreamClientBranch, tapStream] = observedStream.tee();
-    consumeOpenAiTapStream(tapStream, tapCtx);
+    // tap 挂在主链路里（v2.0.4 起不再 tee）。客户端在流尾 abort 时 cancel 会触达收尾，
+    // 所以 L0 不会整轮丢 —— 见 createUsageTapTransform 的 cancel 分支。
     // 顺序要紧：tap 读的是模型原始输出；剥离只作用于客户端那一份。
-    const tappedStream = upstreamClientBranch.pipeThrough(createCfqStripStream(
+    const tappedStream = observedStream.pipeThrough(passthrough).pipeThrough(createCfqStripStream(
       "openai",
       preparedStats,
       createCfqStripObserver(pipe),
@@ -1909,11 +1906,11 @@ function mergeToolCallDeltas(
   }
 }
 
-/** 消费 tee 出来的 tap 支：逐块解析 SSE，累计 usage / content / tool_calls，
- *  读完统一收尾（L0、usage log、langfuse、credit 都挂在这条收尾链上）。
- *  与客户端流解耦，所以客户端提前断开也一定会走到收尾。
+/** 挂在主链路里的 usage tap：逐块解析 SSE，累计 usage / content / tool_calls，
+ *  收尾时统一处理（L0、usage log、langfuse、credit 都挂在这条收尾链上）。
+ *  flush 与 cancel 都会触达收尾，所以客户端提前断开也不会丢这一轮。
  */
-function consumeOpenAiTapStream(stream: ReadableStream<Uint8Array>, ctx: TapContext): void {
+function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, Uint8Array> {
   const { config, modelId, keyId, sessionKey, upstreamUrl, traceId, forkTraceId, startTime, inputMessages, retried, logMeta, pipe, lf, spaceId, upstreamRequestId } = ctx;
 
   const decoder = new TextDecoder();
