@@ -14,7 +14,7 @@ import { CompactionRequestSchemaV2 } from "../schemas.js";
 import { buildOffloadBasePath } from "../session-utils.js";
 import { applyFastPath } from "./fast-path.js";
 import { injectActiveMmd, injectHistoryMmds } from "./mmd-injector.js";
-import { resolveLevel, mildCompress, aggressiveCompress, emergencyCompress } from "./compressor.js";
+import { resolveLevel, mildCompress, aggressiveCompress, emergencyCompress, compressProtectedTail } from "./compressor.js";
 import { estimateMessageTokens, extractToolResultId } from "./helpers.js";
 import type { Message } from "./helpers.js";
 import { traceServerCompaction } from "../opik-tracer.js";
@@ -34,6 +34,8 @@ export interface CompactionReport {
   mildReplacements: number;
   aggressiveDeleted: number;
   emergencyDeleted: number;
+  protectedTailFreed: number;
+  protectedTailDeleted: number;
   mmdInjected: number;
 }
 
@@ -117,6 +119,8 @@ export async function handleCompaction(
     mildReplacements: 0,
     aggressiveDeleted: 0,
     emergencyDeleted: 0,
+    protectedTailFreed: 0,
+    protectedTailDeleted: 0,
     mmdInjected: 0,
   };
 
@@ -217,6 +221,23 @@ export async function handleCompaction(
     report.emergencyDeleted = em.deletedCount;
     aggRemainingTokens = em.remainingTokens;
     compactState.deletedOffloadIds.push(...em.deletedIds);
+
+    // Fallback: a single long agent step (many assistant/tool_result pairs) can
+    // leave emergency compaction still above the target. compressProtectedTail
+    // is the escape hatch for exactly this — it was defined but never called
+    // (issue #838).
+    if (aggRemainingTokens > emTargetTokens) {
+      const tail = compressProtectedTail(
+        messages,
+        tokenArray,
+        emTargetTokens,
+        aggRemainingTokens,
+        compactState.deletedOffloadIds,
+      );
+      report.protectedTailFreed = tail.freedTokens;
+      report.protectedTailDeleted = tail.deletedCount;
+      aggRemainingTokens -= tail.freedTokens;
+    }
   }
 
   // Step 7: Inject active MMD (after all compression, so position is correct)
