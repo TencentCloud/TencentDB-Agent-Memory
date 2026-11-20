@@ -21,6 +21,7 @@ import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/ty
 import type { EmbeddingService } from "../core/store/embedding.js";
 import type { StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
+import { clampSceneSummary } from "../core/scene/scene-summary.js";
 import type { Logger } from "../core/types.js";
 import type { IStateBackend } from "../core/state/types.js";
 import type { PipelineWorker } from "../services/pipeline-worker.js";
@@ -66,7 +67,7 @@ import {
   type CoreFile,
   type CoreWriteData,
 } from "./v2-schemas.js";
-import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
+import { clampSceneNavigationSummaries, stripSceneNavigation } from "../core/scene/scene-navigation.js";
 
 const TAG = "[tdai-gateway][v2]";
 const V2_PREFIX = "/v2";
@@ -925,6 +926,10 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
   const parsed = scenarioWriteRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
   const { path, content, summary } = parsed.data;
+  // This route writes META directly, bypassing L2 entirely. Apply the same
+  // summary cap as the extraction path so the injected system prompt cannot
+  // be inflated through the API.
+  const boundedSummary = summary === undefined ? undefined : clampSceneSummary(summary);
 
   const storage = deps.getStorage();
   if (!storage) return errorEnvelope(503, "Storage not available", requestId);
@@ -951,7 +956,7 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
 
     // Update fields
     metaFields["updated"] = now;
-    if (summary !== undefined) metaFields["summary"] = summary;
+    if (boundedSummary !== undefined) metaFields["summary"] = boundedSummary;
 
     const newMeta = Object.entries(metaFields).map(([k, v]) => `${k}: ${v}`).join("\n");
     finalContent = `-----META-START-----\n${newMeta}\n-----META-END-----\n\n${content}`;
@@ -961,7 +966,7 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
       `created: ${now}`,
       `updated: ${now}`,
     ];
-    if (summary !== undefined) metaLines.push(`summary: ${summary}`);
+    if (boundedSummary !== undefined) metaLines.push(`summary: ${boundedSummary}`);
     finalContent = `-----META-START-----\n${metaLines.join("\n")}\n-----META-END-----\n\n${content}`;
   }
 
@@ -1026,8 +1031,21 @@ async function handleCoreRead(_body: unknown, _auth: V2AuthContext, requestId: s
   const stat = await storage.stat(StoragePaths.persona);
   const now = new Date().toISOString();
 
+  // Clients that read L3 through this endpoint (openclaw-plugin, hermes v2, the
+  // SDKs) inject the stored body verbatim, including the scene navigation block
+  // written by an older L2 round. Clamp its summaries here so a legacy persona
+  // cannot bypass the cap. Read-only: nothing is written and `updated_at` still
+  // reflects the file on disk. `handleCoreWrite` strips the block on the way
+  // back in, so this cannot lose data on a read-modify-write round trip.
+  const bounded = clampSceneNavigationSummaries(content);
+  if (bounded !== content) {
+    deps.logger.debug?.(
+      `${TAG} [core/read] clamped legacy scene navigation summaries (${content.length}→${bounded.length} chars)`,
+    );
+  }
+
   return successEnvelope<CoreFile>({
-    content,
+    content: bounded,
     created_at: stat ? new Date(stat.createdAt).toISOString() : now,
     updated_at: stat ? new Date(stat.lastModified).toISOString() : now,
   }, requestId);

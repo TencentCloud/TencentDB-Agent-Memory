@@ -7,8 +7,10 @@
 
 import path from "node:path";
 import type { SceneIndexEntry } from "./scene-index.js";
+import { clampSceneSummary } from "./scene-summary.js";
 
 const NAV_HEADER = "---\n## 🗺️ Scene Navigation (Scene Index)";
+const NAV_HEADER_CRLF = "---\r\n## 🗺️ Scene Navigation (Scene Index)";
 
 const NAV_FOOTER_LOCAL = `📌 使用说明：
 - Path 是 scene block 的绝对路径，可直接使用 **read** 工具读取完整内容（参数: filePath）
@@ -56,7 +58,11 @@ export function generateSceneNavigation(entries: SceneIndexEntry[], dataDir?: st
     }
     const pathLine = `### Path: ${scenePath}`;
     const heatLine = `**热度**: ${e.heat}${heatEmoji(e.heat)}${e.updated ? ` | **更新**: ${e.updated}` : ""}`;
-    const summaryLine = `Summary: ${e.summary}`;
+    // Read-side guard: this block is injected into the system prompt on every
+    // session start, so summaries are clamped here as well. L2 already caps
+    // them on write, but this covers legacy scene_index.json entries and the
+    // ones written directly through `POST /v2/scenario/write`.
+    const summaryLine = `Summary: ${clampSceneSummary(e.summary)}`;
     return `${pathLine}\n${heatLine}\n${summaryLine}`;
   });
 
@@ -73,4 +79,38 @@ export function stripSceneNavigation(personaContent: string): string {
   const idx = personaContent.indexOf(NAV_HEADER);
   if (idx === -1) return personaContent;
   return personaContent.slice(0, idx).trimEnd();
+}
+
+// `Summary: ` lines only; the `\r` is captured so CRLF personae keep their
+// line endings when the value is rewritten.
+const NAV_SUMMARY_LINE_RE = /^(Summary: )(.*?)(\r?)$/gm;
+
+/**
+ * Clamp the summaries of a scene navigation block that is **already stored** in
+ * persona.md.
+ *
+ * `generateSceneNavigation()` clamps on generation, so freshly written personae
+ * are fine. But clients that read L3 through `POST /v2/core/read`
+ * (`openclaw-plugin`, hermes v2, the SDKs) inject the stored block verbatim, and
+ * a persona written before the cap existed still carries over-long summaries
+ * into the system prompt on every turn. Clamping here closes that legacy path
+ * without touching storage.
+ *
+ * Only the region from `NAV_HEADER` onwards is rewritten, so a body paragraph
+ * that happens to start with `Summary: ` is never altered. Idempotent.
+ */
+export function clampSceneNavigationSummaries(personaContent: string): string {
+  // A CRLF-normalised persona is possible (some clients rewrite line endings),
+  // so accept both forms of the header before giving up.
+  let idx = personaContent.indexOf(NAV_HEADER);
+  if (idx === -1) idx = personaContent.indexOf(NAV_HEADER_CRLF);
+  if (idx === -1) return personaContent;
+
+  const head = personaContent.slice(0, idx);
+  const nav = personaContent.slice(idx);
+  const clampedNav = nav.replace(
+    NAV_SUMMARY_LINE_RE,
+    (_line, prefix: string, value: string, cr: string) => `${prefix}${clampSceneSummary(value)}${cr}`,
+  );
+  return clampedNav === nav ? personaContent : head + clampedNav;
 }

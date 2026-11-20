@@ -192,7 +192,7 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 -----META-START-----
 created: {{EXISTING_CREATED_TIME_OR_CURRENT_TIME}}
 updated: {{CURRENT_TIME}}
-summary: [30-40 words concise summary for indexing]
+summary: [最高优先级：≤30 words 且 ≤160 characters 的索引摘要；必须单行、无换行。超长会被运行时强制截断，不要依赖长度换取信息量]
 heat: [Integer]
 -----META-END-----
 
