@@ -13,6 +13,7 @@
 import type { IMemoryStore, IsolationFilter, L0SearchResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/tokenize.js";
 import { hasClientEmbedding, type EmbeddingService } from "../store/embedding.js";
+import { embedQuery } from "../store/query-embedding.js";
 import type { Logger } from "../types.js";
 
 // ============================
@@ -212,7 +213,7 @@ export async function executeConversationSearch(params: {
       if (!hasEmbedding) return [];
       try {
         logger?.debug?.(`${TAG} [hybrid-vec] Generating query embedding...`);
-        const queryEmbedding = await embeddingService!.embed(query);
+        const queryEmbedding = await embedQuery(embeddingService!, query);
         logger?.debug?.(
           `${TAG} [hybrid-vec] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
