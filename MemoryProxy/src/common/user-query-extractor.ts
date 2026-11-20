@@ -135,6 +135,25 @@ const DSH_RUNTIME_NOTICE_LINE_PATTERNS: RegExp[] = [
   /^\s*Elapsed since the preceding (?:model-visible message|step context):/,
   /^\s*The working directory changed from "/,
   /^\s*The working directory ".+" is unavailable\.\s*The working directory is now "/,
+  // model-selection 插件：切换模型路由时在 pre-step 插入的一条通知。
+  // 整行锚定 —— 只在它单独成行时命中，正文引用这句话不受影响。
+  /^\[model changed: [^\]]*\]$/,
+  // repeat-tool-reminder（gentle 变体）：重复调用同一工具的第一档提醒。
+  /^\s*You are repeating the exact same tool call with identical arguments\./,
+];
+
+/**
+ * 以「首行 + 多行正文」形态出现的注入块，按行剥只能掉首行、续行会留在 L0 里。
+ *
+ * OpenAI Chat 通道下这两种注入都独立成条（一条 user 消息只有它自己），
+ * 所以「整条以首行开头」时直接吃到末尾；真问题混在前面时不命中，
+ * 退回到按行剥（只掉首行，续行仍会残留 —— 已知局限，Anthropic 通道才会遇到）。
+ */
+const DSH_INJECTION_BLOCK_PATTERNS: RegExp[] = [
+  // tmux-context：`tmux location (turn N):` + 多行会话状态
+  /^(?:[ \t]*\n)*[ \t]*tmux location \(turn \d+\):[\s\S]*$/,
+  // action-cards：固定前言 + 引导语 + `\n` + JSON 快照
+  /^(?:[ \t]*\n)*[ \t]*Latest status of action cards from user actions and background work\.[\s\S]*$/,
 ];
 
 /**
@@ -167,6 +186,36 @@ function stripDshJobNotices(text: string): string {
   // 绝大多数消息不含这个前缀，先做一次廉价判断再上正则
   if (!text.includes("background job ")) return text;
   return text.replace(DSH_JOB_NOTICE_RE, "");
+}
+
+/**
+ * DSH repeat-tool-reminder 的 detailed 变体 —— 多行片段，首行
+ * `Repeated tool call detected:`，末尾固定以 `evidence has been gathered.` 收束。
+ *
+ * 与 gentle 变体分开处理（gentle 是单段、按行剥即可）：detailed 带
+ * `- tool:` / `- consecutive_calls:` / `- arguments:` 三个字段行，只剥首行会把
+ * 这三行留在 L0 里，比不剥更脏。
+ */
+const DSH_REPEAT_DETAILED_RE =
+  /(?:^|\n)[ \t]*Repeated tool call detected:[\s\S]{0,8000}?evidence has been gathered\./g;
+
+function stripDshRepeatDetailed(text: string): string {
+  if (!text.includes("Repeated tool call detected:")) return text;
+  return text.replace(DSH_REPEAT_DETAILED_RE, "");
+}
+
+/**
+ * DSH session-reference（用户在输入里引用历史会话）—— `## Referenced sessions`
+ * 标题 + 三行说明 + `<referenced-sessions>` 里的 JSON 快照。
+ *
+ * 整段剥而不是只加 XML 标签：标题和说明文字在标签外面，只剥标签会留下它们。
+ */
+const DSH_REFERENCED_SESSIONS_RE =
+  /(?:^|\n)## Referenced sessions[\s\S]*?<\/referenced-sessions>/g;
+
+function stripDshReferencedSessions(text: string): string {
+  if (!text.includes("## Referenced sessions")) return text;
+  return text.replace(DSH_REFERENCED_SESSIONS_RE, "");
 }
 
 /**
@@ -208,6 +257,13 @@ export function extractUserQueryText(raw: string): string {
 
   // 2a-0) DSH 后台任务完成通知（jobs 插件）：label 带换行，必须整段剥
   text = stripDshJobNotices(text);
+  // 2a-0b) 同为多行的三类：repeat-tool-reminder detailed、引用会话快照。
+  text = stripDshRepeatDetailed(text);
+  text = stripDshReferencedSessions(text);
+  // 2a-0c) 「首行 + 多行正文」的注入块，整条吃到末尾。
+  for (const blockRe of DSH_INJECTION_BLOCK_PATTERNS) {
+    if (blockRe.test(text)) text = text.replace(blockRe, "");
+  }
 
   // 2a) session-init 表单回答 <question_answer>...</question_answer>
   text = text.replace(/<question_answer[^>]*>[\s\S]*?<\/question_answer>/gi, "");
@@ -229,6 +285,12 @@ export function extractUserQueryText(raw: string): string {
     "persisted-output", "persisted_output",
     "tool_use_error", "tool-use-error",
     "tool_result", "tool-result",
+    // dsh 的注入容器：技能目录 / 目标收尾 / 引用会话快照。
+    // 它们都是“给模型看的上下文”，不是用户键入的内容。
+    "available_skills",
+    "goal_complete",
+    "goal_blocked",
+    "referenced-sessions",
     // The proxy may prepend L1 recall inside a user-role message. It is
     // context for the model, not text typed by the user.
     "tdai_recalled_l1_memories",
