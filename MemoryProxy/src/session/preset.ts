@@ -23,6 +23,7 @@ import type { TeamOption } from "./types.js";
  *   - `pi`       — openai-chat, no `ask_followup_question` tool in body.tools
  *   - `hermes`   — anthropic, no ask-user tool available
  *   - `openclaw` — anthropic, same as hermes
+ *   - `openhands` — openai-chat via LiteLLM `extra_headers`, no ask-user tool
  *
  * For these clients, `handleSessionInit` MUST NOT emit a fake tool_call form
  * on preset failure/mismatch — the client renders unknown tool_use as an
@@ -32,6 +33,7 @@ import type { TeamOption } from "./types.js";
 export const HEADER_ONLY_AGENTS: ReadonlySet<string> = new Set([
   "hermes",
   "openclaw",
+  "openhands",
   "pi",
 ]);
 
