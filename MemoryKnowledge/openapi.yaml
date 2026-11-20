@@ -3,7 +3,7 @@ info:
   title: Knowledge Service API
   description: |
     Standalone knowledge service for Code-Graph + LLM-Wiki.
-    Provides 28 endpoints for managing and querying code repositories
+    Provides HTTP endpoints for managing and querying code repositories
     and wiki knowledge bases.
 
     ## Multi-tenancy (001)
@@ -46,6 +46,200 @@ tags:
     description: Code repository indexing and structured code queries.
 
 paths:
+  /wiki/okf/import:
+    post:
+      tags:
+        - LLM-Wiki
+      summary: Import native Wiki files without model processing
+      description: Requires nonempty configured service key and matching Bearer
+        credential, plus exact service/team/Wiki ownership. Shared key is admin
+        authority, not per-tenant cryptographic identity. Incoming 1..1000
+        files/10 MiB decoded, actual JSON 20 MiB. Full preflight, staged merge,
+        explicit overwrite, locked-page protection, version bump and derived
+        index. Interrupted completion retains journal/backup and blocks legacy
+        mutation; no LLM/resource execution.
+      operationId: importNativeOkfBundle
+      parameters:
+        - in: header
+          name: x-tdai-service-id
+          required: true
+          schema:
+            type: string
+            pattern: ^[A-Za-z0-9_-]+$
+        - in: header
+          name: Authorization
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - team_id
+                - wiki_id
+                - files
+              properties:
+                team_id:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]+$
+                wiki_id:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]+$
+                overwrite:
+                  type: boolean
+                  default: false
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required:
+                      - path
+                      - content
+                    properties:
+                      path:
+                        type: string
+                        minLength: 1
+                      content:
+                        type: string
+                      encoding:
+                        type: string
+                        enum:
+                          - utf-8
+                          - base64
+                        default: utf-8
+      responses:
+        "200":
+          description: Existing success envelope after indexing/finalization or recovery no-op
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required:
+                          - files
+                          - concepts
+                          - warnings
+                        properties:
+                          files:
+                            type: integer
+                          concepts:
+                            type: integer
+                          warnings:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                path:
+                                  type: string
+                                message:
+                                  type: string
+        "400":
+          description: Invalid identities, JSON, overwrite flag or bundle
+        "401":
+          description: Invalid/missing service credential
+        "404":
+          description: Missing exact service/team/Wiki tuple
+        "409":
+          description: Active work, conflicting/locked target or unresolved import
+        "413":
+          description: Declared or actual operation body limit exceeded
+        "415":
+          description: Expected application/json
+        "500":
+          description: Indexing/finalization fault, ambiguous recovery or unexpected
+            fault; evidence retained
+        "503":
+          description: New native write operation disabled until service key configured
+  /wiki/okf/recover:
+    post:
+      tags:
+        - LLM-Wiki
+      summary: Retry derived indexing after an unambiguous native import
+      description: Requires nonempty configured service key and matching Bearer
+        credential, plus exact service/team/Wiki ownership. Shared key is admin
+        authority, not per-tenant cryptographic identity. Actual JSON at most 32
+        KiB. Unambiguous committed journal rolls forward current files, never
+        restores older backup over newer writes. Missing journal returns no_op
+        only without unrelated active ingestion. Ambiguous evidence is preserved
+        for an operator. No model processing.
+      operationId: recoverNativeOkfImport
+      parameters:
+        - in: header
+          name: x-tdai-service-id
+          required: true
+          schema:
+            type: string
+            pattern: ^[A-Za-z0-9_-]+$
+        - in: header
+          name: Authorization
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - team_id
+                - wiki_id
+              properties:
+                team_id:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]+$
+                wiki_id:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]+$
+      responses:
+        "200":
+          description: Existing success envelope after indexing/finalization or recovery no-op
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required:
+                          - action
+                          - message
+                        properties:
+                          action:
+                            type: string
+                            enum:
+                              - rolled_forward
+                              - no_op
+                          message:
+                            type: string
+        "400":
+          description: Invalid identities, JSON, overwrite flag or bundle
+        "401":
+          description: Invalid/missing service credential
+        "404":
+          description: Missing exact service/team/Wiki tuple
+        "409":
+          description: Active work, conflicting/locked target or unresolved import
+        "413":
+          description: Declared or actual operation body limit exceeded
+        "415":
+          description: Expected application/json
+        "500":
+          description: Indexing/finalization fault, ambiguous recovery or unexpected
+            fault; evidence retained
+        "503":
+          description: New native write operation disabled until service key configured
   # ═══════════════════════════════════════════════
   # LLM-Wiki (15 endpoints)
   # ═══════════════════════════════════════════════
