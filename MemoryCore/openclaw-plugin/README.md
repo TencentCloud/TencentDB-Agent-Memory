@@ -177,7 +177,7 @@ openclaw gateway restart
 | `server.apiKey` | `local` | Bearer token; use `local` for default standalone |
 | `server.instanceId` | `default` | Sent as `x-tdai-service-id` |
 | `server.teamId` | `default` | v3 isolation `team_id` |
-| `server.agentId` | `default` | v3 isolation `agent_id` |
+| `server.agentId` | `default` | Fallback v3 isolation `agent_id` when the runtime context has no agent id |
 | `server.userId` | `default` | v3 isolation `user_id` |
 | `server.rejectUnauthorized` | `true` | TLS certificate verification |
 | `recall.maxResults` | `5` | Max L1 memories injected per turn |

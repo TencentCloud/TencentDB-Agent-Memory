@@ -44,7 +44,7 @@
           "agentId": {
             "type": "string",
             "default": "default",
-            "description": "v3 isolation agent_id"
+            "description": "运行时未提供 agent id 时使用的 v3 isolation agent_id 兜底"
           },
           "userId": {
             "type": "string",
