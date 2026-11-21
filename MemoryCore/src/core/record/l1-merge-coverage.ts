@@ -61,9 +61,48 @@ function extractFactTokens(text: string): string[] {
  *
  * These tokens are therefore excluded from the ratio and checked separately
  * for *exact* presence.
+ *
+ * Timestamps are deliberately NOT part of that hard core — see
+ * `TIMESTAMP_PATTERNS` below.
  */
+
+/**
+ * Timestamp-like fragments that must NOT be treated as fact-critical.
+ *
+ * Models legitimately restate timestamps when merging records ("确认于
+ * 2026-11-21T03:43:12.923Z" → "确认于 2026-11-21"), and they may drop the
+ * time part entirely. Treating those as altered critical values blocks every
+ * legitimate merge, which makes the guard turn merges into plain stores and
+ * inflates the record count — worse than not guarding at all.
+ *
+ * Real facts (ports, versions, model names, paths) are unaffected.
+ */
+const TIMESTAMP_PATTERNS: RegExp[] = [
+  // ISO 8601 date-time: 2026-11-21T03:43:12.923Z / 2026-11-21 03:43:12+08:00
+  /\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:?\d{2})?/gi,
+  // ISO date: 2026-11-21
+  /\d{4}-\d{2}-\d{2}/g,
+  // clock time: 03:43:12 / 03:43 / 03:43:12.923
+  /\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?/g,
+  // Chinese date: 2026年11月21日 / 11月21日
+  /\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/g,
+  /\d{1,2}\s*月\s*\d{1,2}\s*日/g,
+  // bare year with 年 marker: 2026年
+  /\d{4}\s*年/g,
+];
+
+/**
+ * Remove timestamp-like fragments so they are never collected as critical
+ * tokens.
+ */
+function stripTimestamps(text: string): string {
+  let out = text;
+  for (const re of TIMESTAMP_PATTERNS) out = out.replace(re, " ");
+  return out;
+}
+
 function extractCriticalTokens(text: string): string[] {
-  const normalized = text.toLowerCase();
+  const normalized = stripTimestamps(text).toLowerCase();
   const critical: string[] = [];
 
   // Runs containing at least one digit: ports, versions, counts, sizes.

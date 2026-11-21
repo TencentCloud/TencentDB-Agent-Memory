@@ -57,6 +57,30 @@ describe("merge coverage — legitimate merges are allowed", () => {
     );
     expect(r.safe).toBe(true);
   });
+
+  it("allows a merge that restates the timestamp", async () => {
+    // Timestamps are NOT fact-critical. Models routinely restate or drop the
+    // time part when merging; blocking those turns every merge into a plain
+    // store and inflates the record count — worse than not guarding at all.
+    const r = await check(
+      "用户在 2026-11-18 确认旧事实：MemoryProxy 端口 8096 保持闲置，不要改动。",
+    );
+    expect(r.safe).toBe(true);
+  });
+
+  it("allows a merge that drops the timestamp entirely", async () => {
+    const r = await check(
+      "用户确认旧事实：MemoryProxy 端口 8096 保持闲置，不要改动。",
+    );
+    expect(r.safe).toBe(true);
+  });
+
+  it("allows a merge that rewrites an ISO timestamp in a different case", async () => {
+    const r = await check(
+      "用户在 2026-11-19t03:43:12.923z 确认旧事实：MemoryProxy 端口 8096 保持闲置，不要改动。",
+    );
+    expect(r.safe).toBe(true);
+  });
 });
 
 describe("merge coverage — fact-altering merges are blocked", () => {
@@ -92,9 +116,21 @@ describe("merge coverage — fact-altering merges are blocked", () => {
     expect(r.safe).toBe(false);
   });
 
-  it("blocks a merge that changes the date", async () => {
+  it("blocks a merge that changes the model name", async () => {
+    // "qwen3.5:9b-mlx" → "qwen3.5:27b-mlx": the sentence stays grammatical and
+    // almost every n-gram survives, but the stored fact is now false.
     const r = await check(
-      "用户在 2026-11-18 确认旧事实：MemoryProxy 端口 8096 保持闲置，不要改动。",
+      "用户确认 TDAI 生产模型是 qwen3.5:27b-mlx，numCtx 8192。",
+      "用户确认 TDAI 生产模型是 qwen3.5:9b-mlx，numCtx 8192。",
+    );
+    expect(r.safe).toBe(false);
+    expect(r.uncovered).toContain("m_tgt_01");
+  });
+
+  it("blocks a merge that changes a numeric setting", async () => {
+    const r = await check(
+      "用户确认 TDAI 生产模型是 qwen3.5:9b-mlx，numCtx 16384。",
+      "用户确认 TDAI 生产模型是 qwen3.5:9b-mlx，numCtx 8192。",
     );
     expect(r.safe).toBe(false);
   });
