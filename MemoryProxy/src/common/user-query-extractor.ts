@@ -140,6 +140,10 @@ const DSH_RUNTIME_NOTICE_LINE_PATTERNS: RegExp[] = [
   /^\[model changed: [^\]]*\]$/,
   // repeat-tool-reminder（gentle 变体）：重复调用同一工具的第一档提醒。
   /^\s*You are repeating the exact same tool call with identical arguments\./,
+  // pi-ai 在 OpenAI Chat 通道上表达「工具结果带图」时凭空造的一条 user 消息：
+  // 协议的 tool 消息 content 只能是字符串，图只能挪到紧跟其后的一条 user 消息里。
+  // 它不含任何用户输入，剥空后才能落回真人那句。
+  /^Attached image\(s\) from tool result:$/,
 ];
 
 /**

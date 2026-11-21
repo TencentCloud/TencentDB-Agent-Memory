@@ -253,4 +253,25 @@ describe("DSH injected context: further variants", () => {
 
     expect(extractUserQueryText(raw)).toBe("");
   });
+
+  it("drops the pi-ai placeholder that carries a tool result's images", () => {
+    // pi-ai 把 tool 结果里的图挪进一条凭空造的 user 消息，文本只有这一句。
+    const raw = "Attached image(s) from tool result:";
+
+    expect(extractUserQueryText(raw)).toBe("");
+  });
+
+  it("keeps the real question that sits above the image placeholder", () => {
+    // extractContentText 把同一条消息的多个 text part 用 \n 拼起来，
+    // 真问题在前、占位在后，剥掉占位后应剩下真问题。
+    const raw = ["这张图里的报错是什么原因？", "Attached image(s) from tool result:"].join("\n");
+
+    expect(extractUserQueryText(raw)).toBe("这张图里的报错是什么原因？");
+  });
+
+  it("keeps a sentence that merely mentions the image placeholder", () => {
+    const raw = "为什么日志里有 Attached image(s) from tool result: 这一句？";
+
+    expect(extractUserQueryText(raw)).toBe(raw);
+  });
 });
