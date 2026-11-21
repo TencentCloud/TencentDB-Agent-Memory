@@ -10,7 +10,7 @@
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import type { LimitFunction } from "p-limit";
-import { createLlmClient, type LlmClient, type RawLlmConfig } from "./llm.js";
+import { createLlmClient, type ChatParams, type LlmClient, type RawLlmConfig } from "./llm.js";
 import { loadTemplate } from "./template.js";
 import {
   buildSystemPrompt,
@@ -158,6 +158,7 @@ export async function extractSource(
     const tag = chunks.length > 1 ? `${sourceName}#${i + 1}` : sourceName;
 
     let out: string;
+    let finishReason: string | null = null;
     if (mode === "two-stage") {
       log.debug("阶段A 分析开始", { chunk: tag });
       const analysis = await llm.chat({
@@ -171,13 +172,19 @@ export async function extractSource(
         ? buildGenerateFromAnalysisPrompt({ sourceName: chunkLabel, sourceText: chunks[i], analysis, existingPages })
         : buildGeneratePrompt({ sourceName: chunkLabel, sourceText: chunks[i], existingPages });
       if (!analysis.trim()) log.warn("分析为空，降级单阶段生成", { chunk: tag });
-      out = await llm.chat({ system: systemPrompt, prompt: genPrompt, label: `generate:${tag}` });
+      const gen = await callGenerate(llm, { system: systemPrompt, prompt: genPrompt, label: `generate:${tag}` });
+      out = gen.text;
+      finishReason = gen.finishReason;
     } else {
       const prompt = buildGeneratePrompt({ sourceName: chunkLabel, sourceText: chunks[i], existingPages });
-      out = await llm.chat({ system: systemPrompt, prompt, label: `generate:${tag}` });
+      const gen = await callGenerate(llm, { system: systemPrompt, prompt, label: `generate:${tag}` });
+      out = gen.text;
+      finishReason = gen.finishReason;
     }
 
-    const { files, warnings: w } = parseFileBlocks(out);
+    // 输出未被长度截断时，允许救回模型漏写 END 标记的最后一个 FILE 块；
+    // 真被截断（finishReason === "length"）时块内容残缺，仍按原样丢弃。
+    const { files, warnings: w } = parseFileBlocks(out, { allowUnclosedTail: finishReason !== "length" });
     warnings.push(...w);
     log.debug("FILE 块解析", { chunk: tag, outChars: out.length, files: files.length, warnings: w.length });
     if (files.length === 0 && out.trim()) {
@@ -412,6 +419,21 @@ export function ensureSources(content: string, sourceName: string): string {
  * @param content  页面完整内容（含 frontmatter）
  * @returns 规范化后的 wiki 相对路径（始终以 `wiki/` 开头）
  */
+/**
+ * 调用 LLM 生成内容，并尽量取回结束原因。
+ * 老客户端没有 chatWithMeta 时 finishReason 为 null（调用方按"未知"保守处理）。
+ */
+async function callGenerate(
+  llm: LlmClient,
+  params: ChatParams,
+): Promise<{ text: string; finishReason: string | null }> {
+  if (typeof llm.chatWithMeta === "function") {
+    const r = await llm.chatWithMeta(params);
+    return { text: r.text, finishReason: r.finishReason ?? null };
+  }
+  return { text: await llm.chat(params), finishReason: null };
+}
+
 export function canonicalizePagePath(llmPath: string, content: string): string {
   const { frontmatter } = parseFrontmatter(content);
   const type = typeof frontmatter.type === "string" ? frontmatter.type.trim() : "";

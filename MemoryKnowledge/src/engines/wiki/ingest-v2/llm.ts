@@ -87,9 +87,24 @@ export interface ChatParams {
   label?: string;
 }
 
+/**
+ * 一次 LLM 调用的结果：文本 + 结束原因。
+ */
+export interface ChatResult {
+  text: string;
+  /** AI SDK 的 finishReason；"length" 表示输出被 maxOutputTokens 截断。 */
+  finishReason: string | null;
+}
+
 /** 抽象出的最小 LLM 客户端接口，便于测试时打桩。 */
 export interface LlmClient {
   chat(params: ChatParams): Promise<string>;
+  /**
+   * 带结束原因的变体（可选）。调用方据此判断输出是否因 maxOutputTokens 被截断
+   * （finishReason === "length"），从而决定是否对残缺输出做容错修复。
+   * 未实现时调用方应保守处理（不修复）。
+   */
+  chatWithMeta?(params: ChatParams): Promise<ChatResult>;
   readonly config: NormalizedLlmConfig;
 }
 
@@ -116,9 +131,9 @@ export function createLlmClient(raw: RawLlmConfig | undefined): LlmClient {
     ? createAnthropic({ baseURL: config.baseUrl, apiKey: config.apiKey })
     : createOpenAI({ baseURL: config.baseUrl, apiKey: config.apiKey });
 
-  return {
+  const impl = {
     config,
-    async chat(params: ChatParams): Promise<string> {
+    async chatWithMeta(params: ChatParams): Promise<ChatResult> {
       const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
       const signal = params.abortSignal
         ? AbortSignal.any([timeoutSignal, params.abortSignal])
@@ -183,7 +198,7 @@ export function createLlmClient(raw: RawLlmConfig | undefined): LlmClient {
         if (!text) {
           log.warn(`LLM 返回空文本 [${label}]`, { finishReason: finishReason ?? null });
         }
-        return text;
+        return { text, finishReason: finishReason ?? null };
       } catch (err) {
         log.error(`LLM 调用失败 [${label}]`, {
           ms: Date.now() - startMs,
@@ -191,6 +206,14 @@ export function createLlmClient(raw: RawLlmConfig | undefined): LlmClient {
         });
         throw err;
       }
+    },
+  };
+
+  return {
+    config: impl.config,
+    chatWithMeta: impl.chatWithMeta,
+    async chat(params: ChatParams): Promise<string> {
+      return (await impl.chatWithMeta(params)).text;
     },
   };
 }
