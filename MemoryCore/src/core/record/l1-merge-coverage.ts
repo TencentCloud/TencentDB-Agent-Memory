@@ -15,6 +15,8 @@
 import type { IMemoryStore } from "../store/types.js";
 import type { Logger } from "../../types.js";
 
+const TAG = "[memory-tdai][l1-merge-coverage]";
+
 /**
  * Normalize text into comparable "fact tokens".
  *
@@ -50,6 +52,34 @@ function extractFactTokens(text: string): string[] {
 }
 
 /**
+ * Tokens that carry the fact's hard core and must survive **verbatim**.
+ *
+ * Ports, version numbers, model names and paths are the parts of a fact that
+ * are silently wrong when they change: "port 8096" written as "port 8095"
+ * keeps the sentence grammatical, so a ratio-based check passes it — but the
+ * stored fact is now false.
+ *
+ * These tokens are therefore excluded from the ratio and checked separately
+ * for *exact* presence.
+ */
+function extractCriticalTokens(text: string): string[] {
+  const normalized = text.toLowerCase();
+  const critical: string[] = [];
+
+  // Runs containing at least one digit: ports, versions, counts, sizes.
+  for (const m of normalized.matchAll(/[a-z0-9][a-z0-9._:/-]*(?:\d[a-z0-9._:/-]*)+/g)) {
+    critical.push(m[0]);
+  }
+
+  // Dotted / slashed identifiers without digits: file names, module paths.
+  for (const m of normalized.matchAll(/[a-z][a-z0-9._-]*(?:[./_][a-z0-9._-]+)+/g)) {
+    critical.push(m[0]);
+  }
+
+  return [...new Set(critical)];
+}
+
+/**
  * Fraction of a target record's distinctive tokens that reappear in the
  * merged text. 1.0 = every token carried over, 0.0 = nothing carried over.
  */
@@ -63,6 +93,19 @@ function coverageRatio(targetContent: string, mergedContent: string): number {
     if (mergedTokens.has(t)) hit++;
   }
   return hit / targetTokens.length;
+}
+
+/**
+ * Critical tokens of the target that do NOT appear verbatim in the merged
+ * text. A non-empty result means the merged text states the fact with a
+ * different value — worse than dropping it, because it looks correct.
+ */
+function findAlteredCriticalTokens(targetContent: string, mergedContent: string): string[] {
+  const critical = extractCriticalTokens(targetContent);
+  if (critical.length === 0) return [];
+
+  const mergedLower = mergedContent.toLowerCase();
+  return critical.filter((c) => !mergedLower.includes(c));
 }
 
 /**
@@ -98,7 +141,21 @@ export async function findUncoveredTargets(
 
   const uncovered: string[] = [];
   for (const row of existing) {
-    const ratio = coverageRatio(row.content ?? "", mergedContent);
+    const content = row.content ?? "";
+
+    // Hard-core tokens (ports, versions, paths) must survive verbatim — a
+    // rephrased sentence that changed "8096" to "8095" states a false fact.
+    const altered = findAlteredCriticalTokens(content, mergedContent);
+    if (altered.length > 0) {
+      logger?.warn?.(
+        `${TAG} coverage check: target ${row.record_id} has altered critical token(s) ` +
+        `(${altered.join(",")}) — treating target as uncovered`,
+      );
+      uncovered.push(row.record_id);
+      continue;
+    }
+
+    const ratio = coverageRatio(content, mergedContent);
     if (ratio < MERGE_COVERAGE_THRESHOLD) {
       uncovered.push(row.record_id);
     }
