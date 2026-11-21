@@ -52,21 +52,6 @@ function extractFactTokens(text: string): string[] {
 }
 
 /**
- * Tokens that carry the fact's hard core and must survive **verbatim**.
- *
- * Ports, version numbers, model names and paths are the parts of a fact that
- * are silently wrong when they change: "port 8096" written as "port 8095"
- * keeps the sentence grammatical, so a ratio-based check passes it — but the
- * stored fact is now false.
- *
- * These tokens are therefore excluded from the ratio and checked separately
- * for *exact* presence.
- *
- * Timestamps are deliberately NOT part of that hard core — see
- * `TIMESTAMP_PATTERNS` below.
- */
-
-/**
  * Timestamp-like fragments that must NOT be treated as fact-critical.
  *
  * Models legitimately restate timestamps when merging records ("确认于
@@ -101,6 +86,15 @@ function stripTimestamps(text: string): string {
   return out;
 }
 
+/**
+ * Tokens that carry a fact's hard core and must survive **verbatim**.
+ *
+ * Ports, version numbers, model names and paths are the parts of a fact that
+ * are silently wrong when they change: "port 8096" written as "port 8095"
+ * keeps the sentence grammatical, so a ratio-based check passes it — but the
+ * stored fact is now false. Those tokens are excluded from the ratio and
+ * checked separately for *exact* presence.
+ */
 function extractCriticalTokens(text: string): string[] {
   const normalized = stripTimestamps(text).toLowerCase();
   const critical: string[] = [];
