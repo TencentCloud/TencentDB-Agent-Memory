@@ -1523,8 +1523,8 @@ export class VectorStore implements IMemoryStore {
    * **Fault-tolerant**: returns 0 on failure.
    * TTL cleanup by updated_time.
    *
-   * Deletes expired rows from l1_records and matching vectors from l1_vec
-   * in a single transaction to guarantee consistency.
+   * Deletes expired rows from l1_records plus their l1_vec vectors and l1_fts
+   * rows in a single transaction to guarantee consistency.
    */
   deleteL1Expired(cutoffIso: string): number {
     if (this.degraded) {
@@ -1554,6 +1554,22 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
+        // l1_fts is a standalone FTS5 table that searchL1Fts reads directly,
+        // so its rows must go too or expired memories stay keyword-recallable.
+        // Runs before the l1_records delete, which the subquery depends on.
+        if (this.ftsAvailable) {
+          try {
+            this.db.prepare(
+              "DELETE FROM l1_fts WHERE record_id IN " +
+              "(SELECT record_id FROM l1_records WHERE updated_time != '' AND updated_time < ?)",
+            ).run(cutoffIso);
+          } catch (ftsErr) {
+            // Non-fatal, like the per-record FTS deletes in deleteL1/deleteL1Batch.
+            this.logger?.warn(
+              `${TAG} [L1-deleteExpired] FTS cleanup failed (non-fatal): ${ftsErr instanceof Error ? ftsErr.message : String(ftsErr)}`,
+            );
+          }
+        }
         if (this.vecTablesReady) {
           this.db.prepare(
             "DELETE FROM l1_vec WHERE updated_time != '' AND updated_time < ?",
@@ -2002,8 +2018,8 @@ export class VectorStore implements IMemoryStore {
   /**
    * TTL cleanup by recorded_at (ISO string) for L0 records.
    *
-   * Deletes expired rows from l0_conversations and matching vectors from l0_vec
-   * in a single transaction to guarantee consistency.
+   * Deletes expired rows from l0_conversations plus their l0_vec vectors and
+   * l0_fts rows in a single transaction to guarantee consistency.
    */
   deleteL0Expired(cutoffIso: string): number {
     if (this.degraded) {
@@ -2034,6 +2050,19 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
+        // Same as deleteL1Expired: searchL0Fts reads l0_fts directly.
+        if (this.ftsAvailable) {
+          try {
+            this.db.prepare(
+              "DELETE FROM l0_fts WHERE record_id IN " +
+              "(SELECT record_id FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?)",
+            ).run(cutoffIso);
+          } catch (ftsErr) {
+            this.logger?.warn(
+              `${TAG} [L0-deleteExpired] FTS cleanup failed (non-fatal): ${ftsErr instanceof Error ? ftsErr.message : String(ftsErr)}`,
+            );
+          }
+        }
         if (this.vecTablesReady) {
           this.db.prepare(
             "DELETE FROM l0_vec WHERE recorded_at != '' AND recorded_at < ?",
