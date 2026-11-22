@@ -1203,14 +1203,20 @@ function resolveCorsOrigins(serverConfig: Record<string, unknown>): string[] {
  *
  * - Only whole-string matches (``"${VAR}"``) are substituted, preserving
  *   types: numbers/booleans/null pass through unchanged.
+ * - ``"${VAR:-default}"`` (shell syntax, used by the shipped
+ *   tdai-gateway.yaml) expands to ``default`` when VAR is unset or empty.
  * - Arrays and nested objects are walked in-place (new arrays/objects are
  *   returned; the input is not mutated).
  */
 function expandEnvVars(value: unknown): unknown {
   if (typeof value === "string") {
-    const m = value.match(/^\$\{(\w+)\}$/);
+    const m = value.match(/^\$\{(\w+)(?::-(.*))?\}$/);
     if (m) {
-      return process.env[m[1]!] ?? "";
+      const envValue = process.env[m[1]!];
+      if (m[2] !== undefined) {
+        return envValue ? envValue : m[2];
+      }
+      return envValue ?? "";
     }
     return value;
   }
