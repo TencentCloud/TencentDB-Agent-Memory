@@ -37,7 +37,6 @@ done
 
 ERRORS=0
 WARNS=0
-CURL=/usr/bin/curl
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>
@@ -152,7 +151,7 @@ check_llm_from_container() {
     anthropic)
       base="${base%/}"; [[ "$base" == */messages ]] || base="${base}/v1/messages"
       url="$base"
-      code=$($DOCKER exec "$container" curl -sS -o /dev/null --max-time 15 \
+      code=$(no_pathconv $DOCKER exec "$container" curl -sS -o /dev/null --max-time 15 \
          -w "%{http_code}" -X POST -H "Content-Type: application/json" \
          -H "x-api-key: $key" -H "anthropic-version: 2023-06-01" \
          -d "{\"model\":\"$model\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
@@ -161,7 +160,7 @@ check_llm_from_container() {
     *)
       base="${base%/}"; base="${base%/v1}"
       url="${base}/v1/models"
-      code=$($DOCKER exec "$container" curl -sS -o /dev/null --max-time 10 \
+      code=$(no_pathconv $DOCKER exec "$container" curl -sS -o /dev/null --max-time 10 \
          -w "%{http_code}" -H "Authorization: Bearer $key" "$url" 2>/dev/null || echo "000")
       ;;
   esac
