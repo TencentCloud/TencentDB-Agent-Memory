@@ -22,6 +22,7 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
+import { evaluateMergeCoverage } from "./l1-merge-coverage.js";
 
 // ============================
 // Types
@@ -280,6 +281,12 @@ export async function writeMemory(params: {
   let finalPriority: number;
   let finalTimestamps: string[];
 
+  // Effective action — may be downgraded from merge/update to store when the
+  // model's merged_content cannot be trusted to carry the target facts.
+  let effectiveAction = decision.action;
+  // Targets that are safe to delete (their facts survive in merged_content).
+  let deletableTargetIds = decision.target_ids;
+
   if (decision.action === "merge" || decision.action === "update") {
     finalContent = decision.merged_content ?? memory.content;
     finalType = decision.merged_type ?? memory.type;
@@ -288,6 +295,29 @@ export async function writeMemory(params: {
       ? mergeEventTimestamps(memory.event_time, targetTimestamps, decision.merged_timestamps)
       // 旧调用方没有对话时间：保持升级前行为（LLM 回填的时间线，缺失时用写入时间）
       : (decision.merged_timestamps ?? [now]);
+
+    // ── Safety guard: never let a merge delete facts it failed to carry over ──
+    // `merged_content` is model-generated and unverified; a merge that drops
+    // the target's facts destroys them permanently. When coverage cannot be
+    // established we degrade to `store` — the new memory is kept as its own
+    // record and the target records stay untouched.
+    const guard = await evaluateMergeCoverage({
+      action: decision.action,
+      mergedContent: finalContent,
+      targetIds: decision.target_ids,
+      newContent: memory.content,
+      vectorStore,
+      logger,
+    });
+    if (!guard.safe) {
+      effectiveAction = "store";
+      deletableTargetIds = [];
+      finalContent = memory.content;
+      finalType = memory.type;
+      finalPriority = memory.priority;
+      finalTimestamps = [eventTime];
+      nextVersion = 0;
+    }
   } else {
     // store
     finalContent = memory.content;
@@ -350,7 +380,10 @@ export async function writeMemory(params: {
     }
   };
 
-  if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0) {
+  if (
+    (effectiveAction === "update" || effectiveAction === "merge") &&
+    deletableTargetIds.length > 0
+  ) {
     // Remove target records from VectorStore (real-time deletion for retrieval accuracy).
     // JSONL is append-only — old records remain in files and are cleaned up periodically
     // by memory-cleaner (which reconciles against VectorStore as source of truth).
@@ -360,14 +393,14 @@ export async function writeMemory(params: {
           ? { teamId, userId, agentId, sessionId: sessionId || undefined, sessionKey }
           : undefined;
         if (deleteFilter) {
-          await vectorStore.deleteL1Batch(decision.target_ids, deleteFilter);
+          await vectorStore.deleteL1Batch(deletableTargetIds, deleteFilter);
         } else {
-          await vectorStore.deleteL1Batch(decision.target_ids);
+          await vectorStore.deleteL1Batch(deletableTargetIds);
         }
-        logger?.debug?.(`${TAG} VectorStore: deleted ${decision.target_ids.length} target record(s) for ${decision.action}`);
+        logger?.debug?.(`${TAG} VectorStore: deleted ${deletableTargetIds.length} target record(s) for ${effectiveAction}`);
       } catch (err) {
         logger?.warn?.(
-          `${TAG} VectorStore delete failed for ${decision.action}: ${err instanceof Error ? err.message : String(err)}`,
+          `${TAG} VectorStore delete failed for ${effectiveAction}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
@@ -376,7 +409,7 @@ export async function writeMemory(params: {
     } catch (err) {
       logger?.warn?.(`${TAG} JSONL append failed (non-fatal, VDB write continues): ${err instanceof Error ? err.message : String(err)}`);
     }
-    logger?.debug?.(`${TAG} ${decision.action} memory: removed [${decision.target_ids.join(",")}] from VectorStore → ${record.id}: ${finalContent.slice(0, 80)}...`);
+    logger?.debug?.(`${TAG} ${effectiveAction} memory: removed [${deletableTargetIds.join(",")}] from VectorStore → ${record.id}: ${finalContent.slice(0, 80)}...`);
   } else {
     // store: append a new line
     try {
