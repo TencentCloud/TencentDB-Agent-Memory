@@ -29,6 +29,18 @@ export interface ParseResult {
   warnings: string[];
 }
 
+/** parseFileBlocks 的可选行为开关。 */
+export interface ParseOptions {
+  /**
+   * 允许救回"漏写 END 标记"的最后一个 FILE 块。
+   *
+   * 仅当调用方已确认本次输出**没有**被 maxOutputTokens 截断时才应开启：
+   * 未截断却缺 END，说明是模型漏写闭合标记而非输出不完整，块内容可以救回；
+   * 真被截断时块内容本身残缺，必须丢弃。
+   */
+  allowUnclosedTail?: boolean;
+}
+
 /**
  * 开标签：标准为 >>>；模型偶发漏写一个 > 变成 >>。
  * 接受 ≥2 个收尾 >，避免「长输出但 files=0」。
@@ -39,6 +51,11 @@ const OPEN_RE = /<<<FILE\s+path\s*=\s*"([^"]*)"\s*>>+/g;
  * 仅放宽 END 两侧空白（含换行），仍要求字面 END。
  */
 const CLOSE_RE = /<<<\s*END\s*>>>/g;
+/**
+ * 下一个 FILE 开标签（用于限定本块的闭合标记搜索范围）。
+ * 非全局正则：每次 exec 都从头匹配，无需维护 lastIndex。
+ */
+const NEXT_OPEN_RE = /<<<FILE\s+path\s*=\s*"[^"]*"\s*>>+/;
 
 /**
  * 校验并规范化 FILE 块声明的 path。
@@ -77,7 +94,7 @@ export function normalizeWikiPath(raw: string): string | null {
  * @param text LLM 原始响应文本
  * @returns 合法文件列表 + 警告（被跳过的块）
  */
-export function parseFileBlocks(text: string): ParseResult {
+export function parseFileBlocks(text: string, opts: ParseOptions = {}): ParseResult {
   const files: ParsedFile[] = [];
   const warnings: string[] = [];
   if (!text) return { files, warnings };
@@ -88,17 +105,34 @@ export function parseFileBlocks(text: string): ParseResult {
   while ((match = OPEN_RE.exec(text)) !== null) {
     const rawPath = match[1];
     const bodyStart = OPEN_RE.lastIndex;
-    CLOSE_RE.lastIndex = bodyStart;
-    const closeMatch = CLOSE_RE.exec(text);
+    // 闭合标记必须出现在"下一个 <<<FILE"之前。否则说明本块没写 END、
+    // 而 END 其实属于后面的块 —— 全文搜索 END 会把后续块的内容吞进本块。
+    const nextOpen = NEXT_OPEN_RE.exec(text.slice(bodyStart));
+    const limit = nextOpen ? bodyStart + nextOpen.index : text.length;
+    CLOSE_RE.lastIndex = 0;
+    const closeMatch = CLOSE_RE.exec(text.slice(bodyStart, limit));
 
     if (!closeMatch) {
-      // 未闭合块 → 丢弃（通常是输出被截断）
+      // 未闭合块：默认丢弃（通常是输出被截断）。
+      // 但模型偶尔漏写 END 标记而内容其实完整 —— 若调用方确认输出未被截断
+      // （opts.allowUnclosedTail），且该块是最后一个、frontmatter 完整，
+      // 则补齐 END 救回内容，而不是整篇丢弃。
+      if (opts.allowUnclosedTail) {
+        const salvaged = trySalvageUnclosedTail(text, bodyStart, rawPath);
+        if (salvaged) {
+          files.push(salvaged);
+          warnings.push(`未闭合的 FILE 块已补齐 END 并救回: path="${rawPath}"`);
+          break;
+        }
+      }
       warnings.push(`未闭合的 FILE 块，已丢弃: path="${rawPath}"`);
-      break;
+      // 继续扫描：本块之后的块可能仍是完整闭合的，不该被一起丢掉。
+      OPEN_RE.lastIndex = bodyStart;
+      continue;
     }
 
     // 防止下一次匹配跨过本块的 END
-    const closeIdx = closeMatch.index;
+    const closeIdx = bodyStart + closeMatch.index;
     const rawContent = text.slice(bodyStart, closeIdx);
     OPEN_RE.lastIndex = closeIdx + closeMatch[0].length;
 
@@ -119,6 +153,31 @@ export function parseFileBlocks(text: string): ParseResult {
   }
 
   return { files, warnings };
+}
+
+/**
+ * 尝试救回"漏写 END 标记"的最后一个 FILE 块。
+ *
+ * 成立条件（三者全满足）：
+ *   1. 调用方已确认输出未被截断（由 opts.allowUnclosedTail 传入）；
+ *   2. 该块是文本里最后一个 FILE 块（其后不能再出现 <<<FILE）；
+ *   3. 块内容含完整 frontmatter（起始 --- 且有配对的结束 ---）。
+ */
+function trySalvageUnclosedTail(text: string, bodyStart: number, rawPath: string): ParsedFile | null {
+  const normPath = normalizeWikiPath(rawPath);
+  if (!normPath) return null;
+  // 必须是最后一个 FILE 块：其后不能再出现 <<<FILE
+  if (/<<<FILE\s+path\s*=\s*"[^"]*"\s*>>+/.test(text.slice(bodyStart))) return null;
+  const rawContent = text.slice(bodyStart);
+  if (!hasCompleteFrontmatter(rawContent)) return null;
+  const content = stripBlockEdges(rawContent);
+  if (!content.trim()) return null;
+  return { path: normPath, content };
+}
+
+/** 判断块内容是否含完整 frontmatter（起始 --- 且有配对的结束 ---）。 */
+function hasCompleteFrontmatter(raw: string): boolean {
+  return /^---\r?\n[\s\S]*?\r?\n---\r?\n/.test(raw.replace(/^\s+/, "")) === true;
 }
 
 /** 去掉块开头的换行与结尾多余空白，并保证以单个换行结尾。 */
