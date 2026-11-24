@@ -22,7 +22,7 @@ import { MCP_TOOLS, type McpToolDef } from "./tools.js";
 import { callApi, type HttpClientOptions } from "./http-client.js";
 import { createLogger } from "../logger.js";
 
-const log = createLogger("mcp-server");
+const log = createLogger("mcp-server", { stderrOnly: true });
 
 export function createMcpServer(httpOpts: HttpClientOptions): Server {
   const toolMap = new Map<string, McpToolDef>();
@@ -51,9 +51,9 @@ export function createMcpServer(httpOpts: HttpClientOptions): Server {
     const { name, arguments: args } = request.params;
     const tool = toolMap.get(name);
     if (!tool) {
-      log.warn(`Unknown tool requested: "${name}"`);
+      log.warn("Unknown tool requested");
       return {
-        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        content: [{ type: "text", text: "Unknown tool" }],
         isError: true,
       };
     }
@@ -78,7 +78,7 @@ export function createMcpServer(httpOpts: HttpClientOptions): Server {
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.error(`tool ${name} failed: ${msg}`);
+      log.error("Knowledge tool call failed");
       return {
         content: [{ type: "text", text: `Error: ${msg}` }],
         isError: true,
@@ -94,15 +94,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const baseUrl = process.env.KNOWLEDGE_API_URL || "http://localhost:8421";
   const token = process.env.KNOWLEDGE_API_TOKEN;
 
-  log.info(`MCP server starting, API URL: ${baseUrl}`);
+  log.info("MCP server starting");
 
   const server = createMcpServer({ baseUrl, token });
   const transport = new StdioServerTransport();
 
   server.connect(transport).then(() => {
     log.info("MCP server connected via stdio");
-  }).catch((err) => {
-    log.error(`Failed to connect: ${err instanceof Error ? err.message : String(err)}`);
+  }).catch(() => {
+    log.error("Failed to connect MCP transport");
     process.exit(1);
   });
 }
