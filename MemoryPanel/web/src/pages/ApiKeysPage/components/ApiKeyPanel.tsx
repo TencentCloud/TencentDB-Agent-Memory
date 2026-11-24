@@ -331,6 +331,9 @@ export default function ApiKeyPanel() {
                 { label: 'OpenCode', url: `${base}/opencode/${iid}` },
                 { label: 'OpenClaw', url: `${base}/openclaw/${iid}` },
                 { label: 'Hermes', url: `${base}/hermes/${iid}` },
+                // Pi 走 pi-plugin 扩展 + OpenAI Chat；base URL 必须带 /v1，
+                // 扩展会把 TDAI_PROXY_URL 作为 base 使用。
+                { label: 'Pi', url: `${base}/pi/${iid}/v1` },
               ];
               return endpoints.map((ep) => (
                 <div className="_memory-apikey-endpoint" key={ep.label}>
