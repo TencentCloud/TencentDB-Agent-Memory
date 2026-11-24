@@ -19,5 +19,10 @@ export function encodeSecret(plain: string): string {
 /** base64 → UTF-8。非法输入返回 null（不抛异常）。 */
 export function decodeSecret(b64: string | null | undefined): string | null {
   if (!b64 || b64.length % 4 !== 0 || !B64_RE.test(b64)) return null;
-  return Buffer.from(b64, "base64").toString("utf8");
+  const bytes = Buffer.from(b64, "base64");
+  const plain = bytes.toString("utf8");
+  // Buffer#toString("utf8") 会把非法字节序列静默替换成 U+FFFD，而不是抛异常。
+  // 回写比对可识别这类损坏行，避免把替换字符组成的乱码当作有效令牌。
+  if (!Buffer.from(plain, "utf8").equals(bytes)) return null;
+  return plain;
 }
