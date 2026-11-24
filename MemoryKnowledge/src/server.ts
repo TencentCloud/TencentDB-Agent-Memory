@@ -14,7 +14,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { swaggerUI } from "@hono/swagger-ui";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 import { loadConfig } from "./config.js";
@@ -189,8 +189,12 @@ async function startServer(): Promise<void> {
   process.once("SIGINT", () => void shutdown("SIGINT"));
 }
 
-// Start server when run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Start server when run directly.
+// `file://${process.argv[1]}` never matches import.meta.url on Windows
+// (percent-encoded file:///C:/... URL vs a native backslash path), so the
+// server silently exited under `node dist/server.mjs`. pathToFileURL()
+// resolves and encodes argv[1] identically on every platform.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   void startServer().catch((err) => {
     log.error("Knowledge service failed to start", {
       error: err instanceof Error ? err.message : String(err),
