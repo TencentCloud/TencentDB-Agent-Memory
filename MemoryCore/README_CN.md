@@ -155,6 +155,25 @@ TDAI_MEMORY_API_KEY=<与 Gateway 相同的 API Key>
 TDAI_MEMORY_INSTANCE_ID=default
 ```
 
+#### 本地 OpenClaw 召回内容可见性
+
+使用进程内 `memory-tencentdb` 插件（`mode: "local"`）时，在 `openclaw.json` 的
+`plugins.entries["memory-tencentdb"].config` 中加入：
+
+```json
+{
+  "mode": "local",
+  "recall": { "showInjected": true }
+}
+```
+
+重新加载插件后，用户消息历史会保留 `<relevant-memories>` 召回块，便于核对。
+默认值为 `false`，继续在持久化前清理召回内容。字符串和多段用户消息均支持，
+不会改写 assistant/tool 消息。L0 采集仍会移除注入内容，防止旧记忆被当作新对话反复学习。
+此前已被清理的历史不会恢复；具体显示效果取决于宿主/渠道的历史渲染方式。
+保留召回内容会增大会话历史，历史回放时可能增加 token 用量。
+此配置不发送额外通知，也不增加召回次数，仅作用于本地插件，不适用于独立 Gateway 客户端 Adapter。
+
 ### Hermes
 
 `hermes-plugin/` 提供 Hermes Memory Provider。它遵循同样的 Adapter 模式，通过 Gateway 完成对话写入与记忆召回。
