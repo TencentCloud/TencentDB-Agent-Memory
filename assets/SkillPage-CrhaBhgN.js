@@ -1,4 +1,4 @@
-import{j as s,L as e}from"./index-B6bndW8l.js";import{B as c}from"./Breadcrumbs-mBq8eUAt.js";import{C as l}from"./CodeBlock-D9-5f3jR.js";const a=`# 先设置 CORE_BASE_URL、TDAI_GATEWAY_API_KEY、TDAI_SERVICE_ID、TEAM_ID、USER_ID、AGENT_ID
+import{j as s,L as e}from"./index-CMn9uEjI.js";import{B as c}from"./Breadcrumbs-CIfRO32h.js";import{C as l}from"./CodeBlock-B2TLGXDM.js";const a=`# 先设置 CORE_BASE_URL、TDAI_GATEWAY_API_KEY、TDAI_SERVICE_ID、TEAM_ID、USER_ID、AGENT_ID
 curl -sS -X POST "$CORE_BASE_URL/v3/skill/create" \\
   -H "Authorization: Bearer $TDAI_GATEWAY_API_KEY" \\
   -H "x-tdai-service-id: $TDAI_SERVICE_ID" \\

@@ -1,4 +1,4 @@
-import{j as e,L as s}from"./index-B6bndW8l.js";import{B as c}from"./Breadcrumbs-mBq8eUAt.js";import{C as a}from"./CodeBlock-D9-5f3jR.js";const r=`# 先设置 KNOWLEDGE_BASE_URL、KNOWLEDGE_SERVICE_KEY、TDAI_SERVICE_ID、TEAM_ID、REPO_URL、BRANCH、REPO_NAME；需要 jq
+import{j as e,L as s}from"./index-CMn9uEjI.js";import{B as c}from"./Breadcrumbs-CIfRO32h.js";import{C as a}from"./CodeBlock-B2TLGXDM.js";const r=`# 先设置 KNOWLEDGE_BASE_URL、KNOWLEDGE_SERVICE_KEY、TDAI_SERVICE_ID、TEAM_ID、REPO_URL、BRANCH、REPO_NAME；需要 jq
 # REPO_URL 必须是 Knowledge 服务可访问的公开 HTTPS Git 仓库
 CODE_GRAPH_ID=$(curl -sS -X POST "$KNOWLEDGE_BASE_URL/v3/code-graph/create" \\
   -H "Authorization: Bearer $KNOWLEDGE_SERVICE_KEY" \\

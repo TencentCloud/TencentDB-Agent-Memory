@@ -1,4 +1,4 @@
-import{j as e,L as s}from"./index-B6bndW8l.js";import{B as r}from"./Breadcrumbs-mBq8eUAt.js";import{C as a}from"./CodeBlock-D9-5f3jR.js";const c=`# 先设置 CORE_BASE_URL、TDAI_GATEWAY_API_KEY、TDAI_SERVICE_ID、TEAM_ID、USER_ID、AGENT_ID
+import{j as e,L as s}from"./index-CMn9uEjI.js";import{B as r}from"./Breadcrumbs-CIfRO32h.js";import{C as a}from"./CodeBlock-B2TLGXDM.js";const c=`# 先设置 CORE_BASE_URL、TDAI_GATEWAY_API_KEY、TDAI_SERVICE_ID、TEAM_ID、USER_ID、AGENT_ID
 curl -sS -X POST "$CORE_BASE_URL/v3/conversation/add" \\
   -H "Authorization: Bearer $TDAI_GATEWAY_API_KEY" \\
   -H "x-tdai-service-id: $TDAI_SERVICE_ID" \\
