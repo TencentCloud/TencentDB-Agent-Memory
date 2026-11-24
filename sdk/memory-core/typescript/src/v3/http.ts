@@ -77,7 +77,12 @@ export class V3HttpTransport {
       if (this.dispatcher) fetchOptions.dispatcher = this.dispatcher;
       const url = `${this.endpoint}${path}${query && query.size > 0 ? `?${query.toString()}` : ""}`;
       const response = await fetch(url, fetchOptions as RequestInit);
-      const responseText = await response.text().catch(() => "");
+      const responseText = await response.text().catch((error: unknown) => {
+        // A timeout can interrupt body consumption after fetch has returned headers.
+        // Keep cancellation distinguishable from a malformed server response.
+        if (controller.signal.aborted) throw error;
+        return "";
+      });
       const headerRequestId =
         response.headers.get("x-qcloud-transaction-id") ??
         response.headers.get("x-trace-id") ??
@@ -90,6 +95,14 @@ export class V3HttpTransport {
         throw new TDAMError(
           response.ok ? -1 : response.status,
           responseText || `HTTP ${response.status} returned a non-JSON response`,
+          headerRequestId,
+        );
+      }
+
+      if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+        throw new TDAMError(
+          response.ok ? -1 : response.status,
+          `HTTP ${response.status} returned an invalid response envelope`,
           headerRequestId,
         );
       }

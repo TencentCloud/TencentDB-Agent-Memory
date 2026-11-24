@@ -29,6 +29,7 @@
     "build:seed-v2": "tsc --project scripts/seed-v2/tsconfig.json",
     "seed-v2": "node ./bin/seed-v2.mjs",
     "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "test:oss": "vitest run -c vitest.oss.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

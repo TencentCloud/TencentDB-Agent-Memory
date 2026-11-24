@@ -123,8 +123,12 @@ export class IngestProgressStore {
    */
   clear(wikiId: string, runId?: string | null): void {
     const prev = this.store.get(wikiId);
-    this.store.delete(wikiId);
     const rid = normalizeRunId(runId) ?? prev?.runId ?? null;
+    // 旧代际的终态回调可能晚于新一轮进度；只清理同代际（或无代际）的条目。
+    // 仍将旧 run 记入 cleared，阻止它后续的迟到 progress 覆盖当前进度。
+    if (!prev?.runId || !rid || prev.runId === rid) {
+      this.store.delete(wikiId);
+    }
     if (rid) {
       let m = this.cleared.get(wikiId);
       if (!m) {
