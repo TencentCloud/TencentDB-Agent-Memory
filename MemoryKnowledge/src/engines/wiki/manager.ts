@@ -169,6 +169,7 @@ export interface WikiSourceManager {
 
 /** 图谱中不参与建边/展示的页类型（如内部 query 页）。 */
 const HIDDEN_TYPES = new Set(["query"]);
+const HANGUL_RE = /\p{Script=Hangul}/u;
 
 // ── 图谱缓存结构（读时从 index.db 的 graph_edge 临时构建） ──
 
@@ -206,15 +207,21 @@ function resolveEdges(pages: WikiPage[]): Array<{ source: string; target: string
   const nodeIds = new Set(visible.map((p) => p.id));
   // title 的 slug → page id 映射：支持 wikilink 以页面标题（而非文件名）引用。
   const titleSlugToId = new Map<string, string>();
+  const hangulTitleToId = new Map<string, string | null>();
   for (const p of visible) {
     const ts = slugify(p.title);
     if (ts && !titleSlugToId.has(ts)) titleSlugToId.set(ts, p.id);
+    if (HANGUL_RE.test(p.title)) {
+      const title = p.title.normalize("NFC");
+      // null 表示标题有歧义，避免按扫描顺序任意选一页。
+      hangulTitleToId.set(title, hangulTitleToId.has(title) ? null : p.id);
+    }
   }
 
   const seen = new Set<string>();
   for (const page of visible) {
     for (const targetRaw of page.links) {
-      const targetId = resolveTarget(targetRaw, nodeIds, titleSlugToId);
+      const targetId = resolveTarget(targetRaw, nodeIds, titleSlugToId, hangulTitleToId);
       if (!targetId || targetId === page.id) continue;
       const key = `${page.id}\u0000${targetId}`;
       if (seen.has(key)) continue;
@@ -282,8 +289,15 @@ function resolveTarget(
   raw: string,
   nodeIds: Set<string>,
   titleSlugToId: Map<string, string>,
+  hangulTitleToId: Map<string, string | null>,
 ): string | null {
   if (nodeIds.has(raw)) return raw;
+
+  // slugify 会丢弃韩文，先匹配 NFC 归一后的完整标题。
+  if (hangulTitleToId.size > 0 && HANGUL_RE.test(raw)) {
+    const byHangulTitle = hangulTitleToId.get(raw.normalize("NFC"));
+    if (byHangulTitle !== undefined) return byHangulTitle;
+  }
 
   // wikilink 目标可能是各种花式写法（带 .md 后缀、带斜杠路径、中英混合、大小写不一）。
   // 统一用与文件名同源的 slugify 归一后比对 page id 的 basename（单一事实源，
