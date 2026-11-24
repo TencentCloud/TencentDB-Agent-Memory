@@ -41,6 +41,7 @@
  * "meddling".
  */
 
+import { SKIP_REQUEST_HEADERS_HOP_BY_HOP } from "./common/constants.js";
 import type { Context } from "hono";
 import { logStandaloneUpstreamError } from "./upstream-error-log.js";
 import { writeLog } from "./logger.js";
@@ -72,14 +73,6 @@ import {
   recordInputTokenUsage,
 } from "./rate-limit/guard.js";
 
-/** Hop-by-hop headers we must strip before forwarding to upstream. */
-const SKIP_REQUEST_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-]);
-
 /** Response headers that would confuse the client if forwarded verbatim. */
 const SKIP_RESPONSE_HEADERS = new Set([
   "content-encoding",
@@ -89,7 +82,7 @@ const SKIP_RESPONSE_HEADERS = new Set([
 ]);
 
 /**
- * Build upstream headers by cloning inbound headers minus hop-by-hop entries.
+ * Build upstream headers by cloning inbound headers minus entries excluded from forwarding.
  *
  * The caller's inbound key (`Authorization` / `x-api-key`) is a proxy-layer
  * auth credential — the sk-mem-xxx that `verifyUserKey` resolves against the
@@ -101,7 +94,7 @@ const SKIP_RESPONSE_HEADERS = new Set([
 function buildPassthroughHeaders(c: Context, config: ProxyConfig): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) {
-    if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) {
+    if (!SKIP_REQUEST_HEADERS_HOP_BY_HOP.has(k.toLowerCase())) {
       headers[k] = v;
     }
   }
