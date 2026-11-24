@@ -374,13 +374,64 @@ export function tokenize(text: string): string[] {
   return result;
 }
 
+// Korean particles / endings stripped from a query term (at most one, longest first).
+const KO_QUERY_SUFFIXES = [
+  "에서는", "에서도", "으로는",
+  "에서", "에게", "한테", "으로", "까지", "부터", "처럼", "보다", "에는", "에도", "로는", "하고", "이랑",
+  "은", "는", "이", "가", "을", "를", "에", "의", "도", "로", "와", "과", "만",
+  // noun + 하다 forms: "정리했었지" → "정리"
+  "했었지", "하는", "하면", "하기", "해서", "했다", "했지", "한다", "할", "한",
+].sort((a, b) => b.length - a.length);
+
+// Korean question / filler words dropped from the query.
+const KO_QUERY_FILLERS = new Set([
+  "어떻게", "어떤", "무엇", "무슨", "뭐", "뭘", "뭐야", "뭐지", "뭐였지", "뭐였더라",
+  "왜", "언제", "어디", "얼마", "얼마나", "몇",
+  "대해", "대해서", "대한", "관해", "관한", "알려줘", "해줘",
+  "좀", "것", "거", "수", "때", "그", "이", "저",
+  "했지", "했었지", "했더라", "봤지", "하지", "해야", "해", "돼", "되지",
+]);
+
 /**
- * FTS5 检索：query → tokenize → 每 token 加 `*` 前缀 → OR 连接 → MATCH。
+ * Query-side normalisation for Korean (Hangul) terms produced by tokenize().
+ *
+ * Hangul is not Han, so tokenize() keeps a Korean word whole with its particle or
+ * ending attached, and STOP_WORDS has no Korean entries: "복리에 대해 알려줘" becomes
+ * ["복리에", "대해", "알려줘"]. `"복리에"*` never matches "복리는" in a page, and the
+ * filler words match unrelated pages. For each term with Hangul and no Han:
+ * - strip one trailing particle / ending from KO_QUERY_SUFFIXES if >= 2 chars remain;
+ * - drop it if it (or its stem) is in KO_QUERY_FILLERS.
+ * Han and Latin terms pass through unchanged. If every term would be dropped, the
+ * original terms are returned, so a non-empty query never becomes empty.
+ *
+ * The index is not touched: a stem is always a prefix of the original term, and
+ * ftsSearch() matches by prefix, so "복리" still finds "복리는" / "복리로". This is a rule
+ * list, not a morphological analyser: a noun that ends like a particle can lose its
+ * last syllable ("고양이" → "고양"). That widens the prefix match; it still matches
+ * every indexed token the original term matched.
+ */
+export function normalizeKoreanQueryTerms(terms: string[]): string[] {
+  const out: string[] = [];
+  for (const term of terms) {
+    if (!/[가-힣]/.test(term) || /[\u4e00-\u9fff\u3400-\u4dbf]/.test(term)) {
+      out.push(term);
+      continue;
+    }
+    const word = term.replace(/[^\p{L}\p{N}]+$/u, "");
+    const suffix = KO_QUERY_SUFFIXES.find((s) => word.endsWith(s) && word.length - s.length >= 2);
+    const stem = suffix ? word.slice(0, -suffix.length) : word;
+    if (!KO_QUERY_FILLERS.has(word) && !KO_QUERY_FILLERS.has(stem)) out.push(stem);
+  }
+  return out.length > 0 ? out : terms;
+}
+
+/**
+ * FTS5 检索：query → tokenize → normalizeKoreanQueryTerms（仅查询侧）→ 每 token 加 `*` 前缀 → OR 连接 → MATCH。
  * bm25() 越负越相关，取负转成"越大越相关"的正分，供图扩展的 decay/minScore 使用。
  * title_tok 权重 5.0、content_tok 1.0（对齐原 MiniSearch boost title×5）。
  */
 function ftsSearch(db: DatabaseType.Database, query: string, limit: number): Array<{ id: string; score: number }> {
-  const toks = tokenize(query);
+  const toks = normalizeKoreanQueryTerms(tokenize(query));
   if (toks.length === 0) return [];
   const expr = toks.map((t) => `"${t.replace(/"/g, '""')}"*`).join(" OR ");
   const rows = db
