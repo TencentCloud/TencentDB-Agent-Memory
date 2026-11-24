@@ -577,6 +577,18 @@ export class OpenAIEmbeddingService implements EmbeddingService {
 
           // Sort by index to ensure correct order, then sanitize+normalize for consistency with local provider
           const sorted = [...json.data].sort((a, b) => a.index - b.index);
+
+          // A short response would silently shift every caller's index→vector
+          // mapping: `embedBatch()` hands back a shorter array, so
+          // `results[i]` is `undefined` for the tail and each record gets
+          // stored without (or with the wrong) embedding. Callers treat
+          // embedding failure as non-fatal, so the defect is invisible.
+          if (sorted.length !== texts.length) {
+            throw new Error(
+              `${TAG} Embedding API returned ${sorted.length} embeddings for ${texts.length} inputs — count mismatch`,
+            );
+          }
+
           return sorted.map((d) => sanitizeAndNormalize(d.embedding));
         } finally {
           clearTimeout(timeoutId);
