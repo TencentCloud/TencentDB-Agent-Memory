@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import pLimit from "p-limit";
-import simpleGit from "simple-git";
+import { simpleGit } from "simple-git";
 
 import type { Db } from "./db/client.js";
 import { SqliteKnowledgeStore, type IKnowledgeStore } from "./store/index.js";
