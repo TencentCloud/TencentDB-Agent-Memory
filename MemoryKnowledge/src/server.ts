@@ -71,8 +71,8 @@ export function createApp() {
 
   // /v3 prefix applied once here — routes define paths without prefix
   const api = new Hono();
-  // 服务间鉴权：serviceKey 非空时，除只读白名单外的 /v3 端点均需
-  // Bearer 鉴权（fail-closed）；key 为空则全放行（向后兼容）。
+  // A configured service key protects every API request, including reads/tools.
+  // An empty key retains the legacy no-auth mode; listener policy is separate.
   // /health、/docs、/openapi.json 挂在 api 之外，保持开放。
   api.use("*", createServiceAuthMiddleware(config.auth, config.apiPrefix));
   // Only Agent tool executions are usage telemetry; health/admin/ingest remain excluded.
