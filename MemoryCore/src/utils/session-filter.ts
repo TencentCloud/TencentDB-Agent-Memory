@@ -67,7 +67,7 @@ const BUILTIN_MATCHERS: SessionKeyMatcher[] = [
  * `bench-judge-*` (matched anywhere) or more specific ones.
  */
 function globToMatcher(pattern: string): SessionKeyMatcher {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const escaped = pattern.replace(/[.+^${}()|[\]\\?]/g, "\\$&").replace(/\*/g, ".*");
   const re = new RegExp(escaped);
   return (key) => re.test(key);
 }
