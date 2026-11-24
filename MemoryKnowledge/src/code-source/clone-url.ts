@@ -88,3 +88,19 @@ export function buildCloneUrl(
   }
   return provider.authMethod.buildCloneUrl(repoUrl, cred, provider.cloneUsername);
 }
+
+/** Keep repository metadata free of URL credentials; SSH usernames are selectors. */
+export function repositoryUrlValidationError(repoUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(repoUrl);
+  } catch {
+    // Preserve SCP-style SSH and local paths, but reject malformed URL inputs.
+    return /^(?:[a-z][a-z0-9+.-]*:\/\/|https?:)/i.test(repoUrl.trim())
+      ? "repository URL is invalid" : null;
+  }
+  if (url.password || (url.username && url.protocol !== "ssh:" && url.protocol !== "git+ssh:")) {
+    return "repository URL must not contain credentials; use separate source credentials";
+  }
+  return null;
+}

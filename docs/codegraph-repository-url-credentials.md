@@ -1,0 +1,11 @@
+# CodeGraph repository URL credentials
+
+Creating a CodeGraph with an embedded repository password can persist it in ordinary repository metadata and return it through create/get. Refuse URL passwords and non-SSH URL userinfo before store creation, audit records, credential writes or build enqueue. HTTP creation returns a fixed HTTP400 message; direct service callers receive the same fixed validation reason. Malformed URL-shaped input is also refused without echoing it.
+
+Use the existing separate provider/secret/username fields for private repositories. Clean HTTPS, SSH usernames (`ssh://git@...`), SCP-style SSH and local paths retain their existing behavior, including idempotent creation. No dependencies or schema changes are added. This validation does not establish HTTPS-only transport, endpoint network policy or Git/SSH trust.
+
+The existing store is not rewritten. Previously stored credential-bearing URLs, historical audit/log copies and external Git configuration require separate operator review and credential rotation; no automatic migration or production scan is performed. Secrets deliberately placed in repository paths/query strings are outside this URL-userinfo validation.
+
+Validation uses native SQLite, actual CodeGraph service and Hono routes with enqueue intercepted so no clone/network occurs. Nineteen cases cover route/service refusals before side effects, clean URL/path compatibility, idempotence and separately stored credentials. Both preceding complete source and freshly verified upstream reproduce fourteen refusal failures with five compatibility controls; the fixed scoped proposal passes all nineteen using prepared Linux dependencies. Independent final review remains outstanding.
+
+The complete project also passes strict Knowledge typechecking, build and all475 tests across34 files. A targeted strict check on upstream and on this proposal reports the same seven existing `simple-git` callable-type diagnostics; no scoped strict pass is claimed. Prepared dependencies are not a fresh upstream installation. An initial candidate copied a complete-fork-only route import; it was discarded and the proposal reconstructed on the exact upstream base before the passing run.
