@@ -1,0 +1,74 @@
+{
+  "status": "pass",
+  "at": "2026-09-14T09:23:03.639Z",
+  "old_frozen_files_unchanged": 395,
+  "checked_files": 510,
+  "test_count": 178,
+  "unique_questions": 828,
+  "method_views": 7452,
+  "exact_context_routed_views": 4140,
+  "portable_CLI_exact_questions": 168,
+  "training_refit_exact": true,
+  "new_1M_questions": 180,
+  "new_1M_groups": 9,
+  "new_1M_written_chunks": 19378,
+  "runtime_requests": 72,
+  "fault_checks": 24,
+  "QA_cost": [
+    {
+      "stage": "acquisition-v1.1",
+      "phase": "reader",
+      "views": 156,
+      "unique_keys": 143,
+      "actual_calls": 95,
+      "actual_tokens": 155908,
+      "failed_views": 0
+    },
+    {
+      "stage": "acquisition-v1.1",
+      "phase": "judge",
+      "views": 156,
+      "unique_keys": 123,
+      "actual_calls": 66,
+      "actual_tokens": 22260,
+      "failed_views": 0
+    },
+    {
+      "stage": "beam-1M",
+      "phase": "reader",
+      "views": 720,
+      "unique_keys": 620,
+      "actual_calls": 620,
+      "actual_tokens": 1889296,
+      "failed_views": 0
+    },
+    {
+      "stage": "beam-1M",
+      "phase": "judge",
+      "views": 720,
+      "unique_keys": 594,
+      "actual_calls": 594,
+      "actual_tokens": 285657,
+      "failed_views": 0
+    }
+  ],
+  "actual_chat_calls": 1375,
+  "actual_chat_tokens": 2353121,
+  "reranker_dataset_cost": {
+    "new_dataset_requests": 180,
+    "input_tokens": 4563102,
+    "wall_p50_ms": 1018.9665000000095,
+    "wall_p95_ms": 1276.3673999999992,
+    "total_wall_ms": 183369.4751,
+    "startup_ms": 10242.1608,
+    "note": "Separate Qwen3-Reranker token counter; not Reader/Judge Chat tokens. Runtime microbenchmark repeated scorer work is measured in its full-path latency, not included here."
+  },
+  "empty_budgeted_views": 8,
+  "protected_BEAM_groups": 23,
+  "protected_outcomes_evaluated": false,
+  "source_manifest": "results/slate-feedback-v11/verification/checked-manifest.json",
+  "vendor_clean": true,
+  "PR_created": false,
+  "default_path": "native",
+  "auto_deploy": false
+}

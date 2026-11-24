@@ -1,0 +1,49 @@
+{
+  "at": "2026-09-14T04:16:11.507Z",
+  "kind": "reranker",
+  "revision": "e61197ed45024b0ed8a2d74b80b4d909f1255473",
+  "sources": [
+    {
+      "path": "config.json",
+      "url": "https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/resolve/e61197ed45024b0ed8a2d74b80b4d909f1255473/config.json",
+      "size": 727,
+      "sha256": "d479c427a9ca5295218063d4f9aca4f297ab4ac27487cca7af42c84643d51ef0",
+      "lfs_hash_checked": false
+    },
+    {
+      "path": "tokenizer_config.json",
+      "url": "https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/resolve/e61197ed45024b0ed8a2d74b80b4d909f1255473/tokenizer_config.json",
+      "size": 9706,
+      "sha256": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0",
+      "lfs_hash_checked": false
+    },
+    {
+      "path": "tokenizer.json",
+      "url": "https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/resolve/e61197ed45024b0ed8a2d74b80b4d909f1255473/tokenizer.json",
+      "size": 11422654,
+      "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+      "lfs_hash_checked": true
+    },
+    {
+      "path": "generation_config.json",
+      "url": "https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/resolve/e61197ed45024b0ed8a2d74b80b4d909f1255473/generation_config.json",
+      "size": 214,
+      "sha256": "81051cd3f6e77013827148d0b8a6ead93f8ac390d5ab805f849199f0af6a08db",
+      "lfs_hash_checked": false
+    },
+    {
+      "path": "README.md",
+      "url": "https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/resolve/e61197ed45024b0ed8a2d74b80b4d909f1255473/README.md",
+      "size": 14742,
+      "sha256": "5bba8c734f6dd3ae48317b4139317e45a7fce48fc55e15670b23a0dd15492ab6",
+      "lfs_hash_checked": false
+    },
+    {
+      "path": "model.safetensors",
+      "url": "https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/resolve/e61197ed45024b0ed8a2d74b80b4d909f1255473/model.safetensors",
+      "size": 1191588280,
+      "sha256": "27cd75a405b9c1b46b59abfd88aaa209e6fed2a1972cde9b70e7659537c5e65b",
+      "lfs_hash_checked": true
+    }
+  ]
+}

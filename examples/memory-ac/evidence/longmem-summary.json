@@ -1,0 +1,5370 @@
+{
+  "status": "pass",
+  "dataset": "longmem",
+  "freshness": "previously observed exploratory cohort",
+  "metric_limit": "Source coverage is not semantic sufficiency. QA uses fixed local adapted binary rubric, not official leaderboard.",
+  "splits": {
+    "train": {
+      "modes": {
+        "native_k5": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6521739130434783,
+          "evidence_recall": 0.7352657004830918,
+          "evidence_hit": 0.8405797101449275,
+          "mean_tokens": 1265.2222222222222,
+          "mean_injected": 4.916666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 42,
+          "qa": 0.5833333333333334,
+          "groups": 67,
+          "evidence_precision": 0.2478260869565217,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.16700661382863613,
+          "reader_failures": 0,
+          "changed_contexts": 72,
+          "routes": {
+            "native_k5": 72
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.14285714285714285,
+                0.057971014492753624
+              ],
+              "token_reduction": -0.4155672618215156,
+              "token_reduction_ci95": [
+                -0.48174873384487693,
+                -0.3617154288572142
+              ],
+              "quality_wins": 6,
+              "quality_losses": 9,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.013888888888888888,
+              "complete_delta_ci95": [
+                -0.1232876712328767,
+                0.09859154929577464
+              ],
+              "token_reduction": -0.6583110334407367,
+              "token_reduction_ci95": [
+                -0.7965722374184663,
+                -0.5455513569220198
+              ],
+              "quality_wins": 8,
+              "quality_losses": 9,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.013888888888888888,
+              "complete_delta_ci95": [
+                -0.1232876712328767,
+                0.09722222222222222
+              ],
+              "token_reduction": -0.4568600169521342,
+              "token_reduction_ci95": [
+                -0.5309859607414784,
+                -0.39562947396072756
+              ],
+              "quality_wins": 8,
+              "quality_losses": 9,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.14285714285714285,
+                0.057971014492753624
+              ],
+              "token_reduction": -0.4166899940903859,
+              "token_reduction_ci95": [
+                -0.4829544491345845,
+                -0.36291348135588275
+              ],
+              "quality_wins": 6,
+              "quality_losses": 9,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.14285714285714285,
+                0.057971014492753624
+              ],
+              "token_reduction": -0.4155452652515772,
+              "token_reduction_ci95": [
+                -0.48176924109339825,
+                -0.3618970219565276
+              ],
+              "quality_wins": 6,
+              "quality_losses": 9,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.14285714285714285,
+                0.057971014492753624
+              ],
+              "token_reduction": -0.4182118225834073,
+              "token_reduction_ci95": [
+                -0.48433879160847737,
+                -0.3643617021276595
+              ],
+              "quality_wins": 6,
+              "quality_losses": 9,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0.043478260869565216,
+            "complete_delta_ci95": [
+              -0.07352941176470588,
+              0.16901408450704225
+            ],
+            "token_reduction": -0.4155672618215156,
+            "token_reduction_ci95": [
+              -0.48174873384487693,
+              -0.3617154288572142
+            ],
+            "quality_wins": 10,
+            "quality_losses": 7,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.5454545454545454,
+              "correct": 6,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.9090909090909091,
+              "evidence_recall": 0.9090909090909091,
+              "evidence_hit": 0.9090909090909091,
+              "mean_tokens": 958.9090909090909,
+              "mean_injected": 5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.08333333333333333,
+              "correct": 1,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.16666666666666666,
+              "evidence_recall": 0.5166666666666667,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1516.1666666666667,
+              "mean_injected": 4.916666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.5,
+              "correct": 1,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 961,
+              "mean_injected": 5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 1,
+              "correct": 8,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 1122.125,
+              "mean_injected": 5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1418.1666666666667,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1428.3333333333333,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.4583333333333333,
+              "correct": 11,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.5833333333333334,
+              "evidence_recall": 0.6472222222222223,
+              "evidence_hit": 0.75,
+              "mean_tokens": 1256.3333333333333,
+              "mean_injected": 4.958333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.5833333333333334,
+              "correct": 42,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6521739130434783,
+              "evidence_recall": 0.7352657004830918,
+              "evidence_hit": 0.8405797101449275,
+              "mean_tokens": 1265.2222222222222,
+              "mean_injected": 4.916666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 14,
+            "pool_missing": 9,
+            "selection_missing": 7
+          }
+        },
+        "qwen_fixed": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6086956521739131,
+          "evidence_recall": 0.7415458937198067,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 893.7916666666666,
+          "mean_injected": 4.416666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 45,
+          "qa": 0.625,
+          "groups": 67,
+          "evidence_precision": 0.28961352657004824,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.16706929293527334,
+          "reader_failures": 0,
+          "changed_contexts": 0,
+          "routes": {
+            "qwen_fixed": 72
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.057971014492753624,
+                0.14285714285714285
+              ],
+              "token_reduction": 0.2935694212698692,
+              "token_reduction_ci95": [
+                0.26560530127009596,
+                0.32505206316648705
+              ],
+              "quality_wins": 9,
+              "quality_losses": 6,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.0273972602739726,
+                0.08571428571428572
+              ],
+              "token_reduction": -0.1714816230681011,
+              "token_reduction_ci95": [
+                -0.2690340054167921,
+                -0.09675595181994678
+              ],
+              "quality_wins": 3,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                0,
+                0.07042253521126761
+              ],
+              "token_reduction": -0.02917046490428432,
+              "token_reduction_ci95": [
+                -0.05665564808340218,
+                -0.007205792549943357
+              ],
+              "quality_wins": 2,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.0007931324064569534,
+              "token_reduction_ci95": [
+                -0.0020632737276478075,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.000015539049631807522,
+              "token_reduction_ci95": [
+                -0.001270727766186086,
+                0.001250427973860102
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.0018681985895099285,
+              "token_reduction_ci95": [
+                -0.004016596045197662,
+                -0.0003751817286499204
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0,
+            "token_reduction_ci95": [
+              0,
+              0
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8636363636363636,
+              "evidence_hit": 1,
+              "mean_tokens": 693.2727272727273,
+              "mean_injected": 4.090909090909091,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6861111111111112,
+              "evidence_hit": 1,
+              "mean_tokens": 1020.5833333333334,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 1,
+              "correct": 2,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 670,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 1,
+              "correct": 8,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 781.125,
+              "mean_injected": 4.25,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1033.5,
+              "mean_injected": 4.666666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1081.6666666666667,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5416666666666666,
+              "correct": 13,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6013888888888889,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 885.1666666666666,
+              "mean_injected": 4.291666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.625,
+              "correct": 45,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6086956521739131,
+              "evidence_recall": 0.7415458937198067,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 893.7916666666666,
+              "mean_injected": 4.416666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 10,
+            "pool_missing": 9,
+            "selection_missing": 8
+          }
+        },
+        "qa_residual": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6521739130434783,
+          "evidence_recall": 0.7705314009661836,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 762.9583333333334,
+          "mean_injected": 4.694444444444445,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 43,
+          "qa": 0.5972222222222222,
+          "groups": 67,
+          "evidence_precision": 0.28574879227053135,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.16479113751908245,
+          "reader_failures": 0,
+          "changed_contexts": 55,
+          "routes": {
+            "qa_residual": 72
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.013888888888888888,
+              "complete_delta_ci95": [
+                -0.09859154929577464,
+                0.1232876712328767
+              ],
+              "token_reduction": 0.3969768156669886,
+              "token_reduction_ci95": [
+                0.35286804744026457,
+                0.4433576760463658
+              ],
+              "quality_wins": 9,
+              "quality_losses": 8,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.08571428571428572,
+                0.0273972602739726
+              ],
+              "token_reduction": 0.1463801221388279,
+              "token_reduction_ci95": [
+                0.08818328102346773,
+                0.21195580978996553
+              ],
+              "quality_wins": 1,
+              "quality_losses": 3,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                -0.041666666666666664,
+                0.0410958904109589
+              ],
+              "token_reduction": 0.12147963345007917,
+              "token_reduction_ci95": [
+                0.06442368023876954,
+                0.18733630692550673
+              ],
+              "quality_wins": 1,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.08571428571428572,
+                0.0273972602739726
+              ],
+              "token_reduction": 0.14570308855090042,
+              "token_reduction_ci95": [
+                0.08779682583351966,
+                0.21141415733879865
+              ],
+              "quality_wins": 1,
+              "quality_losses": 3,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.08571428571428572,
+                0.0273972602739726
+              ],
+              "token_reduction": 0.14639338658047674,
+              "token_reduction_ci95": [
+                0.0884100603029857,
+                0.21171350054802784
+              ],
+              "quality_wins": 1,
+              "quality_losses": 3,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.08571428571428572,
+                0.0273972602739726
+              ],
+              "token_reduction": 0.14478539068703,
+              "token_reduction_ci95": [
+                0.08646857333816038,
+                0.21054823836950431
+              ],
+              "quality_wins": 1,
+              "quality_losses": 3,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0.043478260869565216,
+            "complete_delta_ci95": [
+              0,
+              0.1
+            ],
+            "token_reduction": 0.1463801221388279,
+            "token_reduction_ci95": [
+              0.08818328102346773,
+              0.21195580978996553
+            ],
+            "quality_wins": 3,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.8181818181818182,
+              "evidence_recall": 0.9090909090909091,
+              "evidence_hit": 1,
+              "mean_tokens": 661.3636363636364,
+              "mean_injected": 4.454545454545454,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.5833333333333334,
+              "evidence_recall": 0.7694444444444445,
+              "evidence_hit": 1,
+              "mean_tokens": 867,
+              "mean_injected": 4.916666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.5,
+              "correct": 1,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 624.5,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 775.5,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 0.9166666666666666,
+              "correct": 11,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 795.8333333333334,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 838.6666666666666,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5833333333333334,
+              "correct": 14,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6222222222222222,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 738.9583333333334,
+              "mean_injected": 4.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.5972222222222222,
+              "correct": 43,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6521739130434783,
+              "evidence_recall": 0.7705314009661836,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 762.9583333333334,
+              "mean_injected": 4.694444444444445,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 12,
+            "pool_missing": 12,
+            "selection_missing": 5
+          }
+        },
+        "intervention_residual": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6521739130434783,
+          "evidence_recall": 0.7603864734299516,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 868.4583333333334,
+          "mean_injected": 4.541666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 43,
+          "qa": 0.5972222222222222,
+          "groups": 67,
+          "evidence_precision": 0.2850241545893719,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.15473583415554304,
+          "reader_failures": 0,
+          "changed_contexts": 38,
+          "routes": {
+            "intervention_residual": 72
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.013888888888888888,
+              "complete_delta_ci95": [
+                -0.09859154929577464,
+                0.1232876712328767
+              ],
+              "token_reduction": 0.3135922543251075,
+              "token_reduction_ci95": [
+                0.28347620145453023,
+                0.3467857469442497
+              ],
+              "quality_wins": 9,
+              "quality_losses": 8,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.07042253521126761,
+                0
+              ],
+              "token_reduction": 0.02834366696191315,
+              "token_reduction_ci95": [
+                0.007141968008962496,
+                0.05359745397221971
+              ],
+              "quality_wins": 0,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                -0.0410958904109589,
+                0.041666666666666664
+              ],
+              "token_reduction": -0.13827753809185728,
+              "token_reduction_ci95": [
+                -0.2305378977508059,
+                -0.06886681546351348
+              ],
+              "quality_wins": 1,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.07042253521126761,
+                0
+              ],
+              "token_reduction": 0.027573014836241527,
+              "token_reduction_ci95": [
+                0.006438925917546912,
+                0.0528974152226499
+              ],
+              "quality_wins": 0,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.07042253521126761,
+                0
+              ],
+              "token_reduction": 0.028358765577897183,
+              "token_reduction_ci95": [
+                0.007267463550760356,
+                0.0536493886430125
+              ],
+              "quality_wins": 0,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": -0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.07042253521126761,
+                0
+              ],
+              "token_reduction": 0.026528419971042827,
+              "token_reduction_ci95": [
+                0.005196395491224193,
+                0.05182055029548194
+              ],
+              "quality_wins": 0,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0.043478260869565216,
+            "complete_delta_ci95": [
+              0,
+              0.1
+            ],
+            "token_reduction": 0.02834366696191315,
+            "token_reduction_ci95": [
+              0.007141968008962496,
+              0.05359745397221971
+            ],
+            "quality_wins": 3,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.8181818181818182,
+              "evidence_recall": 0.9090909090909091,
+              "evidence_hit": 1,
+              "mean_tokens": 660.9090909090909,
+              "mean_injected": 4.454545454545454,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.7277777777777779,
+              "evidence_hit": 1,
+              "mean_tokens": 963.1666666666666,
+              "mean_injected": 4.916666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.5,
+              "correct": 1,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 624.5,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 775.5,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1012.9166666666666,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1081.6666666666667,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5416666666666666,
+              "correct": 13,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4583333333333333,
+              "evidence_recall": 0.6138888888888889,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 868.6666666666666,
+              "mean_injected": 4.291666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.5972222222222222,
+              "correct": 43,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6521739130434783,
+              "evidence_recall": 0.7603864734299516,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 868.4583333333334,
+              "mean_injected": 4.541666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 11,
+            "pool_missing": 11,
+            "selection_missing": 7
+          }
+        },
+        "slate_qa": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6086956521739131,
+          "evidence_recall": 0.7415458937198067,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 893.0833333333334,
+          "mean_injected": 4.430555555555555,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 45,
+          "qa": 0.625,
+          "groups": 67,
+          "evidence_precision": 0.28840579710144915,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.16576188006069628,
+          "reader_failures": 0,
+          "changed_contexts": 2,
+          "routes": {
+            "qwen_fixed": 70,
+            "intervention_residual": 1,
+            "qa_residual": 1
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.057971014492753624,
+                0.14285714285714285
+              ],
+              "token_reduction": 0.2941292702204268,
+              "token_reduction_ci95": [
+                0.26626357992757377,
+                0.3256637168141593
+              ],
+              "quality_wins": 9,
+              "quality_losses": 6,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0007925038459745126,
+              "token_reduction_ci95": [
+                0,
+                0.002057613168724326
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.0273972602739726,
+                0.08571428571428572
+              ],
+              "token_reduction": -0.17055321937633106,
+              "token_reduction_ci95": [
+                -0.2681197478991597,
+                -0.09629973105814704
+              ],
+              "quality_wins": 3,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                0,
+                0.07042253521126761
+              ],
+              "token_reduction": -0.028354843352684345,
+              "token_reduction_ci95": [
+                -0.05586884581616802,
+                -0.006481029644991976
+              ],
+              "quality_wins": 2,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0008080305808496613,
+              "token_reduction_ci95": [
+                0,
+                0.002033392111074006
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.0010742141889683587,
+              "token_reduction_ci95": [
+                -0.002881515970436066,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0.0007925038459745126,
+            "token_reduction_ci95": [
+              0,
+              0.002057613168724326
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8636363636363636,
+              "evidence_hit": 1,
+              "mean_tokens": 693.2727272727273,
+              "mean_injected": 4.090909090909091,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6861111111111112,
+              "evidence_hit": 1,
+              "mean_tokens": 1020.5833333333334,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 1,
+              "correct": 2,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 670,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 1,
+              "correct": 8,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 781.125,
+              "mean_injected": 4.25,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1033.5,
+              "mean_injected": 4.666666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1081.6666666666667,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5416666666666666,
+              "correct": 13,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6013888888888889,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 883.0416666666666,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.625,
+              "correct": 45,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6086956521739131,
+              "evidence_recall": 0.7415458937198067,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 893.0833333333334,
+              "mean_injected": 4.430555555555555,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 10,
+            "pool_missing": 9,
+            "selection_missing": 8
+          }
+        },
+        "slate_active": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6086956521739131,
+          "evidence_recall": 0.7415458937198067,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 893.0833333333334,
+          "mean_injected": 4.430555555555555,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 45,
+          "qa": 0.625,
+          "groups": 67,
+          "evidence_precision": 0.28840579710144915,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.16576188006069628,
+          "reader_failures": 0,
+          "changed_contexts": 2,
+          "routes": {
+            "qwen_fixed": 70,
+            "intervention_residual": 1,
+            "qa_residual": 1
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.057971014492753624,
+                0.14285714285714285
+              ],
+              "token_reduction": 0.2941292702204268,
+              "token_reduction_ci95": [
+                0.26626357992757377,
+                0.3256637168141593
+              ],
+              "quality_wins": 9,
+              "quality_losses": 6,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0007925038459745126,
+              "token_reduction_ci95": [
+                0,
+                0.002057613168724326
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.0273972602739726,
+                0.08571428571428572
+              ],
+              "token_reduction": -0.17055321937633106,
+              "token_reduction_ci95": [
+                -0.2681197478991597,
+                -0.09629973105814704
+              ],
+              "quality_wins": 3,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                0,
+                0.07042253521126761
+              ],
+              "token_reduction": -0.028354843352684345,
+              "token_reduction_ci95": [
+                -0.05586884581616802,
+                -0.006481029644991976
+              ],
+              "quality_wins": 2,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0008080305808496613,
+              "token_reduction_ci95": [
+                0,
+                0.002033392111074006
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.0010742141889683587,
+              "token_reduction_ci95": [
+                -0.002881515970436066,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0.0007925038459745126,
+            "token_reduction_ci95": [
+              0,
+              0.002057613168724326
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8636363636363636,
+              "evidence_hit": 1,
+              "mean_tokens": 693.2727272727273,
+              "mean_injected": 4.090909090909091,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6861111111111112,
+              "evidence_hit": 1,
+              "mean_tokens": 1020.5833333333334,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 1,
+              "correct": 2,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 670,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 1,
+              "correct": 8,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 781.125,
+              "mean_injected": 4.25,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1033.5,
+              "mean_injected": 4.666666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1081.6666666666667,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5416666666666666,
+              "correct": 13,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6013888888888889,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 883.0416666666666,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.625,
+              "correct": 45,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6086956521739131,
+              "evidence_recall": 0.7415458937198067,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 893.0833333333334,
+              "mean_injected": 4.430555555555555,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 10,
+            "pool_missing": 9,
+            "selection_missing": 8
+          }
+        },
+        "slate_uniform": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6086956521739131,
+          "evidence_recall": 0.7415458937198067,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 893.8055555555555,
+          "mean_injected": 4.416666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 45,
+          "qa": 0.625,
+          "groups": 67,
+          "evidence_precision": 0.28840579710144915,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.16928072414326584,
+          "reader_failures": 0,
+          "changed_contexts": 8,
+          "routes": {
+            "qwen_fixed": 64,
+            "intervention_residual": 5,
+            "qa_residual": 3
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.057971014492753624,
+                0.14285714285714285
+              ],
+              "token_reduction": 0.29355844383946605,
+              "token_reduction_ci95": [
+                0.26571994930621,
+                0.32512645499421045
+              ],
+              "quality_wins": 9,
+              "quality_losses": 6,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.00001553929109765484,
+              "token_reduction_ci95": [
+                -0.001252236135957041,
+                0.001267605633802793
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.0273972602739726,
+                0.08571428571428572
+              ],
+              "token_reduction": -0.17149982706205735,
+              "token_reduction_ci95": [
+                -0.2690340054167921,
+                -0.09712338201274973
+              ],
+              "quality_wins": 3,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                0,
+                0.07042253521126761
+              ],
+              "token_reduction": -0.0291864574837275,
+              "token_reduction_ci95": [
+                -0.05669742610060213,
+                -0.007320971867007753
+              ],
+              "quality_wins": 2,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.0008086840222698566,
+              "token_reduction_ci95": [
+                -0.0020383387539155695,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.0018837669110893795,
+              "token_reduction_ci95": [
+                -0.0039308176100629755,
+                -0.00037338394760189075
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": -0.00001553929109765484,
+            "token_reduction_ci95": [
+              -0.001252236135957041,
+              0.001267605633802793
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8636363636363636,
+              "evidence_hit": 1,
+              "mean_tokens": 693.2727272727273,
+              "mean_injected": 4.090909090909091,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6861111111111112,
+              "evidence_hit": 1,
+              "mean_tokens": 1020.5833333333334,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 1,
+              "correct": 2,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 670,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 1,
+              "correct": 8,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 781.125,
+              "mean_injected": 4.25,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1033.5,
+              "mean_injected": 4.666666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1081.6666666666667,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5416666666666666,
+              "correct": 13,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6013888888888889,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 885.2083333333334,
+              "mean_injected": 4.291666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.625,
+              "correct": 45,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6086956521739131,
+              "evidence_recall": 0.7415458937198067,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 893.8055555555555,
+              "mean_injected": 4.416666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 10,
+            "pool_missing": 9,
+            "selection_missing": 8
+          }
+        },
+        "slate_sham": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6231884057971014,
+          "evidence_recall": 0.748792270531401,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 892.125,
+          "mean_injected": 4.458333333333333,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 45,
+          "qa": 0.625,
+          "groups": 67,
+          "evidence_precision": 0.28937198067632836,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.16423857393212699,
+          "reader_failures": 0,
+          "changed_contexts": 4,
+          "routes": {
+            "qwen_fixed": 68,
+            "intervention_residual": 1,
+            "qa_residual": 3
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.041666666666666664,
+              "complete_delta_ci95": [
+                -0.057971014492753624,
+                0.14285714285714285
+              ],
+              "token_reduction": 0.2948867129182401,
+              "token_reduction_ci95": [
+                0.26705149947857965,
+                0.3262764888095677
+              ],
+              "quality_wins": 9,
+              "quality_losses": 6,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.001864714931704814,
+              "token_reduction_ci95": [
+                0.00037473066233639774,
+                0.004000363669424467
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                -0.0273972602739726,
+                0.08571428571428572
+              ],
+              "token_reduction": -0.16929714379334815,
+              "token_reduction_ci95": [
+                -0.26674146564441403,
+                -0.0946888509463435
+              ],
+              "quality_wins": 3,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.027777777777777776,
+              "complete_delta_ci95": [
+                0,
+                0.07042253521126761
+              ],
+              "token_reduction": -0.02725135537110779,
+              "token_reduction_ci95": [
+                -0.05467806302655931,
+                -0.00523008999830199
+              ],
+              "quality_wins": 2,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.001073061491088989,
+              "token_reduction_ci95": [
+                0,
+                0.002869370683785677
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0018802250054386072,
+              "token_reduction_ci95": [
+                0.0003724890248769652,
+                0.003915045199448852
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0.014492753623188406,
+            "complete_delta_ci95": [
+              0,
+              0.04477611940298507
+            ],
+            "token_reduction": 0.001864714931704814,
+            "token_reduction_ci95": [
+              0.00037473066233639774,
+              0.004000363669424467
+            ],
+            "quality_wins": 1,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.8181818181818182,
+              "evidence_recall": 0.9090909090909091,
+              "evidence_hit": 1,
+              "mean_tokens": 690.5454545454545,
+              "mean_injected": 4.2727272727272725,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6861111111111112,
+              "evidence_hit": 1,
+              "mean_tokens": 1020.5833333333334,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 1,
+              "correct": 2,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 670,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 1,
+              "correct": 8,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 781.125,
+              "mean_injected": 4.25,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1033.5,
+              "mean_injected": 4.666666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1081.6666666666667,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5416666666666666,
+              "correct": 13,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.6013888888888889,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 881.4166666666666,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.625,
+              "correct": 45,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6231884057971014,
+              "evidence_recall": 0.748792270531401,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 892.125,
+              "mean_injected": 4.458333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 10,
+            "pool_missing": 9,
+            "selection_missing": 8
+          }
+        },
+        "slate_active_ungated": {
+          "n": 72,
+          "eligible": 69,
+          "excluded": 3,
+          "evidence_complete": 0.6376811594202898,
+          "evidence_recall": 0.7531400966183575,
+          "evidence_hit": 0.8985507246376812,
+          "mean_tokens": 883.0555555555555,
+          "mean_injected": 4.513888888888889,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 46,
+          "qa": 0.6388888888888888,
+          "groups": 67,
+          "evidence_precision": 0.28478260869565203,
+          "pool_complete": 0.8115942028985508,
+          "exact_match": 0,
+          "lexical_f1": 0.1606884526913964,
+          "reader_failures": 0,
+          "changed_contexts": 19,
+          "routes": {
+            "qwen_fixed": 53,
+            "intervention_residual": 10,
+            "qa_residual": 9
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.05555555555555555,
+              "complete_delta_ci95": [
+                -0.04225352112676056,
+                0.15492957746478872
+              ],
+              "token_reduction": 0.3020549749714586,
+              "token_reduction_ci95": [
+                0.2734366449974829,
+                0.33394772857710475
+              ],
+              "quality_wins": 9,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.013888888888888888,
+              "complete_delta_ci95": [
+                0,
+                0.04285714285714286
+              ],
+              "token_reduction": 0.012011872018398484,
+              "token_reduction_ci95": [
+                -0.000051250512505207624,
+                0.027234351595479045
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.041666666666666664,
+              "complete_delta_ci95": [
+                0,
+                0.0958904109589041
+              ],
+              "token_reduction": -0.15740993573990125,
+              "token_reduction_ci95": [
+                -0.2527604325312214,
+                -0.08363824808806664
+              ],
+              "quality_wins": 3,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.041666666666666664,
+              "complete_delta_ci95": [
+                0,
+                0.0945945945945946
+              ],
+              "token_reduction": -0.016808200994738343,
+              "token_reduction_ci95": [
+                -0.044818019684259136,
+                0.006737760542898652
+              ],
+              "quality_wins": 3,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.013888888888888888,
+              "complete_delta_ci95": [
+                0,
+                0.04285714285714286
+              ],
+              "token_reduction": 0.011228266616901572,
+              "token_reduction_ci95": [
+                -0.0008118950585838114,
+                0.026376343716729034
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.013888888888888888,
+              "complete_delta_ci95": [
+                0,
+                0.04285714285714286
+              ],
+              "token_reduction": 0.01202722441495474,
+              "token_reduction_ci95": [
+                -0.000046795301751778595,
+                0.027177759056444817
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 72,
+              "eligible_n": 72,
+              "clusters": 67,
+              "complete_delta": 0.013888888888888888,
+              "complete_delta_ci95": [
+                0,
+                0.04285714285714286
+              ],
+              "token_reduction": 0.01016611399125067,
+              "token_reduction_ci95": [
+                -0.0019205136657445276,
+                0.025406970585119537
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 72,
+            "eligible_n": 69,
+            "clusters": 67,
+            "complete_delta": 0.028985507246376812,
+            "complete_delta_ci95": [
+              0,
+              0.07352941176470588
+            ],
+            "token_reduction": 0.012011872018398484,
+            "token_reduction_ci95": [
+              -0.000051250512505207624,
+              0.027234351595479045
+            ],
+            "quality_wins": 2,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "knowledge-update": {
+              "qa": 0.36363636363636365,
+              "correct": 4,
+              "n": 11,
+              "eligible": 11,
+              "excluded": 0,
+              "evidence_complete": 0.8181818181818182,
+              "evidence_recall": 0.9090909090909091,
+              "evidence_hit": 1,
+              "mean_tokens": 690.5454545454545,
+              "mean_injected": 4.2727272727272725,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.25,
+              "correct": 3,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.7277777777777779,
+              "evidence_hit": 1,
+              "mean_tokens": 997.4166666666666,
+              "mean_injected": 4.916666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 1,
+              "correct": 2,
+              "n": 2,
+              "eligible": 2,
+              "excluded": 0,
+              "evidence_complete": 0.5,
+              "evidence_recall": 0.5,
+              "evidence_hit": 0.5,
+              "mean_tokens": 670,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 1,
+              "correct": 8,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 781.125,
+              "mean_injected": 4.25,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-user": {
+              "qa": 1,
+              "correct": 12,
+              "n": 12,
+              "eligible": 12,
+              "excluded": 0,
+              "evidence_complete": 0.9166666666666666,
+              "evidence_recall": 0.9166666666666666,
+              "evidence_hit": 0.9166666666666666,
+              "mean_tokens": 1033.5,
+              "mean_injected": 4.666666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 1,
+              "correct": 3,
+              "n": 3,
+              "eligible": 0,
+              "excluded": 3,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1081.6666666666667,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.5833333333333334,
+              "correct": 14,
+              "n": 24,
+              "eligible": 24,
+              "excluded": 0,
+              "evidence_complete": 0.4166666666666667,
+              "evidence_recall": 0.5930555555555556,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 865.7916666666666,
+              "mean_injected": 4.458333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.6388888888888888,
+              "correct": 46,
+              "n": 72,
+              "eligible": 69,
+              "excluded": 3,
+              "evidence_complete": 0.6376811594202898,
+              "evidence_recall": 0.7531400966183575,
+              "evidence_hit": 0.8985507246376812,
+              "mean_tokens": 883.0555555555555,
+              "mean_injected": 4.513888888888889,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "complete_but_wrong": 11,
+            "pool_missing": 9,
+            "selection_missing": 6
+          }
+        }
+      },
+      "primary_contrasts": [
+        {
+          "base": "slate_qa",
+          "candidate": "slate_active",
+          "p_two_sided": 1,
+          "clusters": 67,
+          "nonzero_clusters": 0,
+          "exact": false,
+          "draws": 20000,
+          "assumption": "Exchangeability of method labels within independent conversation groups; diagnostic paired cluster sign-flip, not a randomized causal experiment.",
+          "holm_p": 1
+        },
+        {
+          "base": "slate_uniform",
+          "candidate": "slate_active",
+          "p_two_sided": 1,
+          "clusters": 67,
+          "nonzero_clusters": 0,
+          "exact": false,
+          "draws": 20000,
+          "assumption": "Exchangeability of method labels within independent conversation groups; diagnostic paired cluster sign-flip, not a randomized causal experiment.",
+          "holm_p": 1
+        },
+        {
+          "base": "qwen_fixed",
+          "candidate": "slate_active",
+          "p_two_sided": 1,
+          "clusters": 67,
+          "nonzero_clusters": 0,
+          "exact": false,
+          "draws": 20000,
+          "assumption": "Exchangeability of method labels within independent conversation groups; diagnostic paired cluster sign-flip, not a randomized causal experiment.",
+          "holm_p": 1
+        }
+      ],
+      "oracle": {
+        "n": 72,
+        "qa": 0.6388888888888888,
+        "correct": 46,
+        "runtime_available": false,
+        "meaning": "Posthoc three-action answer upper bound, not a deployable method."
+      }
+    },
+    "development": {
+      "modes": {
+        "native_k5": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.5909090909090909,
+          "evidence_recall": 0.6964015151515152,
+          "evidence_hit": 0.8068181818181818,
+          "mean_tokens": 1295.9583333333333,
+          "mean_injected": 4.78125,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 60,
+          "qa": 0.625,
+          "groups": 88,
+          "evidence_precision": 0.23011363636363613,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.16703854645763985,
+          "reader_failures": 0,
+          "changed_contexts": 96,
+          "routes": {
+            "native_k5": 96
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.09375,
+              "complete_delta_ci95": [
+                -0.18,
+                -0.010309278350515464
+              ],
+              "token_reduction": -0.3969458791825735,
+              "token_reduction_ci95": [
+                -0.4371396531608578,
+                -0.3646605297264962
+              ],
+              "quality_wins": 5,
+              "quality_losses": 14,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.0625,
+              "complete_delta_ci95": [
+                -0.14736842105263157,
+                0.021052631578947368
+              ],
+              "token_reduction": -0.6789290437505058,
+              "token_reduction_ci95": [
+                -0.8065884929506775,
+                -0.5730059820538385
+              ],
+              "quality_wins": 6,
+              "quality_losses": 12,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.07291666666666667,
+              "complete_delta_ci95": [
+                -0.15625,
+                0.010101010101010102
+              ],
+              "token_reduction": -0.4843820841386879,
+              "token_reduction_ci95": [
+                -0.557385006953373,
+                -0.42795516343318685
+              ],
+              "quality_wins": 5,
+              "quality_losses": 12,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.09375,
+              "complete_delta_ci95": [
+                -0.18,
+                -0.010309278350515464
+              ],
+              "token_reduction": -0.3969458791825735,
+              "token_reduction_ci95": [
+                -0.4371396531608578,
+                -0.3646605297264962
+              ],
+              "quality_wins": 5,
+              "quality_losses": 14,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.08333333333333333,
+              "complete_delta_ci95": [
+                -0.16842105263157894,
+                0
+              ],
+              "token_reduction": -0.3969458791825735,
+              "token_reduction_ci95": [
+                -0.4371396531608578,
+                -0.3646605297264962
+              ],
+              "quality_wins": 5,
+              "quality_losses": 13,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.09375,
+              "complete_delta_ci95": [
+                -0.18,
+                -0.010309278350515464
+              ],
+              "token_reduction": -0.39732243137607237,
+              "token_reduction_ci95": [
+                -0.4376030967514901,
+                -0.36510313910609327
+              ],
+              "quality_wins": 5,
+              "quality_losses": 14,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": -0.13636363636363635,
+            "complete_delta_ci95": [
+              -0.22727272727272727,
+              -0.056818181818181816
+            ],
+            "token_reduction": -0.3969458791825735,
+            "token_reduction_ci95": [
+              -0.4371396531608578,
+              -0.3646605297264962
+            ],
+            "quality_wins": 2,
+            "quality_losses": 14,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.875,
+              "correct": 14,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 1426.6875,
+              "mean_injected": 4.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.125,
+              "correct": 1,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0,
+              "evidence_recall": 0.125,
+              "evidence_hit": 0.25,
+              "mean_tokens": 1131.625,
+              "mean_injected": 4.125,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.6666666666666666,
+              "evidence_recall": 0.7592592592592592,
+              "evidence_hit": 0.8333333333333334,
+              "mean_tokens": 1370.6666666666667,
+              "mean_injected": 4.833333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.7058823529411765,
+              "correct": 12,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.7058823529411765,
+              "evidence_recall": 0.8333333333333333,
+              "evidence_hit": 0.9411764705882353,
+              "mean_tokens": 1185.5882352941176,
+              "mean_injected": 5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 1057.25,
+              "mean_injected": 4.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.3333333333333333,
+              "correct": 7,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.2857142857142857,
+              "evidence_recall": 0.4976190476190477,
+              "evidence_hit": 0.7619047619047619,
+              "mean_tokens": 1422.047619047619,
+              "mean_injected": 4.904761904761905,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 1173,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.625,
+              "correct": 60,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.5909090909090909,
+              "evidence_recall": 0.6964015151515152,
+              "evidence_hit": 0.8068181818181818,
+              "mean_tokens": 1295.9583333333333,
+              "mean_injected": 4.78125,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 12,
+            "complete_but_wrong": 6,
+            "unscored_evidence": 1,
+            "selection_missing": 17
+          }
+        },
+        "qwen_fixed": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8145833333333333,
+          "evidence_hit": 0.8977272727272727,
+          "mean_tokens": 927.7083333333334,
+          "mean_injected": 4.541666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 69,
+          "qa": 0.71875,
+          "groups": 88,
+          "evidence_precision": 0.3026515151515149,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.17606429245193359,
+          "reader_failures": 0,
+          "changed_contexts": 0,
+          "routes": {
+            "qwen_fixed": 96
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.09375,
+              "complete_delta_ci95": [
+                0.010309278350515464,
+                0.18
+              ],
+              "token_reduction": 0.28415265408481494,
+              "token_reduction_ci95": [
+                0.2671945439833545,
+                0.30416003278843573
+              ],
+              "quality_wins": 14,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.03125,
+              "complete_delta_ci95": [
+                -0.03225806451612903,
+                0.09782608695652174
+              ],
+              "token_reduction": -0.20185689994871936,
+              "token_reduction_ci95": [
+                -0.2836843815544592,
+                -0.13220607281623264
+              ],
+              "quality_wins": 7,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.030612244897959183,
+                0.07142857142857142
+              ],
+              "token_reduction": -0.06259097525473067,
+              "token_reduction_ci95": [
+                -0.09781680113906033,
+                -0.03331512834516648
+              ],
+              "quality_wins": 4,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.010416666666666666,
+              "complete_delta_ci95": [
+                0,
+                0.031578947368421054
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.00026955388831484406,
+              "token_reduction_ci95": [
+                -0.0014230858881405517,
+                0.0008289614135494894
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0,
+            "token_reduction_ci95": [
+              0,
+              0
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.9375,
+              "correct": 15,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 1022,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.125,
+              "evidence_recall": 0.35416666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 724.375,
+              "mean_injected": 3.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.7777777777777778,
+              "evidence_recall": 0.8240740740740741,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 981.5555555555555,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.9411764705882353,
+              "correct": 16,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 880.5882352941177,
+              "mean_injected": 4.9411764705882355,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 770.875,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7388888888888889,
+              "evidence_hit": 0.9523809523809523,
+              "mean_tokens": 1010.7142857142857,
+              "mean_injected": 4.714285714285714,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 860.375,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.71875,
+              "correct": 69,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8145833333333333,
+              "evidence_hit": 0.8977272727272727,
+              "mean_tokens": 927.7083333333334,
+              "mean_injected": 4.541666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 10,
+            "selection_missing": 8,
+            "unscored_evidence": 2,
+            "complete_but_wrong": 7
+          }
+        },
+        "qa_residual": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8041666666666665,
+          "evidence_hit": 0.8636363636363636,
+          "mean_tokens": 771.8958333333334,
+          "mean_injected": 4.65625,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 66,
+          "qa": 0.6875,
+          "groups": 88,
+          "evidence_precision": 0.2950757575757573,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.1695411902582197,
+          "reader_failures": 0,
+          "changed_contexts": 70,
+          "routes": {
+            "qa_residual": 96
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.0625,
+              "complete_delta_ci95": [
+                -0.02127659574468085,
+                0.14736842105263157
+              ],
+              "token_reduction": 0.40438221393434715,
+              "token_reduction_ci95": [
+                0.364266947805278,
+                0.4464687166960972
+              ],
+              "quality_wins": 12,
+              "quality_losses": 6,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.03125,
+              "complete_delta_ci95": [
+                -0.09782608695652174,
+                0.03225806451612903
+              ],
+              "token_reduction": 0.16795418818773855,
+              "token_reduction_ci95": [
+                0.11675092147755928,
+                0.22098707768955317
+              ],
+              "quality_wins": 4,
+              "quality_losses": 7,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.06451612903225806,
+                0.042105263157894736
+              ],
+              "token_reduction": 0.11587562936979501,
+              "token_reduction_ci95": [
+                0.06898627662922274,
+                0.16607072854919758
+              ],
+              "quality_wins": 3,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.03125,
+              "complete_delta_ci95": [
+                -0.09782608695652174,
+                0.03225806451612903
+              ],
+              "token_reduction": 0.16795418818773855,
+              "token_reduction_ci95": [
+                0.11675092147755928,
+                0.22098707768955317
+              ],
+              "quality_wins": 4,
+              "quality_losses": 7,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.0851063829787234,
+                0.042105263157894736
+              ],
+              "token_reduction": 0.16795418818773855,
+              "token_reduction_ci95": [
+                0.11675092147755928,
+                0.22098707768955317
+              ],
+              "quality_wins": 4,
+              "quality_losses": 6,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.03125,
+              "complete_delta_ci95": [
+                -0.09782608695652174,
+                0.03225806451612903
+              ],
+              "token_reduction": 0.16772990700390855,
+              "token_reduction_ci95": [
+                0.11657828601661802,
+                0.2209067567864118
+              ],
+              "quality_wins": 4,
+              "quality_losses": 7,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              -0.045454545454545456,
+              0.045454545454545456
+            ],
+            "token_reduction": 0.16795418818773855,
+            "token_reduction_ci95": [
+              0.11675092147755928,
+              0.22098707768955317
+            ],
+            "quality_wins": 2,
+            "quality_losses": 2,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.875,
+              "correct": 14,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 803.875,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.25,
+              "evidence_recall": 0.41666666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 619.75,
+              "mean_injected": 4,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.7222222222222222,
+              "correct": 13,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.8333333333333334,
+              "evidence_recall": 0.8703703703703703,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 701.1111111111111,
+              "mean_injected": 4.555555555555555,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.8235294117647058,
+              "correct": 14,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 867.2352941176471,
+              "mean_injected": 4.9411764705882355,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 701.125,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7269841269841271,
+              "evidence_hit": 0.9047619047619048,
+              "mean_tokens": 829.2380952380952,
+              "mean_injected": 4.809523809523809,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.625,
+              "correct": 5,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.625,
+              "evidence_recall": 0.625,
+              "evidence_hit": 0.625,
+              "mean_tokens": 737,
+              "mean_injected": 4.875,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.6875,
+              "correct": 66,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8041666666666665,
+              "evidence_hit": 0.8636363636363636,
+              "mean_tokens": 771.8958333333334,
+              "mean_injected": 4.65625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 12,
+            "complete_but_wrong": 9,
+            "selection_missing": 8,
+            "unscored_evidence": 1
+          }
+        },
+        "intervention_residual": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8098484848484847,
+          "evidence_hit": 0.875,
+          "mean_tokens": 873.0625,
+          "mean_injected": 4.614583333333333,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 67,
+          "qa": 0.6979166666666666,
+          "groups": 88,
+          "evidence_precision": 0.2956439393939391,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.16343032788513767,
+          "reader_failures": 0,
+          "changed_contexts": 57,
+          "routes": {
+            "intervention_residual": 96
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.07291666666666667,
+              "complete_delta_ci95": [
+                -0.010101010101010102,
+                0.15625
+              ],
+              "token_reduction": 0.3263190045976272,
+              "token_reduction_ci95": [
+                0.29969508131165024,
+                0.3578482200167876
+              ],
+              "quality_wins": 12,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.07142857142857142,
+                0.030612244897959183
+              ],
+              "token_reduction": 0.05890410958904113,
+              "token_reduction_ci95": [
+                0.03220729033238534,
+                0.08909170413391787
+              ],
+              "quality_wins": 2,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.042105263157894736,
+                0.06451612903225806
+              ],
+              "token_reduction": -0.13106258940379467,
+              "token_reduction_ci95": [
+                -0.19937495844138575,
+                -0.07425003569713251
+              ],
+              "quality_wins": 4,
+              "quality_losses": 3,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.07142857142857142,
+                0.030612244897959183
+              ],
+              "token_reduction": 0.05890410958904113,
+              "token_reduction_ci95": [
+                0.03220729033238534,
+                0.08909170413391787
+              ],
+              "quality_wins": 2,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.05434782608695652,
+                0.03225806451612903
+              ],
+              "token_reduction": 0.05890410958904113,
+              "token_reduction_ci95": [
+                0.03220729033238534,
+                0.08909170413391787
+              ],
+              "quality_wins": 2,
+              "quality_losses": 3,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.07142857142857142,
+                0.030612244897959183
+              ],
+              "token_reduction": 0.058650433532503765,
+              "token_reduction_ci95": [
+                0.03200554208520956,
+                0.08886819548534752
+              ],
+              "quality_wins": 2,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              -0.03409090909090909,
+              0.03409090909090909
+            ],
+            "token_reduction": 0.05890410958904113,
+            "token_reduction_ci95": [
+              0.03220729033238534,
+              0.08909170413391787
+            ],
+            "quality_wins": 1,
+            "quality_losses": 1,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.9375,
+              "correct": 15,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 979.75,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.25,
+              "evidence_recall": 0.41666666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 636.375,
+              "mean_injected": 3.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.7777777777777778,
+              "evidence_recall": 0.8425925925925926,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 911.6666666666666,
+              "mean_injected": 4.444444444444445,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.8823529411764706,
+              "correct": 15,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 861.6470588235294,
+              "mean_injected": 5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 762.375,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7269841269841271,
+              "evidence_hit": 0.9047619047619048,
+              "mean_tokens": 914.3333333333334,
+              "mean_injected": 4.809523809523809,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.75,
+              "evidence_recall": 0.75,
+              "evidence_hit": 0.75,
+              "mean_tokens": 836.125,
+              "mean_injected": 4.875,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.6979166666666666,
+              "correct": 67,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8098484848484847,
+              "evidence_hit": 0.875,
+              "mean_tokens": 873.0625,
+              "mean_injected": 4.614583333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 12,
+            "complete_but_wrong": 7,
+            "selection_missing": 8,
+            "unscored_evidence": 2
+          }
+        },
+        "slate_qa": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8145833333333333,
+          "evidence_hit": 0.8977272727272727,
+          "mean_tokens": 927.7083333333334,
+          "mean_injected": 4.541666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 69,
+          "qa": 0.71875,
+          "groups": 88,
+          "evidence_precision": 0.3026515151515149,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.17606429245193359,
+          "reader_failures": 0,
+          "changed_contexts": 0,
+          "routes": {
+            "qwen_fixed": 96
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.09375,
+              "complete_delta_ci95": [
+                0.010309278350515464,
+                0.18
+              ],
+              "token_reduction": 0.28415265408481494,
+              "token_reduction_ci95": [
+                0.2671945439833545,
+                0.30416003278843573
+              ],
+              "quality_wins": 14,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.03125,
+              "complete_delta_ci95": [
+                -0.03225806451612903,
+                0.09782608695652174
+              ],
+              "token_reduction": -0.20185689994871936,
+              "token_reduction_ci95": [
+                -0.2836843815544592,
+                -0.13220607281623264
+              ],
+              "quality_wins": 7,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.030612244897959183,
+                0.07142857142857142
+              ],
+              "token_reduction": -0.06259097525473067,
+              "token_reduction_ci95": [
+                -0.09781680113906033,
+                -0.03331512834516648
+              ],
+              "quality_wins": 4,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.010416666666666666,
+              "complete_delta_ci95": [
+                0,
+                0.031578947368421054
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.00026955388831484406,
+              "token_reduction_ci95": [
+                -0.0014230858881405517,
+                0.0008289614135494894
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0,
+            "token_reduction_ci95": [
+              0,
+              0
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.9375,
+              "correct": 15,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 1022,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.125,
+              "evidence_recall": 0.35416666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 724.375,
+              "mean_injected": 3.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.7777777777777778,
+              "evidence_recall": 0.8240740740740741,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 981.5555555555555,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.9411764705882353,
+              "correct": 16,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 880.5882352941177,
+              "mean_injected": 4.9411764705882355,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 770.875,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7388888888888889,
+              "evidence_hit": 0.9523809523809523,
+              "mean_tokens": 1010.7142857142857,
+              "mean_injected": 4.714285714285714,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 860.375,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.71875,
+              "correct": 69,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8145833333333333,
+              "evidence_hit": 0.8977272727272727,
+              "mean_tokens": 927.7083333333334,
+              "mean_injected": 4.541666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 10,
+            "selection_missing": 8,
+            "unscored_evidence": 2,
+            "complete_but_wrong": 7
+          }
+        },
+        "slate_active": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8145833333333333,
+          "evidence_hit": 0.8977272727272727,
+          "mean_tokens": 927.7083333333334,
+          "mean_injected": 4.541666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 69,
+          "qa": 0.71875,
+          "groups": 88,
+          "evidence_precision": 0.3026515151515149,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.17606429245193359,
+          "reader_failures": 0,
+          "changed_contexts": 0,
+          "routes": {
+            "qwen_fixed": 96
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.09375,
+              "complete_delta_ci95": [
+                0.010309278350515464,
+                0.18
+              ],
+              "token_reduction": 0.28415265408481494,
+              "token_reduction_ci95": [
+                0.2671945439833545,
+                0.30416003278843573
+              ],
+              "quality_wins": 14,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.03125,
+              "complete_delta_ci95": [
+                -0.03225806451612903,
+                0.09782608695652174
+              ],
+              "token_reduction": -0.20185689994871936,
+              "token_reduction_ci95": [
+                -0.2836843815544592,
+                -0.13220607281623264
+              ],
+              "quality_wins": 7,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.030612244897959183,
+                0.07142857142857142
+              ],
+              "token_reduction": -0.06259097525473067,
+              "token_reduction_ci95": [
+                -0.09781680113906033,
+                -0.03331512834516648
+              ],
+              "quality_wins": 4,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.010416666666666666,
+              "complete_delta_ci95": [
+                0,
+                0.031578947368421054
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": -0.00026955388831484406,
+              "token_reduction_ci95": [
+                -0.0014230858881405517,
+                0.0008289614135494894
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0,
+            "token_reduction_ci95": [
+              0,
+              0
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.9375,
+              "correct": 15,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 1022,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.125,
+              "evidence_recall": 0.35416666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 724.375,
+              "mean_injected": 3.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.7777777777777778,
+              "evidence_recall": 0.8240740740740741,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 981.5555555555555,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.9411764705882353,
+              "correct": 16,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 880.5882352941177,
+              "mean_injected": 4.9411764705882355,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 770.875,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7388888888888889,
+              "evidence_hit": 0.9523809523809523,
+              "mean_tokens": 1010.7142857142857,
+              "mean_injected": 4.714285714285714,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 860.375,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.71875,
+              "correct": 69,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8145833333333333,
+              "evidence_hit": 0.8977272727272727,
+              "mean_tokens": 927.7083333333334,
+              "mean_injected": 4.541666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 10,
+            "selection_missing": 8,
+            "unscored_evidence": 2,
+            "complete_but_wrong": 7
+          }
+        },
+        "slate_uniform": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8145833333333333,
+          "evidence_hit": 0.8977272727272727,
+          "mean_tokens": 927.7083333333334,
+          "mean_injected": 4.541666666666667,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 68,
+          "qa": 0.7083333333333334,
+          "groups": 88,
+          "evidence_precision": 0.3026515151515149,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.17609049344284225,
+          "reader_failures": 0,
+          "changed_contexts": 11,
+          "routes": {
+            "qwen_fixed": 85,
+            "qa_residual": 7,
+            "intervention_residual": 4
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.08333333333333333,
+              "complete_delta_ci95": [
+                0,
+                0.16842105263157894
+              ],
+              "token_reduction": 0.28415265408481494,
+              "token_reduction_ci95": [
+                0.2671945439833545,
+                0.30416003278843573
+              ],
+              "quality_wins": 13,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.031578947368421054,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.042105263157894736,
+                0.0851063829787234
+              ],
+              "token_reduction": -0.20185689994871936,
+              "token_reduction_ci95": [
+                -0.2836843815544592,
+                -0.13220607281623264
+              ],
+              "quality_wins": 6,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.03225806451612903,
+                0.05434782608695652
+              ],
+              "token_reduction": -0.06259097525473067,
+              "token_reduction_ci95": [
+                -0.09781680113906033,
+                -0.03331512834516648
+              ],
+              "quality_wins": 3,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.031578947368421054,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.031578947368421054,
+                0
+              ],
+              "token_reduction": -0.00026955388831484406,
+              "token_reduction_ci95": [
+                -0.0014230858881405517,
+                0.0008289614135494894
+              ],
+              "quality_wins": 0,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0,
+            "token_reduction_ci95": [
+              0,
+              0
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.9375,
+              "correct": 15,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 1022,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.125,
+              "evidence_recall": 0.35416666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 724.375,
+              "mean_injected": 3.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.7777777777777778,
+              "evidence_recall": 0.8240740740740741,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 981.5555555555555,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.8823529411764706,
+              "correct": 15,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 880.5882352941177,
+              "mean_injected": 4.9411764705882355,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 770.875,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7388888888888889,
+              "evidence_hit": 0.9523809523809523,
+              "mean_tokens": 1010.7142857142857,
+              "mean_injected": 4.714285714285714,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 860.375,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.7083333333333334,
+              "correct": 68,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8145833333333333,
+              "evidence_hit": 0.8977272727272727,
+              "mean_tokens": 927.7083333333334,
+              "mean_injected": 4.541666666666667,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 10,
+            "complete_but_wrong": 8,
+            "selection_missing": 8,
+            "unscored_evidence": 2
+          }
+        },
+        "slate_sham": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8145833333333333,
+          "evidence_hit": 0.8977272727272727,
+          "mean_tokens": 927.4583333333334,
+          "mean_injected": 4.552083333333333,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 69,
+          "qa": 0.71875,
+          "groups": 88,
+          "evidence_precision": 0.3020833333333331,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.17463296212653026,
+          "reader_failures": 0,
+          "changed_contexts": 3,
+          "routes": {
+            "qwen_fixed": 93,
+            "qa_residual": 3
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.09375,
+              "complete_delta_ci95": [
+                0.010309278350515464,
+                0.18
+              ],
+              "token_reduction": 0.28434556152139656,
+              "token_reduction_ci95": [
+                0.2674447435534145,
+                0.3043750514954272
+              ],
+              "quality_wins": 14,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0002694812485964926,
+              "token_reduction_ci95": [
+                -0.0008306214869262529,
+                0.0014202284608886284
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.03125,
+              "complete_delta_ci95": [
+                -0.03225806451612903,
+                0.09782608695652174
+              ],
+              "token_reduction": -0.2015330220506868,
+              "token_reduction_ci95": [
+                -0.2835532535865499,
+                -0.13197219926569215
+              ],
+              "quality_wins": 7,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.030612244897959183,
+                0.07142857142857142
+              ],
+              "token_reduction": -0.062304626911971805,
+              "token_reduction_ci95": [
+                -0.09761109684048286,
+                -0.033093732348348004
+              ],
+              "quality_wins": 4,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0002694812485964926,
+              "token_reduction_ci95": [
+                -0.0008306214869262529,
+                0.0014202284608886284
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.010416666666666666,
+              "complete_delta_ci95": [
+                0,
+                0.031578947368421054
+              ],
+              "token_reduction": 0.0002694812485964926,
+              "token_reduction_ci95": [
+                -0.0008306214869262529,
+                0.0014202284608886284
+              ],
+              "quality_wins": 1,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0,
+              "token_reduction_ci95": [
+                0,
+                0
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0.0002694812485964926,
+            "token_reduction_ci95": [
+              -0.0008306214869262529,
+              0.0014202284608886284
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.9375,
+              "correct": 15,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 1024.125,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.125,
+              "evidence_recall": 0.35416666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 724.375,
+              "mean_injected": 3.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.7777777777777778,
+              "evidence_recall": 0.8240740740740741,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 981.5555555555555,
+              "mean_injected": 4.333333333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.9411764705882353,
+              "correct": 16,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 880.5882352941177,
+              "mean_injected": 4.9411764705882355,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 770.875,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7388888888888889,
+              "evidence_hit": 0.9523809523809523,
+              "mean_tokens": 1009.3333333333334,
+              "mean_injected": 4.714285714285714,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 856.75,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.71875,
+              "correct": 69,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8145833333333333,
+              "evidence_hit": 0.8977272727272727,
+              "mean_tokens": 927.4583333333334,
+              "mean_injected": 4.552083333333333,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 10,
+            "selection_missing": 8,
+            "unscored_evidence": 2,
+            "complete_but_wrong": 7
+          }
+        },
+        "slate_active_ungated": {
+          "n": 96,
+          "eligible": 88,
+          "excluded": 8,
+          "evidence_complete": 0.7272727272727273,
+          "evidence_recall": 0.8145833333333333,
+          "evidence_hit": 0.8977272727272727,
+          "mean_tokens": 926.71875,
+          "mean_injected": 4.5625,
+          "retrieval_p50_ms": null,
+          "retrieval_p95_ms": null,
+          "correct": 68,
+          "qa": 0.7083333333333334,
+          "groups": 88,
+          "evidence_precision": 0.30151515151515124,
+          "pool_complete": 0.8295454545454546,
+          "exact_match": 0,
+          "lexical_f1": 0.17459439784538075,
+          "reader_failures": 0,
+          "changed_contexts": 20,
+          "routes": {
+            "qwen_fixed": 76,
+            "intervention_residual": 7,
+            "qa_residual": 13
+          },
+          "qa_comparisons": {
+            "native_k5": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.08333333333333333,
+              "complete_delta_ci95": [
+                0,
+                0.16842105263157894
+              ],
+              "token_reduction": 0.28491624602128407,
+              "token_reduction_ci95": [
+                0.26799649657153224,
+                0.30482298121727436
+              ],
+              "quality_wins": 13,
+              "quality_losses": 5,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qwen_fixed": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.031578947368421054,
+                0
+              ],
+              "token_reduction": 0.0010666966090276953,
+              "token_reduction_ci95": [
+                -0.0007249826869806242,
+                0.003065426614843658
+              ],
+              "quality_wins": 0,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "qa_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.020833333333333332,
+              "complete_delta_ci95": [
+                -0.042105263157894736,
+                0.0851063829787234
+              ],
+              "token_reduction": -0.20057488326900752,
+              "token_reduction_ci95": [
+                -0.2828490162155821,
+                -0.13109177892792023
+              ],
+              "quality_wins": 6,
+              "quality_losses": 4,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "intervention_residual": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.03225806451612903,
+                0.05434782608695652
+              ],
+              "token_reduction": -0.06145751306464309,
+              "token_reduction_ci95": [
+                -0.09669904446023847,
+                -0.032112054405836865
+              ],
+              "quality_wins": 3,
+              "quality_losses": 2,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_qa": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.031578947368421054,
+                0
+              ],
+              "token_reduction": 0.0010666966090276953,
+              "token_reduction_ci95": [
+                -0.0007249826869806242,
+                0.003065426614843658
+              ],
+              "quality_wins": 0,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_uniform": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": 0,
+              "complete_delta_ci95": [
+                0,
+                0
+              ],
+              "token_reduction": 0.0010666966090276953,
+              "token_reduction_ci95": [
+                -0.0007249826869806242,
+                0.003065426614843658
+              ],
+              "quality_wins": 0,
+              "quality_losses": 0,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            },
+            "slate_sham": {
+              "paired_n": 96,
+              "eligible_n": 96,
+              "clusters": 88,
+              "complete_delta": -0.010416666666666666,
+              "complete_delta_ci95": [
+                -0.031578947368421054,
+                0
+              ],
+              "token_reduction": 0.0007974302529314414,
+              "token_reduction_ci95": [
+                -0.0005943903013445606,
+                0.0023614572208378037
+              ],
+              "quality_wins": 0,
+              "quality_losses": 1,
+              "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+            }
+          },
+          "evidence_vs_qwen": {
+            "paired_n": 96,
+            "eligible_n": 88,
+            "clusters": 88,
+            "complete_delta": 0,
+            "complete_delta_ci95": [
+              0,
+              0
+            ],
+            "token_reduction": 0.0010666966090276953,
+            "token_reduction_ci95": [
+              -0.0007249826869806242,
+              0.003065426614843658
+            ],
+            "quality_wins": 0,
+            "quality_losses": 0,
+            "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+          },
+          "categories": {
+            "single-session-user": {
+              "qa": 0.9375,
+              "correct": 15,
+              "n": 16,
+              "eligible": 16,
+              "excluded": 0,
+              "evidence_complete": 0.9375,
+              "evidence_recall": 0.9375,
+              "evidence_hit": 0.9375,
+              "mean_tokens": 1024.125,
+              "mean_injected": 4.5,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-preference": {
+              "qa": 0.25,
+              "correct": 2,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.125,
+              "evidence_recall": 0.35416666666666663,
+              "evidence_hit": 0.5,
+              "mean_tokens": 722.5,
+              "mean_injected": 3.75,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "temporal-reasoning": {
+              "qa": 0.6666666666666666,
+              "correct": 12,
+              "n": 18,
+              "eligible": 18,
+              "excluded": 0,
+              "evidence_complete": 0.7777777777777778,
+              "evidence_recall": 0.8240740740740741,
+              "evidence_hit": 0.8888888888888888,
+              "mean_tokens": 978.6666666666666,
+              "mean_injected": 4.388888888888889,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "knowledge-update": {
+              "qa": 0.8823529411764706,
+              "correct": 15,
+              "n": 17,
+              "eligible": 17,
+              "excluded": 0,
+              "evidence_complete": 0.9411764705882353,
+              "evidence_recall": 0.9705882352941176,
+              "evidence_hit": 1,
+              "mean_tokens": 880.3529411764706,
+              "mean_injected": 4.9411764705882355,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "abstention": {
+              "qa": 0.75,
+              "correct": 6,
+              "n": 8,
+              "eligible": 0,
+              "excluded": 8,
+              "evidence_complete": null,
+              "evidence_recall": null,
+              "evidence_hit": null,
+              "mean_tokens": 770.875,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "multi-session": {
+              "qa": 0.5238095238095238,
+              "correct": 11,
+              "n": 21,
+              "eligible": 21,
+              "excluded": 0,
+              "evidence_complete": 0.5238095238095238,
+              "evidence_recall": 0.7388888888888889,
+              "evidence_hit": 0.9523809523809523,
+              "mean_tokens": 1009.3333333333334,
+              "mean_injected": 4.714285714285714,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            },
+            "single-session-assistant": {
+              "qa": 0.875,
+              "correct": 7,
+              "n": 8,
+              "eligible": 8,
+              "excluded": 0,
+              "evidence_complete": 0.875,
+              "evidence_recall": 0.875,
+              "evidence_hit": 0.875,
+              "mean_tokens": 856.75,
+              "mean_injected": 4.625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "domains": {
+            "unspecified": {
+              "qa": 0.7083333333333334,
+              "correct": 68,
+              "n": 96,
+              "eligible": 88,
+              "excluded": 8,
+              "evidence_complete": 0.7272727272727273,
+              "evidence_recall": 0.8145833333333333,
+              "evidence_hit": 0.8977272727272727,
+              "mean_tokens": 926.71875,
+              "mean_injected": 4.5625,
+              "retrieval_p50_ms": null,
+              "retrieval_p95_ms": null
+            }
+          },
+          "failures": {
+            "pool_missing": 10,
+            "complete_but_wrong": 8,
+            "selection_missing": 8,
+            "unscored_evidence": 2
+          }
+        }
+      },
+      "primary_contrasts": [
+        {
+          "base": "slate_qa",
+          "candidate": "slate_active",
+          "p_two_sided": 1,
+          "clusters": 88,
+          "nonzero_clusters": 0,
+          "exact": false,
+          "draws": 20000,
+          "assumption": "Exchangeability of method labels within independent conversation groups; diagnostic paired cluster sign-flip, not a randomized causal experiment.",
+          "holm_p": 1
+        },
+        {
+          "base": "slate_uniform",
+          "candidate": "slate_active",
+          "p_two_sided": 1,
+          "clusters": 88,
+          "nonzero_clusters": 1,
+          "exact": false,
+          "draws": 20000,
+          "assumption": "Exchangeability of method labels within independent conversation groups; diagnostic paired cluster sign-flip, not a randomized causal experiment.",
+          "holm_p": 1
+        },
+        {
+          "base": "qwen_fixed",
+          "candidate": "slate_active",
+          "p_two_sided": 1,
+          "clusters": 88,
+          "nonzero_clusters": 0,
+          "exact": false,
+          "draws": 20000,
+          "assumption": "Exchangeability of method labels within independent conversation groups; diagnostic paired cluster sign-flip, not a randomized causal experiment.",
+          "holm_p": 1
+        }
+      ],
+      "oracle": {
+        "n": 96,
+        "qa": 0.7708333333333334,
+        "correct": 74,
+        "runtime_available": false,
+        "meaning": "Posthoc three-action answer upper bound, not a deployable method."
+      }
+    }
+  },
+  "source_hashes": {
+    "results/slate-feedback-v11/longmem/all-views.jsonl": "cd8a536073658fa76d4b002d118bc9425cf846f650c4ee174cf0cfdc097708ba",
+    "results/controlled-v10/longmem/qa-v10.1/qwen3.5-9b/reader.jsonl": "59650960178df51a3bbd760c62b4a7ad0b3a10007bdbc273a17608f472db44d3",
+    "results/controlled-v10/longmem/qa-v10.1/qwen3.5-9b/judge-gemma3-12b.jsonl": "0348a71338c890afdbb99a887f5fb4c8bc81d7bc0ebf11c074d84b9cbb8f7e28",
+    "results/controlled-v10/longmem/bundle.jsonl": "5faa240859968dbc8784b4d6032226402903bfb3bb4b77cc6ff6b29227164982",
+    "scripts/v11-analyze.mjs": "d124de533cad24e28f38530d847a0ab2f63f06146a7e4e451ecf33abd42da778",
+    "results/slate-feedback-v11/models.json": "3352fd0d61fc0571cf043d3ab750276a4d50bbe29dc64810d8e5df7996c77e9c"
+  }
+}
