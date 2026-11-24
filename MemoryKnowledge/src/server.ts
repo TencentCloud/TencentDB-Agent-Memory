@@ -124,6 +124,7 @@ export function createApp() {
 
   // wiki-source — 外部 wiki 列文档 / 导入（不触发 ingest）
   api.route("/wiki-source", createWikiSourceRoutes({
+    store: knowledgeModule.store,
     registry: knowledgeModule.wikiSourceRegistry,
     credentialStore: knowledgeModule.credentialStore,
     wikiService: knowledgeModule.wikiService,
