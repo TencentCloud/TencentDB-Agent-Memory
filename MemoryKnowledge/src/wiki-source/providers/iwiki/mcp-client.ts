@@ -42,12 +42,7 @@ function unwrap(result: unknown): unknown {
   if (result && typeof result === "object" && "content" in result) {
     const env = result as McpEnvelope;
     if (env.isError === true) {
-      const detail =
-        env.content
-          ?.map((c) => (typeof c?.text === "string" ? c.text : ""))
-          .join("\n")
-          .trim() || "unknown MCP tool error";
-      throw new IWikiMcpError(`iWiki MCP tool error: ${detail}`);
+      throw new IWikiMcpError("iWiki MCP tool error");
     }
     const text = env.content?.[0]?.text;
     if (typeof text === "string") {
@@ -73,6 +68,7 @@ async function callTool(
   try {
     resp = await fetch(url, {
       method: "POST",
+      redirect: "error",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
@@ -86,15 +82,8 @@ async function callTool(
       }),
       signal: AbortSignal.timeout(ctx.timeoutMs ?? 15000),
     });
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    const isNetwork = /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|UND_ERR/i.test(detail);
-    throw new IWikiMcpError(
-      isNetwork
-        // 注意：不要把端点地址放进错误信息 —— 它是内网地址，会随响应返回到前端。
-        ? `无法连接 iWiki MCP 端点：${detail}。请确认 WIKI_SOURCE_IWIKI_MCP_URL 配置正确且网络可达。`
-        : `iWiki MCP request failed (${toolName}): ${detail}`,
-    );
+  } catch {
+    throw new IWikiMcpError("iWiki MCP request failed");
   }
 
   if (resp.status === 401 || resp.status === 403) {
@@ -111,7 +100,7 @@ async function callTool(
     throw new IWikiMcpError(`iWiki MCP non-JSON response (${toolName})`);
   }
   if (json.error) {
-    throw new IWikiMcpError(`iWiki MCP error (${toolName}): ${json.error.message ?? "unknown"}`);
+    throw new IWikiMcpError("iWiki MCP protocol error");
   }
   return unwrap(json.result);
 }
@@ -131,7 +120,7 @@ function assertNodeArray(raw: unknown): IWikiTreeNode[] {
   if (raw && typeof raw === "object") {
     const o = raw as Record<string, unknown>;
     if (o.msg === "error" && typeof o.message === "string") {
-      throw new IWikiMcpError(o.message);
+      throw new IWikiMcpError("iWiki MCP application error");
     }
   }
   throw new IWikiMcpError("unexpected response: not a node array");
