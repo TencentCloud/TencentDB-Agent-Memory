@@ -23,6 +23,8 @@ import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import type { SceneIndexEntry } from "../scene/scene-index.js";
 import { parseSceneBlock } from "../scene/scene-format.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { clampSceneSummary, clampSummaryInSceneFile, measureSceneSummary } from "./scene-summary.js";
+import { writeSceneFileIfUnchanged } from "./scene-file-store.js";
 import { normalizeSceneFilenames } from "./filename-normalizer.js";
 import { buildSceneExtractionPrompt } from "../prompts/scene-extraction.js";
 import { report } from "../report/reporter.js";
@@ -292,6 +294,11 @@ export class SceneExtractor {
     // These are artifacts of LLM merges that didn't properly delete old files.
     const cleanupStartMs = Date.now();
     let cleanedCount = 0;
+    // Phase 5c bookkeeping: META summary governance (see scene-summary.ts).
+    // Done in the same pass so no extra reads are issued in service mode.
+    let scannedCount = 0;
+    let clampedCount = 0;
+    let clampedSavedChars = 0;
     try {
       let allFiles: string[];
       if (this.storage) {
@@ -321,6 +328,7 @@ export class SceneExtractor {
           cleanedCount++;
           this.logger?.debug?.(`${TAG} extract() removed soft-deleted file: ${file}`);
         } else {
+          scannedCount++;
           // Check if file has only META header but no actual content
           const block = parseSceneBlock(raw, file);
           if (!block.content || block.content.trim().length === 0) {
@@ -333,6 +341,24 @@ export class SceneExtractor {
             }
             cleanedCount++;
             this.logger?.debug?.(`${TAG} extract() removed META-only file (no content): ${file}`);
+          } else if (measureSceneSummary(block.meta.summary).exceeds) {
+            // The summary is injected into the system prompt at every session
+            // start, so it is hard-capped here — the prompt's "30 words" is
+            // advisory only. Purely local string work: no extra model call and
+            // no re-extraction, and the file is rewritten only when it actually
+            // exceeds the limit (idempotent, so later rounds write nothing).
+            const { content: clampedRaw, changed } = clampSummaryInSceneFile(raw);
+            if (changed) {
+              const beforeLen = Array.from(block.meta.summary).length;
+              const afterLen = Array.from(clampSceneSummary(block.meta.summary)).length;
+              if (await this.writeClampedSceneFile(file, raw, clampedRaw)) {
+                clampedCount++;
+                clampedSavedChars += Math.max(0, beforeLen - afterLen);
+                this.logger?.debug?.(
+                  `${TAG} extract() summary clamped: ${file} ${beforeLen}→${afterLen} chars`,
+                );
+              }
+            }
           }
         }
       }
@@ -341,6 +367,14 @@ export class SceneExtractor {
       this.logger?.warn(`${TAG} extract() soft-delete cleanup error: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
     }
     this.logger?.debug?.(`${TAG} extract() soft-delete cleanup: removed ${cleanedCount} empty files (${Date.now() - cleanupStartMs}ms)`);
+
+    if (clampedCount > 0) {
+      this.logger?.info(
+        `${TAG} extract() summary clamp: ${clampedCount}/${scannedCount} scene summaries trimmed (${clampedSavedChars} chars saved, ${Date.now() - cleanupStartMs}ms)`,
+      );
+    } else {
+      this.logger?.debug?.(`${TAG} extract() summary clamp: ${scannedCount} scenes within limit, no writes`);
+    }
 
     // Phase 5b: Normalize filenames (defensive — LLM occasionally produces names
     // with spaces / punctuation despite the prompt forbidding them, e.g.
@@ -501,6 +535,27 @@ export class SceneExtractor {
   }
 
   /**
+   * Persist a summary-clamped scene file.
+   *
+   * Delegates to `writeSceneFileIfUnchanged`, which is compare-and-set in
+   * service mode (the L2 lock is session-scoped while `scene_blocks/` is
+   * shared) and atomic on local fs. A `false` return is not an error: the
+   * file keeps its long summary for one more round, which is harmless because
+   * the read side clamps as well.
+   */
+  private async writeClampedSceneFile(
+    file: string,
+    expectedRaw: string,
+    nextRaw: string,
+  ): Promise<boolean> {
+    return writeSceneFileIfUnchanged(file, expectedRaw, nextRaw, {
+      dataDir: this.dataDir,
+      storage: this.storage,
+      logger: this.logger,
+    });
+  }
+
+  /**
    * Build human-readable scene summaries for the prompt,
    * and collect the list of existing scene filenames (relative).
    *
@@ -523,7 +578,9 @@ export class SceneExtractor {
       filenames.push(entry.filename);
       lines.push(`### ${entry.filename}`);
       lines.push(`**热度**: ${entry.heat} | **更新**: ${entry.updated}`);
-      lines.push(`**summary**: ${entry.summary}`);
+      // Clamp before the summary enters the prompt: otherwise a legacy long
+      // summary is re-fed to the model and gets reinforced every round.
+      lines.push(`**summary**: ${clampSceneSummary(entry.summary)}`);
       lines.push("");
     }
     return { summaries: lines.join("\n"), filenames };

@@ -7,6 +7,7 @@ import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { clampSummaryInText } from "../scene/scene-summary.js";
 import { buildPersonaPrompt } from "../prompts/persona-generation.js";
 import { BackupManager } from "../../utils/backup.js";
 import { escapeXmlTags } from "../../utils/sanitize.js";
@@ -117,8 +118,12 @@ export class PersonaGenerator {
           raw = await fs.default.readFile(path.default.join(this.dataDir, "scene_blocks", entry.filename), "utf-8");
         }
         if (!raw) continue;
+        // Full scene file (META included) goes into the L3 prompt, so an
+        // over-long META summary would be paid here as well. Clamp the copy
+        // only — the file on disk is governed by L2 (`scene-extractor`).
+        const promptBody = clampSummaryInText(raw);
         changedSceneContents.push(
-          `### [${changedSceneContents.length + 1}] ${entry.filename}\n\n\`\`\`markdown\n${raw}\n\`\`\``,
+          `### [${changedSceneContents.length + 1}] ${entry.filename}\n\n\`\`\`markdown\n${promptBody}\n\`\`\``,
         );
       } catch {
         this.logger?.warn(`${TAG} Could not read scene block: ${entry.filename}`);

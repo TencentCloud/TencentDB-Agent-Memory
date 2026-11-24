@@ -27,6 +27,7 @@ import { arch } from "node:process";
 import type { DatabaseSync, StatementSync, SQLInputValue } from "node:sqlite";
 import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
+import { getJieba } from "../text/jieba.js";
 import type {
   IMemoryStore,
   StoreCapabilities,
@@ -154,28 +155,9 @@ function resolveVec0So(): string | undefined {
 // ============================
 
 // ── Chinese word segmentation (jieba) ──
-// Lazy-loaded singleton: initialised on first call to `buildFtsQuery`.
-// If @node-rs/jieba is unavailable, falls back to Unicode-regex splitting.
-
-interface JiebaInstance {
-  cutForSearch(text: string, hmm: boolean): string[];
-}
-
-let _jieba: JiebaInstance | null | undefined; // undefined = not yet tried
-
-function getJieba(): JiebaInstance | null {
-  if (_jieba !== undefined) return _jieba;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Jieba } = require("@node-rs/jieba");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { dict } = require("@node-rs/jieba/dict");
-    _jieba = Jieba.withDict(dict) as JiebaInstance;
-  } catch {
-    _jieba = null; // mark as unavailable — won't retry
-  }
-  return _jieba;
-}
+// The instance itself lives in `../text/jieba.ts` so the scene summary governor
+// can share it (one dictionary per process). Falls back to Unicode-regex
+// splitting below when the native module is unavailable.
 
 /**
  * Common Chinese stop-words that add noise to FTS5 queries.
@@ -280,22 +262,12 @@ export function tokenizeForFts(raw: string): string {
 }
 
 /**
- * Reset jieba state so next call to `buildFtsQuery` re-initialises.
+ * jieba test hooks, re-exported from the shared module so existing callers and
+ * tests keep importing them from here.
  * Exported for testing only.
  * @internal
  */
-export function _resetJiebaForTest(): void {
-  _jieba = undefined;
-}
-
-/**
- * Override jieba instance (or set to `null` to force fallback).
- * Exported for testing only.
- * @internal
- */
-export function _setJiebaForTest(instance: JiebaInstance | null): void {
-  _jieba = instance;
-}
+export { _resetJiebaForTest, _setJiebaForTest } from "../text/jieba.js";
 
 /**
  * Convert a BM25 rank (negative = more relevant) to a 0–1 score.
