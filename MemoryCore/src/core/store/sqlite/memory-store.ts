@@ -25,6 +25,7 @@ import { createRequire } from "node:module";
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, StatementSync, SQLInputValue } from "node:sqlite";
+import { initializeL0Fts, rebuildL0Fts } from "./l0-fts.js";
 import type { MemoryRecord } from "../../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "../embedding.js";
 import type {
@@ -287,7 +288,7 @@ export class VectorStore implements IMemoryStore {
   private stmtL1FtsSearch!: StatementSync;
 
   // Prepared statements — FTS5 L0 (initialized in init())
-  private stmtL0FtsInsert!: StatementSync;
+  private stmtL0FtsUpsert!: StatementSync;
   private stmtL0FtsDelete!: StatementSync;
   private stmtL0FtsSearch!: StatementSync;
 
@@ -937,12 +938,7 @@ export class VectorStore implements IMemoryStore {
     // `content_original` (UNINDEXED) stores the raw text (for display).
     // If old v1 tables exist (no content_original column), drop + recreate.
     try {
-      // ── Migrate old FTS5 tables (v1 → v2) ──
-      // v1 tables stored raw text in the `content` column. v2 stores segmented
-      // text in `content` and raw text in `content_original` / `message_text_original`.
-      // FTS5 virtual tables don't support ALTER TABLE ADD COLUMN, so we must
-      // drop and recreate. The data will be repopulated by `rebuildFtsIndex()`.
-      const needsFtsRebuild = this.migrateFtsTablesIfNeeded();
+      const needsL1FtsRebuild = this.migrateL1FtsIfNeeded();
 
       // L1 FTS5 virtual table (v2 schema + isolation columns).
       // user_id / agent_id added as UNINDEXED so they're carried alongside
@@ -969,23 +965,7 @@ export class VectorStore implements IMemoryStore {
         )
       `);
 
-      // L0 FTS5 virtual table (v2 schema + isolation columns).
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS l0_fts USING fts5(
-          message_text,
-          message_text_original UNINDEXED,
-          record_id UNINDEXED,
-          session_key UNINDEXED,
-          session_id UNINDEXED,
-          team_id UNINDEXED,
-          task_id UNINDEXED,
-          user_id UNINDEXED,
-          agent_id UNINDEXED,
-          role UNINDEXED,
-          recorded_at UNINDEXED,
-          timestamp UNINDEXED
-        )
-      `);
+      this.stmtL0FtsUpsert = initializeL0Fts(this.db);
 
       // L1 FTS prepared statements
       this.stmtL1FtsInsert = this.db.prepare(`
@@ -1010,13 +990,7 @@ export class VectorStore implements IMemoryStore {
       `);
 
       // L0 FTS prepared statements
-      this.stmtL0FtsInsert = this.db.prepare(`
-        INSERT INTO l0_fts (message_text, message_text_original, record_id,
-          session_key, session_id, team_id, task_id, user_id, agent_id, role, recorded_at, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      this.stmtL0FtsDelete = this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?");
+      this.stmtL0FtsDelete = this.db.prepare("DELETE FROM l0_fts_documents WHERE record_id = ?");
 
       this.stmtL0FtsSearch = this.db.prepare(`
         SELECT record_id, message_text_original AS message_text,
@@ -1032,8 +1006,8 @@ export class VectorStore implements IMemoryStore {
       this.logger?.debug?.(`${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v2 — jieba segmented]`);
 
       // Rebuild FTS index if migrated from v1 or tables were freshly created
-      if (needsFtsRebuild) {
-        this.rebuildFtsIndex();
+      if (needsL1FtsRebuild) {
+        this.rebuildL1FtsIndex();
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1766,13 +1740,10 @@ export class VectorStore implements IMemoryStore {
           );
         }
 
-        // Sync FTS5 (delete + re-insert to handle updates).
-        // user_id / agent_id mirrored into FTS so post-recall isolation
-        // filtering doesn't require a join.
+        // The content-table upsert updates the index in the same SQLite statement.
         if (this.ftsAvailable) {
           try {
-            this.stmtL0FtsDelete.run(record.id);
-            this.stmtL0FtsInsert.run(
+            this.stmtL0FtsUpsert.run(
               tokenizeForFts(record.messageText), // message_text — segmented for indexing
               record.messageText,                 // message_text_original — raw for display
               record.id,
@@ -1787,7 +1758,9 @@ export class VectorStore implements IMemoryStore {
               record.timestamp,
             );
           } catch (ftsErr) {
-            // FTS write failure is non-fatal — log and continue
+            // A failed upsert can leave the previous document with obsolete text or isolation.
+            // If removing it also fails, the outer transaction rolls the metadata change back.
+            this.stmtL0FtsDelete.run(record.id);
             this.logger?.warn(
               `${TAG} [L0-upsert] FTS write failed (non-fatal) id=${record.id}: ${ftsErr instanceof Error ? ftsErr.message : String(ftsErr)}`,
             );
@@ -2034,6 +2007,13 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
+        if (this.ftsAvailable) {
+          this.db.prepare(`
+            DELETE FROM l0_fts_documents WHERE record_id IN (
+              SELECT record_id FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?
+            )
+          `).run(cutoffIso);
+        }
         if (this.vecTablesReady) {
           this.db.prepare(
             "DELETE FROM l0_vec WHERE recorded_at != '' AND recorded_at < ?",
@@ -2577,7 +2557,7 @@ export class VectorStore implements IMemoryStore {
             try { this.db.prepare("DELETE FROM l0_vec WHERE record_id = ?").run(row.record_id); } catch { /* vec may not exist */ }
           }
           if (this.ftsAvailable) {
-            try { this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?").run(row.record_id); } catch { /* fts may not exist */ }
+            try { this.stmtL0FtsDelete.run(row.record_id); } catch { /* fts may not exist */ }
           }
         }
         this.db.exec("COMMIT");
@@ -2634,7 +2614,7 @@ export class VectorStore implements IMemoryStore {
             try { this.db.prepare("DELETE FROM l0_vec WHERE record_id = ?").run(id); } catch { /* vec may not exist */ }
           }
           if (this.ftsAvailable) {
-            try { this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?").run(id); } catch { /* fts may not exist */ }
+            try { this.stmtL0FtsDelete.run(id); } catch { /* fts may not exist */ }
           }
         }
 
@@ -3118,17 +3098,8 @@ export class VectorStore implements IMemoryStore {
 
   // ── FTS5 migration & rebuild ──────────────────────────────────────────────
 
-  /**
-   * Detect old FTS5 v1 schema (no `content_original` column) and drop the
-   * tables so they can be recreated with the v2 schema.
-   *
-   * FTS5 virtual tables do NOT support `ALTER TABLE ADD COLUMN`, so the only
-   * migration path is DROP + recreate + repopulate.
-   *
-   * @returns `true` if migration was performed (= FTS index needs rebuilding).
-   * @internal
-   */
-  private migrateFtsTablesIfNeeded(): boolean {
+  /** Drop an obsolete L1 index so it can be recreated from l1_records. */
+  private migrateL1FtsIfNeeded(): boolean {
     try {
       // Check if l1_fts exists at all
       const l1Exists = this.db
@@ -3157,10 +3128,6 @@ export class VectorStore implements IMemoryStore {
         return false; // Already current — no migration needed
       }
 
-      // Migrate forward. FTS5 has no ALTER ADD COLUMN, so any forward step
-      // means DROP both FTS tables and rely on rebuildFtsIndex() to repopulate
-      // from l0_conversations / l1_records (which now carry user_id/agent_id
-      // after the L0/L1 schema migration above).
       if (!hasV2Col) {
         this.logger?.info(`${TAG} Migrating FTS5 tables v1 → v3 (jieba + tenancy isolation)`);
       } else if (!hasV3Col) {
@@ -3171,7 +3138,6 @@ export class VectorStore implements IMemoryStore {
         this.logger?.info(`${TAG} Migrating FTS5 tables v4 → v5 (add task_id column)`);
       }
       this.db.exec("DROP TABLE IF EXISTS l1_fts");
-      this.db.exec("DROP TABLE IF EXISTS l0_fts");
       return true;
     } catch (err) {
       this.logger?.warn(
@@ -3181,19 +3147,20 @@ export class VectorStore implements IMemoryStore {
     }
   }
 
-  /**
-   * Rebuild the FTS5 index from scratch by reading all records from the
-   * metadata tables and re-inserting them with jieba-segmented text.
-   *
-   * Called automatically after:
-   *  - Schema migration from v1 to v2
-   *  - Fresh table creation when existing data exists
-   *
-   * Safe to call multiple times (idempotent — clears FTS tables first).
-   */
+  /** Rebuild both full-text indexes from the canonical metadata. */
   rebuildFtsIndex(): void {
     if (!this.ftsAvailable) return;
 
+    this.rebuildL1FtsIndex();
+    try {
+      const count = rebuildL0Fts(this.db, this.stmtL0FtsUpsert);
+      this.logger?.info(`${TAG} Rebuilt ${count} L0 search documents`);
+    } catch (err) {
+      this.logger?.warn(`${TAG} L0 FTS rebuild failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private rebuildL1FtsIndex(): void {
     try {
       this.logger?.info(`${TAG} Rebuilding FTS5 index with jieba segmentation…`);
 
@@ -3259,57 +3226,7 @@ export class VectorStore implements IMemoryStore {
         }
       }
 
-      // ── Rebuild L0 FTS ──
-      this.db.exec("DELETE FROM l0_fts");
-
-      const l0Rows = this.db
-        .prepare(`
-          SELECT record_id, message_text, session_key, session_id, team_id, task_id, user_id, agent_id,
-                 role, recorded_at, timestamp
-          FROM l0_conversations
-        `)
-        .all() as Array<{
-          record_id: string;
-          message_text: string;
-          session_key: string;
-          session_id: string;
-          team_id: string;
-          task_id: string;
-          user_id: string;
-          agent_id: string;
-          role: string;
-          recorded_at: string;
-          timestamp: number;
-        }>;
-
-      let l0Count = 0;
-      for (const r of l0Rows) {
-        try {
-          this.stmtL0FtsInsert.run(
-            tokenizeForFts(r.message_text),  // message_text — segmented
-            r.message_text,                   // message_text_original — raw
-            r.record_id,
-            r.session_key,
-            r.session_id,
-            r.team_id ?? "",
-            r.task_id ?? "",
-            r.user_id ?? "",
-            r.agent_id ?? "",
-            r.role,
-            r.recorded_at,
-            r.timestamp,
-          );
-          l0Count++;
-        } catch (err) {
-          this.logger?.warn?.(
-            `${TAG} FTS rebuild skip L0 ${r.record_id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-
-      this.logger?.info(
-        `${TAG} FTS5 rebuild complete: L1=${l1Count}/${l1Rows.length}, L0=${l0Count}/${l0Rows.length}`,
-      );
+      this.logger?.info(`${TAG} FTS5 rebuild complete: L1=${l1Count}/${l1Rows.length}`);
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS5 rebuild failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
