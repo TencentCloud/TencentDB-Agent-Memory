@@ -45,7 +45,7 @@ Reliability features baked into the provider:
   threads unboundedly).
 - **Supervised startup** — if `MEMORY_TENCENTDB_GATEWAY_CMD` is set (or the
   provider auto-discovers `src/gateway/server.ts`, see below), it starts the
-  sidecar, polls `/health` for up to 30 s, and tails `gateway.stderr.log` on
+  sidecar, polls `/health` for up to 30 s, and reports the exit code on
   crash for diagnostics.
 - **Zero-config auto-discovery** — when `MEMORY_TENCENTDB_GATEWAY_CMD` is
   unset, the provider looks for `src/gateway/server.ts` next to the plugin
@@ -180,7 +180,7 @@ export MEMORY_TENCENTDB_GATEWAY_CMD="node --import tsx /abs/path/to/tdai-memory-
 ```
 
 The provider will `Popen()` this command on `initialize()`, wait for
-`GET /health` to report `ok`/`degraded`, and tail stderr on crash.
+`GET /health` to report `ok`/`degraded`, and report the exit code on crash.
 
 **Option C — Run it yourself.** Start the Gateway separately on the default
 port (`127.0.0.1:8420`) before launching Hermes; the provider will detect it
@@ -297,3 +297,65 @@ aliases:
 - **Capture backlog warnings**: Gateway is slow or hung — `sync_turn` is
   tracking ≥ 4 in-flight threads. Inspect Gateway logs for stuck L1
   extractions or LLM timeouts.
+
+
+## Supervisor diagnostic privacy and log files
+
+The supervisor no longer copies its configured command or child stderr into
+plugin logs. Commands and stderr can contain credentials, memory or private paths.
+Startup/shutdown failures report exception classes without evaluating arbitrary
+exception strings. Crash reports retain the exit code. Inspect local child logs
+explicitly when needed; their contents remain sensitive and are not redacted.
+
+New log directories use mode `0700`. Each output log is opened for append with
+`O_NOFOLLOW` and `O_NONBLOCK`; only regular files with one link and the current
+user as owner are accepted. Accepted existing log files are tightened to `0600`
+without truncation, and new files are created privately. Symlinks, hardlinks,
+FIFOs and other unsafe targets are refused without writing or changing their
+permission bits. If private logging cannot be established, child output goes to
+`DEVNULL` with a content-free warning and startup can continue. A platform without
+no-follow support also uses that fallback; it does not silently follow links.
+
+Install by replacing the plugin's updated source files and restarting its host.
+There is no new dependency, API, credential or data-schema migration. Review
+ownership and sharing of an existing configured log directory before restarting;
+existing directory permissions and ancestor trust are not changed. Protect old
+logs and exported copies separately. Tightening a file now cannot remove any
+copies or disclosure that already occurred. The directory ancestry must be
+trusted; this is not a race-free filesystem sandbox or protection from root and
+other processes running as the same user. Logs may still grow without rotation.
+Other plugin log messages and the child application's own logging require their
+own review; this change is not a general secret-redaction layer.
+
+Run on Linux from the repository root:
+
+```sh
+python3 -m unittest discover -s MemoryCore/hermes-plugin/tests -v
+```
+
+Four initial regression cases fail on the unchanged supervisor. Eight supervisor
+cases pass after the fix, using actual temporary Python children, files,
+symlink/hardlink/FIFO targets, a FIFO timeout and a permissive umask. Six provider
+exception-boundary cases also fail on the unchanged provider and pass with the
+fix, for fourteen focused cases total. The complete integration additionally
+passes eight existing HTTP security cases (22 total).
+
+Provider prefetch/sync/recovery/watchdog/shutdown failures and tool-error replies
+now report the exception class instead of stringifying it. The tool JSON error
+key and failure accounting remain unchanged; successful recalled content remains
+unredacted. Tests use real loopback HTTP/client/provider/thread code with a minimal
+external `MemoryProvider` interface stand-in. Startup availability and supervisor
+health are injected. They do not establish installed Hermes/Gateway host integration.
+
+The upstream client has its own response-body logging defect, addressed separately
+in [the authenticated transport proposal #1648](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/1648).
+An initial combined test with a sensitive HTTP body reproduced that existing
+client-layer defect even after the provider correction. The scoped provider tests
+therefore isolate sensitive HTTP reason propagation with a generic body; the
+complete integration's HTTP tests separately cover body privacy. This proposal
+alone does not establish privacy across an unchanged client layer.
+
+Tests run as an unprivileged Linux Python 3.11 user with no external network,
+a read-only root, bounded temporary memory storage and a 256 MiB cap. No model,
+production memory or external API is used. Independent final review of the
+complete project remains outstanding.
