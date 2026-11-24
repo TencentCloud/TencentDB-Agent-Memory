@@ -154,3 +154,28 @@ class TestCircuitBreaker:
 
         provider.prefetch("test")
         assert provider._consecutive_failures == 0
+
+
+class TestSearchQueryCap:
+    """The gateway rejects query > 2048 chars (JS .length, UTF-16 units) with HTTP 400."""
+
+    def test_prefetch_clamps_long_query(self, initialized_provider):
+        provider, mock_client = initialized_provider
+        mock_client.search_atomic.return_value = {"results": []}
+        mock_client.read_core.return_value = {"content": ""}
+        mock_client.list_scenarios.return_value = {"entries": []}
+
+        provider.prefetch("x" * 5000)
+        assert len(mock_client.search_atomic.call_args.kwargs["query"]) == 2048
+
+    def test_clamp_counts_astral_chars_as_two_units(self):
+        from memory_tencentdb_v2 import _clamp_search
+        q, _ = _clamp_search("😀" * 1500)
+        assert len(q.encode("utf-16-le")) // 2 <= 2048
+
+    def test_tool_search_clamps_limit_and_rejects_blank(self, initialized_provider):
+        provider, mock_client = initialized_provider
+        mock_client.search_atomic.return_value = {"results": []}
+        provider.handle_tool_call("tdai_memory_search", {"query": "coffee", "limit": 999})
+        assert mock_client.search_atomic.call_args.kwargs["limit"] == 100
+        assert "required" in provider.handle_tool_call("tdai_memory_search", {"query": "   "})
