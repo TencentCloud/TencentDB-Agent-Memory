@@ -640,14 +640,49 @@ function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOut
     // numeric fields (e.g. `"priority": sheet`). Repair only known safe fields and
     // retry once so one bad scalar does not drop the whole extraction result.
     const sanitized = sanitizeJsonForParse(arrayMatch[0]);
-    let parsed: unknown[];
+    let parsed: unknown[] = [];
     try {
       parsed = JSON.parse(sanitized) as unknown[];
     } catch (err) {
-      const repaired = repairExtractionJson(sanitized);
-      if (repaired === sanitized) throw err;
-      parsed = JSON.parse(repaired) as unknown[];
-      logger?.warn?.(`${TAG} Repaired non-strict extraction JSON: ${err instanceof Error ? err.message : String(err)}`);
+      // ── Salvage chain ────────────────────────────────────────────────────
+      // Each step is progressively more aggressive; we stop at the first that
+      // yields valid JSON. Order matters: exact → quote-escape → priority-repair
+      // → truncated-tail-close.
+      //
+      // Step 1: escape bare double quotes inside string literals. Models that
+      // echo user text verbatim (e.g. `用户明确说"渲染看看"后才执行`) emit the
+      // inner quotes UNESCAPED, which breaks JSON at that offset. This was the
+      // single largest source of dropped extractions (10 PARSE_FAIL batches in
+      // the production log, ~22 memories lost).
+      //
+      // Step 2: repair non-strict scalars (bare `priority`, trailing commas).
+      //
+      // Step 3: close a truncated tail. When the model hits `max_tokens` it
+      // stops mid-string; we close the last complete object/array so the
+      // already-emitted memories are not thrown away.
+      const candidates: Array<{ json: string; label: string }> = [
+        { json: escapeBareQuotes(sanitized), label: "escaped-bare-quotes" },
+        { json: repairExtractionJson(sanitized), label: "repaired-nonstrict" },
+        { json: repairExtractionJson(escapeBareQuotes(sanitized)), label: "escaped+repaired" },
+      ];
+      const closed = closeTruncatedTail(candidates[2].json);
+      if (closed) candidates.push({ json: closed, label: "closed-truncated-tail" });
+
+      let salvaged = false;
+      for (const cand of candidates) {
+        if (!cand.json) continue;
+        try {
+          parsed = JSON.parse(cand.json) as unknown[];
+          logger?.warn?.(
+            `${TAG} Repaired non-strict extraction JSON (${cand.label}): ${err instanceof Error ? err.message : String(err)}`,
+          );
+          salvaged = true;
+          break;
+        } catch {
+          // try next strategy
+        }
+      }
+      if (!salvaged) throw err;
     }
 
     if (!Array.isArray(parsed)) {
@@ -698,6 +733,209 @@ function repairExtractionJson(json: string): string {
       (_m, prefix: string) => `${prefix}50`,
     )
     .replace(/,\s*([}\]])/g, "$1");
+}
+
+/**
+ * Escape double quotes that appear UNESCAPED inside JSON string literals.
+ *
+ * Why this exists:
+ *   Models frequently echo user text verbatim inside `content`, e.g.
+ *     "content": "用户明确说"渲染看看"后才执行渲染。"
+ *   The inner quotes are not escaped, so `JSON.parse` dies exactly at that
+ *   offset ("Expected ',' or '}' after property value"). Before this fix the
+ *   whole batch was dropped (production log: 10 PARSE_FAIL events, ~22
+ *   memories lost).
+ *
+ * Algorithm: single left-to-right scan tracking whether we are inside a string
+ * literal. A `"` that is followed (after optional whitespace) by a JSON
+ * structural character (`,` `:` `}` `]`) is treated as the real closing quote;
+ * any other `"` is treated as literal content and gets backslash-escaped.
+ * Backslash escapes already present are consumed verbatim so we never
+ * double-escape a `\"` that was already correct.
+ *
+ * Returns the input unchanged if it already parses — no-op on well-formed JSON.
+ */
+export function escapeBareQuotes(json: string): string {
+  const STRUCTURAL = new Set([",", ":", "}", "]"]);
+  let out = "";
+  let inString = false;
+  let i = 0;
+  const n = json.length;
+
+  while (i < n) {
+    const ch = json[i];
+
+    if (!inString) {
+      out += ch;
+      if (ch === '"') inString = true;
+      i += 1;
+      continue;
+    }
+
+    // Inside a string literal.
+    if (ch === "\\") {
+      // Already-escaped char — copy both bytes verbatim.
+      out += ch;
+      if (i + 1 < n) out += json[i + 1];
+      i += 2;
+      continue;
+    }
+
+    if (ch === '"') {
+      // Look ahead past whitespace for the next structural char.
+      let j = i + 1;
+      while (j < n && (json[j] === " " || json[j] === "\t" || json[j] === "\r" || json[j] === "\n")) {
+        j += 1;
+      }
+      const next = j < n ? json[j] : "";
+      if (next === "" || STRUCTURAL.has(next)) {
+        // Real closing quote.
+        out += ch;
+        inString = false;
+        i += 1;
+        continue;
+      }
+      // Literal quote inside the string content — escape it.
+      out += '\\"';
+      i += 1;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  return out;
+}
+
+/**
+ * Close a JSON array whose tail was truncated by `max_tokens`.
+ *
+ * The model stops mid-string when it runs out of output budget, leaving e.g.
+ * `..."activity_end_time":`. We scan backwards for the last position where the
+ * document can be closed by appending the right number of brackets, and return
+ * that repaired document (or null when nothing works).
+ *
+ * This is the last-resort step of the salvage chain: it keeps whatever
+ * memories were already emitted instead of discarding the whole batch.
+ */
+export function closeTruncatedTail(json: string): string | null {
+  const trimmed = json.trimEnd();
+  if (trimmed.length === 0) return null;
+
+  // Walk backwards looking for a cut point where the document can be closed.
+  // Two shapes are possible:
+  //   (a) the tail was cut right after a complete `}` / `]` — just append the
+  //       closing brackets that are still open;
+  //   (b) the tail was cut INSIDE a string literal (e.g. `..."activity_end_time":`
+  //       or `...content": "partial tex`). We close the string, close any open
+  //       objects/arrays, and drop the dangling key/value that was incomplete.
+  for (let cut = trimmed.length - 1; cut >= 0; cut -= 1) {
+    const ch = trimmed[cut];
+    if (ch !== "}" && ch !== "]" && ch !== '"' && ch !== ":" && ch !== "," && ch !== " " && ch !== "\n") {
+      continue;
+    }
+
+    // Build the prefix and measure the still-open bracket depth at that point.
+    const prefix = trimmed.slice(0, cut + 1);
+    const depths = measureDepth(prefix);
+    if (depths.inString) continue; // cut landed inside a string — handled below
+
+    // (a) Try closing with the needed brackets.
+    let candidate = prefix;
+    if (depths.depthObj > 0) candidate += "}".repeat(depths.depthObj);
+    if (depths.depthArr > 0) candidate += "]".repeat(depths.depthArr);
+    // Brackets must close in reverse order of opening: objects inside arrays.
+    candidate = closeInRightOrder(prefix, depths);
+    if (candidate) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (Array.isArray(parsed)) return candidate;
+      } catch {
+        // try an earlier cut point
+      }
+    }
+  }
+
+  // ── Fallback: cut inside a string literal ────────────────────────────────
+  // Find the last `"` that opens a string, treat the text after it as a
+  // partial string value, close the string, then close open brackets.
+  for (let cut = trimmed.length - 1; cut >= 0; cut -= 1) {
+    if (trimmed[cut] !== '"') continue;
+    const prefix = trimmed.slice(0, cut + 1);
+    const depths = measureDepth(prefix);
+    if (!depths.inString) continue; // this quote is a closing one — skip
+
+    // We are inside a string: close it, then close brackets.
+    let candidate = prefix + '"';
+    const d = measureDepth(candidate);
+    candidate = closeInRightOrder(candidate, d);
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) return candidate;
+    } catch {
+      // keep walking back
+    }
+  }
+
+  return null;
+}
+
+/** Bracket/string state at the end of a prefix. */
+interface DepthState {
+  depthObj: number;
+  depthArr: number;
+  inString: boolean;
+}
+
+function measureDepth(s: string): DepthState {
+  let depthObj = 0;
+  let depthArr = 0;
+  let inStr = false;
+  for (let k = 0; k < s.length; k += 1) {
+    const c = s[k];
+    if (inStr) {
+      if (c === "\\") {
+        k += 1;
+      } else if (c === '"') {
+        inStr = false;
+      }
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") depthObj += 1;
+    else if (c === "}") depthObj -= 1;
+    else if (c === "[") depthArr += 1;
+    else if (c === "]") depthArr -= 1;
+  }
+  return { depthObj, depthArr, inString: inStr };
+}
+
+/**
+ * Append the closing brackets needed to balance a prefix, in the correct
+ * nesting order (innermost first).
+ */
+function closeInRightOrder(prefix: string, _depths?: DepthState): string {
+  // Rebuild the open-bracket stack so we can close in reverse order.
+  const stack: string[] = [];
+  let inStr = false;
+  for (let k = 0; k < prefix.length; k += 1) {
+    const c = prefix[k];
+    if (inStr) {
+      if (c === "\\") k += 1;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{" || c === "[") stack.push(c);
+    else if (c === "}" || c === "]") stack.pop();
+  }
+  let candidate = prefix;
+  for (let k = stack.length - 1; k >= 0; k -= 1) {
+    candidate += stack[k] === "{" ? "}" : "]";
+  }
+  return candidate;
 }
 
 // ============================
