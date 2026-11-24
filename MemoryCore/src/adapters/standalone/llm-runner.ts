@@ -21,6 +21,7 @@ import path from "node:path";
 import { APICallError, generateText, streamText, tool, stepCountIs, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
+import { capReadContent } from "./read-cap.js";
 import type {
   LLMRunner,
   LLMRunParams,
@@ -144,7 +145,7 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         try {
           const content = await fsPromises.readFile(resolved, "utf-8");
           logger?.debug?.(`${TAG} read: "${args.path}" → ${content.length} chars`);
-          return content;
+          return capReadContent(content);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logger?.warn?.(`${TAG} read failed: ${msg}`);
