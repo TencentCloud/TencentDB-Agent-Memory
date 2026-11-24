@@ -9,6 +9,7 @@
 | 插件 ID | `memory-tencentdb-client`（历史 ID；本分支实现为 v3） |
 | SDK | [`@tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2`](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-sdk-ts-v2/v/1.0.0-beta.2)（npm；根入口即 v3） |
 | 数据面 | `MemoryClient` → `/v3/*` + isolation（`teamId` / `agentId` / `userId`） |
+| 原生记忆 | 宿主提供 `registerMemoryCapability` 和 `providerRuntime` 时注册原生 provider |
 | COS 读文件 | 工具 `tdai_read_file`，`createMemoryFileReader`（`POST /v2/cos/secret` + STS） |
 | 不含 | Offload / Context Engine |
 
@@ -21,6 +22,7 @@
 ```text
 OpenClaw runtime
   └─ memory-tencentdb-client plugin
+       ├─ 原生 provider runtime        memory.search/get/health → 调用者隔离的 v3 SDK
        ├─ hooks/capture.ts             agent_end → addConversation (L0, /v3)
        ├─ hooks/recall.ts              before_prompt_build → 搜索 + prompt 注入
        ├─ tools/memory-search.ts       tdai_memory_search → searchAtomic (L1)
@@ -163,11 +165,20 @@ openclaw gateway restart
 
 | 模块 | 实现文件 | 说明 |
 |------|----------|------|
+| 原生 provider | `src/native-memory-provider.ts` | 宿主支持时注册 provider-neutral 原生记忆运行时 |
 | 对话捕获 | `src/hooks/capture.ts` | 结束后经 v3 `addConversation()` 写 L0 |
 | 记忆召回 | `src/hooks/recall.ts` | 构建 prompt 前搜索并注入简洁上下文 |
 | L1 工具 | `src/tools/memory-search.ts` | Agent 搜索结构化记忆 |
 | L0 工具 | `src/tools/conversation-search.ts` | Agent 搜索原始对话 |
 | 文件读取 | `src/tools/read-cos.ts` | Agent 经 COS STS 读 pipeline 产物 |
+
+### OpenClaw 原生记忆运行时
+
+宿主提供 `registerMemoryCapability({ providerRuntime })` 时，插件会注册为原生记忆 provider，manifest 声明 `kind: "memory"`。没有该注册 API 的旧宿主继续使用现有 prompt hooks 和 `tdai_*` 工具。
+
+provider 将 `memory` 搜索映射到 v3 L1 原子记忆。只有 OpenClaw 提供当前且由宿主签发的 conversation audience 时才开放 `sessions`；请求会通过 SDK isolation 带上 audience 的 session ID。owner-private 和 operator 调用不会获得对话搜索能力。v3 SDK 不支持的分页、项目筛选和候选枚举均不对宿主声明支持。
+
+每个 open handle 都绑定到调用者的实时权限。agent ID 取自 OpenClaw 本次 open 上下文，因此共用同一插件配置的多个 agent 仍会落在各自的 Gateway 隔离范围。team 和 user ID 来自插件配置；缺少时会拒绝打开，不会猜测默认归属。session 调用还必须有 agent 匹配的宿主 audience。引用只在生成它的 handle 中有效；get 会在相同 isolation 和 session 范围内重新执行原始有界搜索，确认引用仍可见后才返回内容。调用者取消会传到 HTTP 请求；一次多来源搜索共享 30 秒 deadline；关闭 handle 会中止在途请求并清除引用缓存。
 
 ## 配置项
 
@@ -194,6 +205,7 @@ openclaw-plugin/
 ├── openclaw.plugin.json       # 插件清单（id = memory-tencentdb-client）
 ├── package.json               # npm: @tencentdb-agent-memory/memory-sdk-ts-v2
 ├── index.ts                   # OpenClaw 入口（v3 client + COS reader）
+├── src/native-memory-provider.ts # 调用者隔离的原生 provider runtime
 ├── src/hooks/capture.ts       # L0 捕获
 ├── src/hooks/recall.ts        # 召回与 prompt 注入
 ├── src/tools/                 # Agent 工具（含 read-cos）
