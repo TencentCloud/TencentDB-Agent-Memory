@@ -86,3 +86,23 @@ function isFrameworkNoise(text: string): boolean {
   if (/^NO_REPLY\s*$/.test(t)) return true;
   return false;
 }
+
+/**
+ * Escape boundaries used when memory content / persona is injected into
+ * XML-delimited prompt sections (e.g. `<relevant-memories>...</relevant-memories>`).
+ *
+ * Malicious or accidental content containing a closing tag such as
+ * `</user-persona>` could otherwise break out of its section and inject
+ * instructions at the system level (stored prompt injection). This mirrors
+ * `MemoryCore/src/utils/sanitize.ts#escapeXmlTags` so client and server apply
+ * the same boundary protection.
+ *
+ * Only tags that delimit our own injected sections are escaped; ordinary text
+ * and markdown are left untouched.
+ */
+export function escapeXmlTags(text: string): string {
+  return text.replace(
+    /<\/?(?:user-persona|relevant-memories|scene-navigation|relevant-scenes|memory-tools-guide|system|assistant)>/gi,
+    (match) => match.replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+  );
+}

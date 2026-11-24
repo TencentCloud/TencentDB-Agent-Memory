@@ -27,11 +27,18 @@ export function maskUserKey(keyValue: string): string {
   return `${prefix}****${tail}`;
 }
 
-/** active key 是否已过期（expires_at 为 ISO 字符串）。 */
+/**
+ * active key 是否已过期（expires_at 为 ISO 字符串）。
+ *
+ * 注意：存在一个 expires_at 但无法解析时，必须按「已过期」处理（fail-closed）。
+ * 否则损坏/异常写入的过期时间会让密钥变成永不过期的有效凭据，属于安全问题。
+ * 只有 expires_at 缺省（null/undefined）才表示「永不过期」。
+ */
 export function isUserKeyExpired(expiresAt: string | null | undefined, now = Date.now()): boolean {
-  if (!expiresAt) return false;
+  if (expiresAt == null) return false;
   const t = Date.parse(expiresAt);
-  return Number.isFinite(t) && t <= now;
+  if (!Number.isFinite(t)) return true;
+  return t <= now;
 }
 
 export const DEFAULT_MAX_ACTIVE_USER_KEYS = 20;
