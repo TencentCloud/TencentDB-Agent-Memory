@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
 import type {
+  CapabilityRoutingConfig,
   CostGuardConfig,
   ProxyConfig,
   RawSelectionYaml,
@@ -621,6 +622,7 @@ export function buildConfig(
       selection: skillSelection,
     },
     selection,
+    capabilityRouting: buildCapabilityRoutingConfig(yaml.capabilityRouting),
     auth: {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
@@ -720,6 +722,24 @@ function assertNoUnknownKeys(name: string, obj: object, allowed: readonly string
   if (unknown.length > 0) {
     throw new Error(`[config] ${name} has unknown key(s): ${unknown.join(", ")}; allowed: ${allowed.join(", ")}`);
   }
+}
+
+function buildCapabilityRoutingConfig(raw: Partial<CapabilityRoutingConfig> | undefined): CapabilityRoutingConfig {
+  const r = raw ?? {};
+  const key = "capabilityRouting";
+  if (typeof r !== "object" || Array.isArray(r)) throw new Error(`[config] ${key} must be a mapping`);
+  assertNoUnknownKeys(key, r, [
+    "enabled", "strategy", "topK", "secondPassTopK", "contextCharBudget", "criteriaCharBudget",
+  ]);
+  const topK = Math.floor(numberInRange(`${key}.topK`, r.topK, 12, 1, 25));
+  return {
+    enabled: boolOr(`${key}.enabled`, r.enabled, false),
+    strategy: stringOr(`${key}.strategy`, r.strategy, "jev"),
+    topK,
+    secondPassTopK: Math.floor(numberInRange(`${key}.secondPassTopK`, r.secondPassTopK, 50, topK, 50)),
+    contextCharBudget: Math.floor(numberInRange(`${key}.contextCharBudget`, r.contextCharBudget, 4000, 200, 8000)),
+    criteriaCharBudget: Math.floor(numberInRange(`${key}.criteriaCharBudget`, r.criteriaCharBudget, 8000, 512, 16_000)),
+  };
 }
 
 /**

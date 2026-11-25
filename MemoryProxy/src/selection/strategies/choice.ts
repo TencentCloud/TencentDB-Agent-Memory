@@ -21,7 +21,7 @@
  *   - 不记录 context 与选项描述明文
  */
 
-import type { DecisionProvider } from "../../decision/types.js";
+import { DecisionProviderError, type DecisionProvider } from "../../decision/types.js";
 import type { SelectionInput, SelectionOption, SelectionOutcome, SelectionStrategy } from "../types.js";
 
 /** 问题 ID —— 仅用于在 answers 里回找，不发给模型。 */
@@ -96,7 +96,8 @@ export class ChoiceSelectionStrategy implements SelectionStrategy {
     } catch (err) {
       // 超时 / 限流 / 非法响应：不伪装成 "none"（两者语义不同，观测上必须区分
       // 「模型说不需要」和「我们没问到」）。
-      console.warn(`${this.tag} call failed: ${(err as Error).message}`);
+      const reason = err instanceof DecisionProviderError ? err.reason : "unexpected_error";
+      console.warn(`${this.tag} call failed: ${reason}`);
       return { kind: "unavailable", reason: `${p}_error` };
     }
 

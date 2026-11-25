@@ -436,6 +436,16 @@ export interface SelectionConfig {
   strategies: SelectionStrategiesConfig;
 }
 
+export interface CapabilityRoutingConfig {
+  /** Runs selection for observation only. */
+  enabled: boolean;
+  strategy: string;
+  topK: number;
+  secondPassTopK: number;
+  contextCharBudget: number;
+  criteriaCharBudget: number;
+}
+
 /**
  * Proxy 侧 skill 选择配置（`skillRuntime.selection`）。
  *
@@ -645,6 +655,7 @@ export interface ProxyConfig {
    * 的调用点（测试 / mock）缺省时等同于「所有策略未配置」。
    */
   selection?: SelectionConfig;
+  capabilityRouting?: CapabilityRoutingConfig;
   auth: AuthConfig;
   /**
    * Internal service accounts allowed to passthrough the proxy without any
@@ -1139,6 +1150,7 @@ export interface RawYamlConfig {
   };
   /** 见 `SelectionConfig`。 */
   selection?: RawSelectionYaml;
+  capabilityRouting?: Partial<CapabilityRoutingConfig>;
   auth?: {
     enabled?: boolean;
     url?: string;
