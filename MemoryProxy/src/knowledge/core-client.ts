@@ -16,6 +16,9 @@ import type { CoreSkillConfig } from "../types.js";
 type Fetcher = typeof fetch;
 
 const TAG = "[core-knowledge-client]";
+const KNOWLEDGE_LIST_PAGE_SIZE = 200;
+const KNOWLEDGE_FIXED_ASSET_PAGE_SIZE = 100;
+const KNOWLEDGE_IDS_BATCH_SIZE = 200;
 
 /**
  * TTL cache（2026-08-20）：kernel 偶发 timeout（现网 33% 命中率），会阻塞 prewarm。
@@ -167,39 +170,53 @@ export class CoreKnowledgeClient {
       "Content-Type": "application/json",
     };
 
-    let resp: Response;
-    try {
-      resp = await this.fetcher(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ team_id: teamId, pagination: { limit: 200 } }),
-        signal: AbortSignal.timeout(timeout),
-      });
-    } catch (err) {
-      console.warn(`${TAG} listKnowledge fetch failed: ${(err as Error).message}`);
-      return null;
+    const items: KnowledgeItem[] = [];
+    let offset = 0;
+
+    for (;;) {
+      let resp: Response;
+      try {
+        resp = await this.fetcher(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            team_id: teamId,
+            pagination: { limit: KNOWLEDGE_LIST_PAGE_SIZE, offset },
+          }),
+          signal: AbortSignal.timeout(timeout),
+        });
+      } catch (err) {
+        console.warn(`${TAG} listKnowledge fetch failed: ${(err as Error).message}`);
+        return null;
+      }
+
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        console.warn(`${TAG} listKnowledge HTTP ${resp.status}: ${text.slice(0, 200)}`);
+        return null;
+      }
+
+      let env: CoreEnvelope<CoreKnowledgeListResult>;
+      try {
+        env = (await resp.json()) as CoreEnvelope<CoreKnowledgeListResult>;
+      } catch (err) {
+        console.warn(`${TAG} listKnowledge non-JSON response: ${(err as Error).message}`);
+        return null;
+      }
+
+      if (env.code !== 0) {
+        console.warn(`${TAG} listKnowledge envelope error ${env.code}: ${env.message ?? ""}`);
+        return null;
+      }
+
+      const page = env.data?.items ?? [];
+      const total = env.data?.total ?? items.length + page.length;
+      items.push(...page);
+      if (page.length === 0 || items.length >= total) break;
+      offset += page.length;
     }
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      console.warn(`${TAG} listKnowledge HTTP ${resp.status}: ${text.slice(0, 200)}`);
-      return null;
-    }
-
-    let env: CoreEnvelope<CoreKnowledgeListResult>;
-    try {
-      env = (await resp.json()) as CoreEnvelope<CoreKnowledgeListResult>;
-    } catch (err) {
-      console.warn(`${TAG} listKnowledge non-JSON response: ${(err as Error).message}`);
-      return null;
-    }
-
-    if (env.code !== 0) {
-      console.warn(`${TAG} listKnowledge envelope error ${env.code}: ${env.message ?? ""}`);
-      return null;
-    }
-
-    return env.data?.items ?? [];
+    return items;
   }
 
   /**
@@ -220,16 +237,21 @@ export class CoreKnowledgeClient {
     const cacheKey = `listByIds:${teamId}:${sortedIds}:${effectiveServiceId}`;
 
     const result = await this._cachedFetch<KnowledgeItem[]>(cacheKey, async () => {
-      const env = await this._post<CoreKnowledgeListResult>(
-        `${this.endpoint}/v3/knowledge/list`,
-        { team_id: teamId, knowledge_ids: ids },
-        {},
-        opts.serviceId,
-      );
-      // env=null 表示 HTTP/decode 失败 → 传播 null 让 _cachedFetch 走 stale 逻辑；
-      // env.data.items 为 [] 是"合法空结果"（正常缓存）。
-      if (!env) return null;
-      return env.data?.items ?? [];
+      const items: KnowledgeItem[] = [];
+      for (let index = 0; index < ids.length; index += KNOWLEDGE_IDS_BATCH_SIZE) {
+        const batch = ids.slice(index, index + KNOWLEDGE_IDS_BATCH_SIZE);
+        const env = await this._post<CoreKnowledgeListResult>(
+          `${this.endpoint}/v3/knowledge/list`,
+          { team_id: teamId, knowledge_ids: batch },
+          {},
+          opts.serviceId,
+        );
+        // env=null 表示 HTTP/decode 失败 → 传播 null 让 _cachedFetch 走 stale 逻辑；
+        // env.data.items 为 [] 是"合法空结果"（正常缓存）。
+        if (!env) return null;
+        items.push(...(env.data?.items ?? []));
+      }
+      return items;
     });
     return result ?? [];
   }
@@ -253,17 +275,35 @@ export class CoreKnowledgeClient {
     const cacheKey = `listAgentIds:${agentId}:${effectiveServiceId}`;
 
     const result = await this._cachedFetch<string[]>(cacheKey, async () => {
-      const env = await this._post<{ items?: Array<{ asset_id: string; asset_type: string; status?: string }> }>(
-        `${this.endpoint}/v3/meta/agent-fixed-asset/list-with-detail`,
-        // asset_types 服务端过滤 —— 无关类型（skill / chat_memory）不再占分页额度，
-        // 避免 wiki/code_graph 被 skill 挤出默认 limit=20 后拿不到。
-        // 依赖 core commit da04d194 (feat/meta asset_types filter)。
-        { agent_id: agentId, apply_visibility_filter: true, touch_usage: false, asset_types: ["llm_wiki", "code_graph"] },
-        { "x-tdai-user-key": userKey },
-        opts.serviceId,
-      );
-      if (!env) return null;
-      const items = env.data?.items ?? [];
+      type FixedAsset = { asset_id: string; asset_type: string; status?: string };
+      const items: FixedAsset[] = [];
+      let offset = 0;
+
+      for (;;) {
+        const env = await this._post<{ items?: FixedAsset[]; total?: number }>(
+          `${this.endpoint}/v3/meta/agent-fixed-asset/list-with-detail`,
+          // asset_types 服务端过滤 —— 无关类型（skill / chat_memory）不再占分页额度，
+          // 避免 wiki/code_graph 被 skill 挤出分页额度。
+          // 依赖 core commit da04d194 (feat/meta asset_types filter)。
+          {
+            agent_id: agentId,
+            apply_visibility_filter: true,
+            touch_usage: false,
+            asset_types: ["llm_wiki", "code_graph"],
+            limit: KNOWLEDGE_FIXED_ASSET_PAGE_SIZE,
+            offset,
+          },
+          { "x-tdai-user-key": userKey },
+          opts.serviceId,
+        );
+        if (!env) return null;
+        const page = env.data?.items ?? [];
+        const total = env.data?.total ?? items.length + page.length;
+        items.push(...page);
+        if (page.length === 0 || items.length >= total) break;
+        offset += page.length;
+      }
+
       return items
         .filter((it) => it.status !== "archived" && it.status !== "deprecated" && it.status !== "failed")
         .map((it) => it.asset_id);
