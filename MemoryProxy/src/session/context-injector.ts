@@ -110,7 +110,21 @@ export function injectSessionContext(
 ): RawMessage[] {
   const block = buildContextBlock(agent ?? null, task ?? null);
   if (!block) return messages;
+  return appendSessionSystemBlock(messages, block);
+}
 
+/** Tell dsh that Proxy resolved asset selection so the model does not restart it. */
+export function injectDshBindingContext(messages: RawMessage[], teamId: string): RawMessage[] {
+  const block = [
+    "<session_binding>",
+    `Team and Agent are already bound for this session. Team ID: ${JSON.stringify(teamId)}.`,
+    "The Task choice has already been resolved. Do not ask the user to select assets again or invent choices.",
+    "</session_binding>",
+  ].join("\n");
+  return appendSessionSystemBlock(messages, block);
+}
+
+function appendSessionSystemBlock(messages: RawMessage[], block: string): RawMessage[] {
   const sysIdx = messages.findIndex((m) => m.role === "system");
   if (sysIdx === -1) {
     return [{ role: "system", content: block }, ...messages];

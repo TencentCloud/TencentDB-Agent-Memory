@@ -74,6 +74,7 @@ import { stageAssetCapabilities } from "../stages/asset-capabilities.js";
 import { stageTeamMemorySwitch } from "../stages/team-memory-switch.js";
 import { stageSessionBypass } from "../stages/session-bypass.js";
 import { stageSessionInitOrchestrate } from "../stages/session-init-orchestrate.js";
+import { injectDshBindingContext, injectSessionContextWithToggles } from "../../session/context-injector.js";
 import { stageInjectionRunner } from "../stages/injection-runner.js";
 import { stageInstanceUpstreamEarly } from "../stages/instance-upstream-early.js";
 import { stageInstanceUpstreamOverride } from "../stages/instance-upstream-override.js";
@@ -790,7 +791,6 @@ export async function runOpenaiChatPipeline(
         recoveryMessages: (body.messages as Array<Record<string, unknown>>) ?? [],
         synthesizeMessages: () => (body.messages as Array<Record<string, unknown>>) ?? [],
         buildRecoverInitResult: async (recovered) => {
-          const { injectSessionContextWithToggles } = await import("../../session/context-injector.js");
           const inMsgs = (body.messages as Array<Record<string, unknown>>) ?? [];
           const outMsgs = recovered.bypassed
             ? inMsgs
@@ -830,12 +830,9 @@ export async function runOpenaiChatPipeline(
       // 见 anthropicHandler 对称位置：只在真正走 sessionInit state machine 时继承。
       if (wentThroughSessionInitStateMachine && initResult.justRegistered) sessionJustRegistered = true;
 
-      // v3.3 user-session-default: 命中账户默认时, Proxy 在首次响应 SSE 流最前面
-      // 插一段 Markdown 提示 (由 session-init 层组装, 见 user-default.ts)。
-      // 只在 justRegistered 的那一次(即首次完成绑定的请求)插; 后续轮次 initResult
-      // 走 recover 分支, defaultBindingNotice 为 null, 不插。
-      if (initResult.justRegistered && (initResult as any).defaultBindingNotice) {
-        defaultBindingNotice = (initResult as any).defaultBindingNotice as string;
+      // Announce the binding only on the request that establishes it.
+      if (initResult.justRegistered && initResult.defaultBindingNotice) {
+        defaultBindingNotice = initResult.defaultBindingNotice;
         console.log(`[session-init] session=${sessionKey} default-binding-notice staged (len=${defaultBindingNotice.length})`);
       }
 
@@ -914,10 +911,20 @@ export async function runOpenaiChatPipeline(
         logTag: "[hook-cache] handler prewarm error:",
       });
 
-      // Case 2: Messages were cleaned → update body
-      if (initResult.messages) {
-        body = { ...body, messages: initResult.messages };
-        messages = initResult.messages as unknown[];
+      let initializedMessages = initResult.messages;
+      if (
+        agentSource === "dsh" && !initResult.bypassed &&
+        initResult.sessionInfo?.team_id && initResult.sessionInfo.agent_id &&
+        (config.sessionInit.injectAgentContext !== false || config.sessionInit.injectTaskContext !== false)
+      ) {
+        initializedMessages = injectDshBindingContext(
+          initializedMessages ?? (messages as Record<string, unknown>[]),
+          initResult.sessionInfo.team_id,
+        );
+      }
+      if (initializedMessages) {
+        body = { ...body, messages: initializedMessages };
+        messages = initializedMessages;
       }
 
       sessionInfo = initResult.sessionInfo as Record<string, unknown> | null | undefined;

@@ -237,8 +237,8 @@ export function buildDefaultBindingNoticeIfApplicable(
   task: TaskDetail | null | undefined,
   taskIdFromRegData: string | null | undefined,
 ): string | null {
-  // 仅 user_default 场景出 Notice; header / form 场景用户已显式选过, 不打扰。
-  if (effectivePresetSource !== "user_default") return null;
+  // Header presets and explicitly selected assets need no further confirmation.
+  if (effectivePresetSource !== "user_default" && effectivePresetSource !== "auto_select") return null;
 
   const teamPart = teamName
     ? teamId
@@ -260,7 +260,9 @@ export function buildDefaultBindingNoticeIfApplicable(
       : (taskIdFromRegData || "default");
 
   return [
-    "✅ 当前 session 绑定默认配置：",
+    effectivePresetSource === "auto_select"
+      ? "✅ 当前会话已自动关联团队资产："
+      : "✅ 当前 session 绑定默认配置：",
     "",
     `- Team: ${teamPart}`,
     `- Agent: ${agentPart}`,
