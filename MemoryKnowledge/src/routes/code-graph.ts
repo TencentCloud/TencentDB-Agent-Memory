@@ -24,6 +24,7 @@ import {
   isValidIdSegment,
   wrapOk,
   wrapError,
+  clampListPagination,
   toCodeGraphDetail,
   type BatchDeleteResult,
 } from "../api-helpers.js";
@@ -236,8 +237,7 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     if (!idFields) return c.json(wrapError(400, "x-tdai-service-id header and team_id are required"), 400);
 
     const status = typeof body.status === "string" ? (body.status as SyncStatus) : undefined;
-    const limit = typeof body.limit === "number" ? body.limit : 20;
-    const offset = typeof body.offset === "number" ? body.offset : 0;
+    const { limit, offset } = clampListPagination(body);
 
     const items = cgService.list(idFields.service_id, idFields.team_id, { syncStatus: status, limit, offset });
     const total = cgService.count(idFields.service_id, idFields.team_id, status ? { syncStatus: status } : undefined);
