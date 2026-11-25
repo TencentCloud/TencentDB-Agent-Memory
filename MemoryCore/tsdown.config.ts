@@ -11,7 +11,7 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: { index: "./index.ts", "replay-l1": "./src/cli/replay-l1.ts" },
   outDir: "./dist",
   format: "esm",
   platform: "node",
