@@ -142,6 +142,8 @@ export class SkillCandidateProvider {
      */
     conversationQuery?: string;
     maxCandidates: number;
+    /** Shadow evaluation distinguishes unavailable Core from an empty result. */
+    throwOnCoreError?: boolean;
   }): Promise<CandidateSet> {
     const { scope, agentDetail, taskDetail, taskId, sessionScope, conversationQuery, maxCandidates } = args;
     const empty: CandidateSet = { candidates: [], mode: "full", fingerprint: "" };
@@ -259,6 +261,7 @@ export class SkillCandidateProvider {
           + ` query=${(recallByConversation ? convQuery : query) ? "yes" : "no"}`,
       );
     } catch (err) {
+      if (args.throwOnCoreError) throw err;
       console.warn(`${TAG} core candidate recall failed: ${(err as Error).message}`);
       return empty;
     }

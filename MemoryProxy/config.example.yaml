@@ -910,6 +910,19 @@ skillRuntime:
 #   #     timeoutMs: 3000
 #   #     options: {}                    # provider 私有参数
 
+# ── 能力路由旁路观察（默认关闭） ─────────────────────────────────────────────
+# 在已绑定的 OpenAI Chat / Anthropic 主对话中，按请求快照观察一项能力选择。
+# 开启后会将限长的近期对话与候选描述发送给 selection.strategies 中配置的策略。
+# 不发送工具参数 schema，不改变模型转发、工具暴露、已有资产注入或 L0 写入。
+# 策略超时与置信门槛沿用所引用策略的 timeoutMs / minConfidence，修改后重启 Proxy。
+# capabilityRouting:
+#   enabled: false
+#   strategy: jev
+#   topK: 12
+#   secondPassTopK: 50
+#   contextCharBudget: 4000
+#   criteriaCharBudget: 8000
+
 # ── mem: 特殊命令 ──────────────────────────────────────────────────────────
 # 用户在对话框输入 mem:sync / mem:create-skill / mem:help 等命令时，
 # Proxy 在 session init 之后拦截，执行对应操作并直接返回伪造 LLM 响应，

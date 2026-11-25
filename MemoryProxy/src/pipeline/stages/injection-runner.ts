@@ -11,6 +11,7 @@
 import type { ProxyConfig } from "../../types.js";
 import { countHumanTurns } from "../../turnSeq.js";
 import type { AssetCapabilityFlags } from "../../injection/types.js";
+import { observeCapabilityRouting } from "./capability-shadow.js";
 
 export interface InjectionRunnerInput {
   /** injection 被跳过的所有 gate 汇总 (injectedSkipped, requestKind, etc.) */
@@ -63,6 +64,7 @@ export async function stageInjectionRunner(
   input: InjectionRunnerInput,
 ): Promise<InjectionRunnerResult> {
   const { skip, config, body, protocol, messages } = input;
+  if (config.capabilityRouting?.enabled) void observeCapabilityRouting(input);
   if (skip || !config.injection?.enabled || (config.injection?.injectors?.length ?? 0) === 0) {
     return { body, messages };
   }
