@@ -165,6 +165,11 @@ function AtomicHead({
           if (!loading) onToggle?.();
         }}
         onKeyDown={(e) => {
+          // 只处理整行自身获得焦点时的键盘激活。内部「更多操作(⋯)」等真实
+          // 按钮的 Enter/Space 会冒泡到这里，必须原样留给按钮自己：这里
+          // preventDefault 会吞掉按钮的原生点击（菜单打不开），并误触发
+          // 整行展开/收起（#1708）。
+          if (e.target !== e.currentTarget) return;
           if ((e.key === 'Enter' || e.key === ' ') && !loading) {
             e.preventDefault();
             onToggle?.();
