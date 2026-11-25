@@ -67,6 +67,11 @@ __tests__/offload_server/remote-config.json
 deploy/global-images/.admin-key
 deploy/global-images/.proxy-config/
 deploy/global-images/.memory-core-config/
+deploy/windows-native/out/
+deploy/windows-native/.cache/
+deploy/windows-native/.runtime/
+deploy/linux-native/out/
+deploy/linux-native/.cache/
 
 # Eval scripts output
 scripts/eval-report.json

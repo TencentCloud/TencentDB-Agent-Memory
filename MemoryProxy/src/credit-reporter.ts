@@ -417,7 +417,7 @@ export async function tryReportCreditFromPath(
   // Today the extension telemetry path (writeLog with event="analyzer_usage") does not
   // reach this function, but this guard ensures future refactors cannot
   // accidentally bill extension consumption to the caller's memory space.
-  if (event === "analyzer_usage") {
+  if (event === "analyzer_usage" || !config.url) {
     return { attempted: false, ok: false };
   }
 

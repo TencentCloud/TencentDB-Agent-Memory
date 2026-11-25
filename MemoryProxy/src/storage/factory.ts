@@ -23,6 +23,7 @@ import type { CosLikeBackend, KernelStsCosOptions } from "./cos-types.js";
 
 const TAG = "[storage]";
 const _require = createRequire(import.meta.url);
+const COST_GUARD_MODULE = "@context-proxy/cost-guard";
 
 /**
  * 用户配置结构 —— kernel-sts 段见
@@ -99,7 +100,7 @@ export async function initProxyStorage(config: StorageConfig): Promise<ProxyStor
   if (_instance) return _instance;
   if (config.backend === "cos") {
     try {
-      const mod = await import("@context-proxy/cost-guard");
+      const mod = await import(COST_GUARD_MODULE);
       if (typeof mod.openKernelStsCosBackend === "function") {
         _kernelStsFactory = mod.openKernelStsCosBackend as (opts: KernelStsCosOptions) => CosLikeBackend;
       } else {

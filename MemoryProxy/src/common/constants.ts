@@ -8,9 +8,9 @@
  * ## 语义差异 (故意保留)
  *
  * 6 个 handler 里 SKIP_REQUEST_HEADERS 有两种版本:
- *   - `SKIP_REQUEST_HEADERS_HOP_BY_HOP` (4 项): handler/direct/aux 用, 只过
- *      RFC 7230 hop-by-hop 头
- *   - `SKIP_REQUEST_HEADERS_WITH_INTERNAL` (5 项): anthropic/codex/wb 用,
+ *   - `SKIP_REQUEST_HEADERS_HOP_BY_HOP` (5 项): handler/direct/aux 用, 只过
+ *      RFC 7230 hop-by-hop 头及 Undici 不支持的 `expect`
+ *   - `SKIP_REQUEST_HEADERS_WITH_INTERNAL` (6 项): anthropic/codex/wb 用,
  *      在 hop-by-hop 基础上多加 `x-tdai-user-key` (proxy 内部身份头)
  *
  * ⚠️ **潜在 bug (待 Phase 4 迁移时统一修复)**:
@@ -36,10 +36,11 @@ export const SKIP_REQUEST_HEADERS_HOP_BY_HOP: ReadonlySet<string> = new Set([
   "content-length",
   "transfer-encoding",
   "connection",
+  "expect",
 ]);
 
 /**
- * 请求头黑名单 — hop-by-hop + proxy 内部身份头 (5 项)。
+ * 请求头黑名单 — hop-by-hop + proxy 内部身份头 (6 项)。
  * 原用户: anthropicHandler.ts / codexHandler.ts / workbuddyHandler.ts。
  * `x-tdai-user-key` 是 proxy 内部 session-init 才用的头, 绝不允许透传上游。
  */
@@ -48,6 +49,7 @@ export const SKIP_REQUEST_HEADERS_WITH_INTERNAL: ReadonlySet<string> = new Set([
   "content-length",
   "transfer-encoding",
   "connection",
+  "expect",
   "x-tdai-user-key",
 ]);
 

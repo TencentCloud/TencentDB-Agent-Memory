@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/opt/tdai-memory
+if [[ "${1:-}" == "configure" ]]; then
+  "$ROOT/scripts/install.sh" --skip-firewall
+  "$ROOT/scripts/install-systemd.sh"
+  systemctl enable tdai-memory.target
+  systemctl restart tdai-memory.target
+  "$ROOT/scripts/verify.sh"
+  print_summary() {
+    local HOST=0.0.0.0
+    local PORT=8125
+    # shellcheck disable=SC1091
+    source "$ROOT/config/panel.env"
+    printf 'Installation completed successfully.\n'
+    printf 'Local Panel URL: http://127.0.0.1:%s/ (listening on %s:%s)\n' "$PORT" "$HOST" "$PORT"
+    printf 'Remote access also requires the network security group or router to allow the four configured ports.\n'
+  }
+  print_summary
+fi

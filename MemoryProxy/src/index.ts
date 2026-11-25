@@ -9,6 +9,7 @@ if (!process.version.startsWith("v22.")) {
   process.exit(1);
 }
 
+import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { buildConfig, parseArgv } from "./config.js";
 import { createApp } from "./server.js";
@@ -62,7 +63,7 @@ initClickHouse(config.clickhouse);
 
 // ── Initialize local JSONL trace archive (disabled by default) ───────────────
 {
-  const projectRoot = new URL("../", import.meta.url).pathname;
+  const projectRoot = fileURLToPath(new URL("../", import.meta.url));
   initTraceArchive(projectRoot, config.traceArchive);
 }
 

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/opt/tdai-memory
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+fi
+if [[ "${1:-}" == "purge" ]]; then
+  rm -rf "$ROOT"
+fi

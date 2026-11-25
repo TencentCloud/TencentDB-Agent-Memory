@@ -1,0 +1,21 @@
+[Unit]
+Description=TencentDB Agent Memory Proxy
+Requires=tdai-memory-panel.service
+After=tdai-memory-panel.service
+PartOf=tdai-memory.target
+
+[Service]
+Type=simple
+User=tdai-memory
+Group=tdai-memory
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/scripts/run-component.sh proxy
+ExecStartPost=@ROOT@/scripts/wait-health.sh proxy
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=120s
+TimeoutStopSec=30s
+UMask=0077
+
+[Install]
+WantedBy=tdai-memory.target
