@@ -151,6 +151,7 @@ export async function extractSource(
   });
 
   const candidates = new Map<string, string>();
+  const candidateSourcePaths = new Map<string, string>();
   const warnings: string[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
@@ -196,6 +197,18 @@ export async function extractSource(
         warnings.push(`跳过结构性文件: ${canonicalPath}`);
         continue;
       }
+      const previousPath = candidateSourcePaths.get(canonicalPath);
+      if (previousPath !== undefined) {
+        const warning =
+          `规范化后页面路径冲突，后块覆盖前块: "${previousPath}" -> ` +
+          `"${f.path}" => "${canonicalPath}"`;
+        warnings.push(warning);
+        log.warn(warning, {
+          source: sourceName,
+          chunk: tag,
+        });
+      }
+      candidateSourcePaths.set(canonicalPath, f.path);
       candidates.set(canonicalPath, ensureSources(f.content, sourceName));
     }
   }
