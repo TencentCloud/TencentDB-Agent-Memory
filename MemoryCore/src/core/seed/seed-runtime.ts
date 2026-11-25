@@ -5,15 +5,8 @@
  * L1 runner, L2 runner, L3 runner, and persister wiring — keeping this
  * module focused on seed-specific concerns:
  * - Synchronous per-round L0 capture with progress reporting
- * - waitForL1Idle polling (L1 only — see FIXME below)
+ * - waits for L1, L2, and L3 to become stably idle before shutdown
  * - Ctrl+C graceful shutdown
- *
- * FIXME: Currently we only wait for L1 to become idle before destroying the
- * pipeline.  L2 (scene extraction) and L3 (persona generation) may still be
- * in-flight when `pipeline.destroy()` is called.  This is intentional for now
- * to avoid excessively long seed runs, but means seed output may not include
- * the latest L2/L3 artifacts.  Re-evaluate adding a full L1+L2+L3 idle wait
- * once pipeline-manager exposes reliable L2/L3 idle signals.
  */
 
 import path from "node:path";
@@ -196,16 +189,81 @@ async function waitForL1Idle(
   }
 }
 
+/**
+ * Poll until every active pipeline layer is idle and no session still has
+ * buffered L1 work or pending L2 work. Several stable rounds are required so
+ * an L2 completion has time to schedule the following L3 run.
+ */
+export async function waitForPipelineIdle(
+  scheduler: MemoryPipelineManager,
+  sessionKeys: string[],
+  logger: PipelineLogger,
+  opts: {
+    pollIntervalMs?: number;
+    stableRounds?: number;
+    maxWaitMs?: number;
+  } = {},
+): Promise<void> {
+  const pollInterval = opts.pollIntervalMs ?? 1_000;
+  const stableRounds = opts.stableRounds ?? 3;
+  const maxWait = opts.maxWaitMs ?? 600_000;
+  const startTime = Date.now();
+  let consecutiveIdle = 0;
+
+  while (true) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > maxWait) {
+      logger.warn(
+        `${TAG} [waitPipeline] Max wait time reached (${(maxWait / 1000).toFixed(0)}s), proceeding`,
+      );
+      break;
+    }
+
+    const queues = scheduler.getQueueSizes();
+    let totalBuffered = 0;
+    let totalConversationCount = 0;
+    let totalL2Pending = 0;
+    for (const key of sessionKeys) {
+      totalBuffered += scheduler.getBufferedMessageCount(key);
+      const state = scheduler.getSessionState(key);
+      if (state) {
+        totalConversationCount += state.conversation_count;
+        totalL2Pending += state.l2_pending_l1_count;
+      }
+    }
+
+    const isIdle =
+      queues.l1Idle &&
+      queues.l2Idle &&
+      queues.l3Idle &&
+      totalBuffered === 0 &&
+      totalConversationCount === 0 &&
+      totalL2Pending === 0;
+
+    if (isIdle) {
+      consecutiveIdle++;
+      if (consecutiveIdle >= stableRounds) {
+        logger.debug?.(`${TAG} [waitPipeline] all layers stable for ${stableRounds} consecutive polls`);
+        return;
+      }
+    } else {
+      consecutiveIdle = 0;
+      logger.debug?.(
+        `${TAG} [waitPipeline] Waiting: queues=${JSON.stringify(queues)}, ` +
+        `buffered=${totalBuffered}, convCount=${totalConversationCount}, l2Pending=${totalL2Pending}`,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+}
+
 // ============================
 // Main execution function
 // ============================
 
 /**
- * Execute the seed pipeline: feed normalized input through L0 → L1.
- *
- * L2/L3 runners are wired but their completion is **not** awaited — see the
- * module-level FIXME.  The pipeline is destroyed after L1 idle, so L2/L3 may
- * be interrupted mid-run.
+ * Execute the seed pipeline: feed normalized input through L0 → L1 → L2 → L3.
  *
  * This is the core runtime called by `src/cli/commands/seed.ts` after
  * all input validation and user confirmation are complete.
@@ -363,6 +421,14 @@ export async function executeSeed(
         allKeys,
         logger,
         { pollIntervalMs: 1_000, stableRounds: 3, maxWaitMs: 300_000 },
+      );
+
+      logger.info(`${TAG} Final full pipeline idle wait for all sessions...`);
+      await waitForPipelineIdle(
+        pipeline.scheduler,
+        allKeys,
+        logger,
+        { pollIntervalMs: 1_000, stableRounds: 3, maxWaitMs: 600_000 },
       );
     }
   } finally {
