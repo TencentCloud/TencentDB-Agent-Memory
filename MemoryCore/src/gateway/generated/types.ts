@@ -1167,8 +1167,7 @@ export type AgentStatus = AgentStatusEnumKey;
 
 export const taskSourceTypeEnum = {
     manual: "manual",
-    github: "github",
-    tapd: "tapd",
+    external: "external",
     other: "other"
 } as const;
 

@@ -4,11 +4,39 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Input, Segment, Text } from 'tea-component';
-import { DeleteIcon, EditIcon, UserIcon, UsergroupIcon } from 'tea-icons-react';
+import { ChevronRightIcon, DeleteIcon, EditIcon, UserIcon, UsergroupIcon } from 'tea-icons-react';
 import { canEditTask, type Task, type Team } from '@/services';
 import { useUserDisplayName } from '@/services/user-profile-store';
 import { tea } from '@/lib/tea-bridge';
-import { useStatusLabels, type AgentOption, type TaskParticipationView } from '../utils/workbench-utils';
+import {
+  readExternalProvider,
+  useSourceLabel,
+  useStatusLabels,
+  visibleAgentIds,
+  type AgentOption,
+  type TaskParticipationView,
+} from '../utils/workbench-utils';
+
+/**
+ * 把 source_url 规整成可安全跳转的绝对地址。
+ *
+ * **必须做协议白名单**：source_url 是从第三方系统（TAPD）拉回来的外部数据，
+ * 直接进 `<a href>` 会让 `javascript:` / `data:` 这类伪协议成为 XSS 入口。
+ * 只放行 http / https；解析失败或非白名单一律返回 null（不渲染链接）。
+ */
+function safeExternalUrl(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.href;
+  } catch {
+    // 相对路径或非法串：不猜协议，直接不跳转。
+    return null;
+  }
+}
 
 /**
  * 参与者 chip：可见文本显示 display_name（缓存未命中先回退 id），
@@ -61,8 +89,18 @@ export default function TaskDetail({
 }) {
   const { t } = useTranslation();
   const statusLabels = useStatusLabels();
+  const sourceLabelOf = useSourceLabel();
   // 编辑权限：team 内任意 member 可改 task（含切换 status）。
   const canEdit = canEditTask(task, team, currentUser);
+
+  /** 来源系统详情页地址（已过协议白名单）；非法/缺失则为 null，不渲染跳转按钮。 */
+  const externalUrl = safeExternalUrl(task.source_url);
+  /**
+   * 来源展示名：具体来源从 metadata_json.external.provider 读（source_type 只表大类）。
+   * 未登记的来源回落到原始 provider 串，避免出现空白来源行。
+   */
+  const sourceProvider = readExternalProvider(task);
+  const sourceLabel = sourceProvider ? sourceLabelOf(sourceProvider) : task.source_type;
 
   // —— 编辑态：只在用户点「编辑」后才进入；草稿独立维护，取消即丢弃 —— //
   const [editing, setEditing] = useState(false);
@@ -75,6 +113,7 @@ export default function TaskDetail({
     setDraftTitle(task.title);
     setDraftDesc(task.description);
   }, [task.task_id]);
+
 
   function startEdit() {
     setDraftTitle(task.title);
@@ -110,9 +149,13 @@ export default function TaskDetail({
 
   // 「实际参与 Agent」：session 观测到的 agent，映射到 team 的 agent name；
   // 未在 team agents 列表里的（比如已被删除）保留 agent_id 兜底展示。
+  // 先滤掉导入哨兵（历史参与记录）—— 滤完为空则展示「—」，与非导入 task 一致。
   const sessionAgents = useMemo(() => {
     const nameById = new Map(agents.map((a) => [a.id, a.name]));
-    return participation.agentIds.map((id) => ({ id, name: nameById.get(id) ?? id }));
+    return visibleAgentIds(participation.agentIds).map((id) => ({
+      id,
+      name: nameById.get(id) ?? id,
+    }));
   }, [participation.agentIds, agents]);
 
   return (
@@ -139,6 +182,10 @@ export default function TaskDetail({
                 {t('task.edit')}
               </Button>
             )}
+            {/*
+              跳转入口**只保留**下方参与者区的「来源」行 —— 那边带来源名与完整 URL
+              tooltip，信息更足；这里再放一个按钮是同目标重复入口，易点错。
+            */}
             <Segment
               value={task.status}
               onChange={(v) => onUpdateStatus(v as Task['status'])}
@@ -154,6 +201,26 @@ export default function TaskDetail({
 
       {/* === 参与者 === */}
       <div className="_memory-workbench-people">
+        {/* 来源：仅导入产生的 task 有（source_type !== 'manual'），manual 任务整行不显示 */}
+        {task.source_type !== 'manual' && (
+          <div className="_memory-workbench-people-row">
+            <Text theme="weak" className="_memory-workbench-people-label">{t('task.source')}</Text>
+            {externalUrl ? (
+              <a
+                href={externalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={externalUrl}
+                className="_memory-workbench-source-link"
+              >
+                {t('task.sourceLink', { source: sourceLabel })}
+                <ChevronRightIcon size={12} />
+              </a>
+            ) : (
+              <Text theme="weak">{sourceLabel}</Text>
+            )}
+          </div>
+        )}
         <div className="_memory-workbench-people-row">
           <Text theme="weak" className="_memory-workbench-people-label">{t('task.creator')}</Text>
           <UserChip

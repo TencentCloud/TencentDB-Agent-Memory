@@ -13,6 +13,28 @@
 
 /** Prompt family for L1-L3 memory pipeline. */
 export type MemoryPromptMode = "chat" | "code";
+export type PersonaTriggerMode = "current" | "jev";
+export type JevDiagnosticsMode = "off" | "metadata" | "full";
+
+/**
+ * L3 decision gate config (`memory.persona.jev`). The key name stays `jev` for
+ * compatibility; `provider` selects the decision backend (built-in: `jev`; other
+ * decision APIs register in `src/core/decision/registry.ts`).
+ */
+export interface PersonaJevConfig {
+  /** Decision provider type. Default `jev`. */
+  provider: string;
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  /** Timeout used by the shared single-attempt decision provider. */
+  timeoutMs: number;
+  /** Provider-private params, passed through as-is and validated by the provider. */
+  options?: Record<string, unknown>;
+  diagnostics: {
+    mode: JevDiagnosticsMode;
+  };
+}
 
 /** Capture settings — controls L0 conversation recording. */
 export interface CaptureConfig {
@@ -53,6 +75,42 @@ export interface PersonaConfig {
   triggerEveryN: number;
   /** Max scene blocks (default: 20) */
   maxScenes: number;
+  /**
+   * Max bytes for a single scene block file (default: 262144 = 256KB).
+   *
+   * Scene count alone cannot bound prompt size: once the count ceiling is hit
+   * the LLM is told "UPDATE only, no CREATE", so every new memory is appended
+   * into existing files and they grow without bound (observed: 3.2MB files
+   * producing 459K-char prompts and 100s+ LLM calls).
+   *
+   * This limit is enforced in two places:
+   *   1. Prompt — oversized scenes are listed and the LLM is told to compact
+   *      them instead of appending.
+   *   2. Write-back — an update that grows an already-oversized scene is
+   *      rejected and the previous content is restored, so a misbehaving LLM
+   *      cannot blow past the budget.
+   */
+  maxSceneBytes: number;
+  /**
+   * L2 scene-extraction LLM timeout in milliseconds (default: 480000 = 8 min).
+   *
+   * Scene extraction runs a multi-step tool-calling agent over every scene
+   * file, so it needs a longer budget than single-shot calls (llm.timeoutMs).
+   * Large scenes routinely exceeded the former 5-minute hard-coded limit.
+   * The worker renews its lock and PEL claim during execution, so this may
+   * exceed worker.lockTtlMs; it only bounds a single LLM run.
+   */
+  sceneTimeoutMs: number;
+  /**
+   * Max L1 records fed into a single L2 run (default: 200).
+   *
+   * A backlog (e.g. L2 stalled for days) used to be sent to the LLM in one
+   * prompt, which then timed out on every retry. Records beyond this limit
+   * are left past the cursor and drained by an immediately re-enqueued L2.
+   */
+  l2MaxRecordsPerRun: number;
+  /** Max total L1 content characters per L2 run (default: 60000). At least one record is always taken. */
+  l2MaxCharsPerRun: number;
   /** Persona backup count (default: 3) */
   backupCount: number;
   /** Scene blocks backup count (default: 10) */
@@ -61,6 +119,10 @@ export interface PersonaConfig {
   model?: string;
   /** Prompt family for L2/L3 prompts (default: chat; code prompts will be wired as they are added). */
   promptMode: MemoryPromptMode;
+  /** Existing trigger policy, optionally augmented by the JEV immediate-update gate. */
+  triggerMode: PersonaTriggerMode;
+  /** Direct System One client configuration used only when triggerMode="jev". */
+  jev: PersonaJevConfig;
 }
 
 /** Pipeline trigger settings (L1→L2→L3 scheduling). */
@@ -400,6 +462,64 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Persona (L2/L3) ---
   const personaGroup = obj(c, "persona");
+  const jevGroup = obj(personaGroup, "jev");
+  const jevDiagnosticsGroup = obj(jevGroup, "diagnostics");
+  const rawTriggerMode = str(personaGroup, "triggerMode");
+  if (rawTriggerMode && rawTriggerMode !== "current" && rawTriggerMode !== "jev") {
+    throw new Error(`memory.persona.triggerMode must be "current" or "jev", got "${rawTriggerMode}"`);
+  }
+  const triggerMode: PersonaTriggerMode = rawTriggerMode === "jev" ? "jev" : "current";
+  const rawDiagnosticsMode = str(jevDiagnosticsGroup, "mode");
+  if (rawDiagnosticsMode && !["off", "metadata", "full"].includes(rawDiagnosticsMode)) {
+    throw new Error(
+      `memory.persona.jev.diagnostics.mode must be "off", "metadata", or "full", got "${rawDiagnosticsMode}"`,
+    );
+  }
+  const diagnosticsMode: JevDiagnosticsMode =
+    rawDiagnosticsMode === "metadata" || rawDiagnosticsMode === "full" ? rawDiagnosticsMode : "off";
+  const jevTimeoutMs = num(jevGroup, "timeoutMs") ?? 3_000;
+  if (jevTimeoutMs < 100 || jevTimeoutMs > 60_000) {
+    throw new Error("memory.persona.jev.timeoutMs must be between 100 and 60000 milliseconds");
+  }
+  const jevProvider = str(jevGroup, "provider") ?? "jev";
+  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(jevProvider)) {
+    throw new Error(`memory.persona.jev.provider has invalid name "${jevProvider}"`);
+  }
+  // jev keeps its historical env var; other providers name theirs via apiKeyEnv.
+  const jevKeyEnv = str(jevGroup, "apiKeyEnv") ?? (jevProvider === "jev" ? "TYPESAFE_API_KEY" : "");
+  if (jevKeyEnv && !/^[A-Z_][A-Z0-9_]*$/.test(jevKeyEnv)) {
+    throw new Error(`memory.persona.jev.apiKeyEnv must be an environment variable name, got "${jevKeyEnv}"`);
+  }
+  const rawJevOptions = jevGroup.options;
+  if (rawJevOptions !== undefined && rawJevOptions !== null
+    && (typeof rawJevOptions !== "object" || Array.isArray(rawJevOptions))) {
+    throw new Error("memory.persona.jev.options must be a mapping");
+  }
+  const jevOptions = rawJevOptions ? rawJevOptions as Record<string, unknown> : undefined;
+  const yamlJevKey = resolveExactEnvReference(optStr(jevGroup, "apiKey") ?? "");
+  const jevApiKey = (jevKeyEnv ? process.env[jevKeyEnv]?.trim() : "") || yamlJevKey;
+  const jevEndpoint = str(jevGroup, "endpoint") ?? "";
+  const jevModel = str(jevGroup, "model") ?? "";
+  if (triggerMode === "jev") {
+    const missing = [
+      !jevEndpoint && "endpoint",
+      !jevApiKey && `apiKey/${jevKeyEnv || "apiKeyEnv"}`,
+      !jevModel && "model",
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      throw new Error(`memory.persona.triggerMode="jev" requires memory.persona.jev ${missing.join(", ")}`);
+    }
+    let parsedEndpoint: URL;
+    try {
+      parsedEndpoint = new URL(jevEndpoint);
+    } catch {
+      throw new Error("memory.persona.jev.endpoint must be a valid URL");
+    }
+    const loopback = ["127.0.0.1", "localhost", "::1"].includes(parsedEndpoint.hostname);
+    if (parsedEndpoint.protocol !== "https:" && !(parsedEndpoint.protocol === "http:" && loopback)) {
+      throw new Error("memory.persona.jev.endpoint must use HTTPS (HTTP is allowed only for loopback tests)");
+    }
+  }
 
   // --- Pipeline ---
   const pipelineGroup = obj(c, "pipeline");
@@ -512,6 +632,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Offload ---
   const offloadGroup = obj(c, "offload");
+  const offloadBackendKey = optStr(offloadGroup, "backendApiKey");
 
   // Auto-derive offload serverUrl/apiKey/serviceId from top-level server config
   // when offload client fields are not explicitly set.
@@ -545,7 +666,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     aggressiveCompressRatio: num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
     mmdMaxTokenRatio: num(offloadGroup, "mmdMaxTokenRatio") ?? 0.2,
     backendUrl: optStr(offloadGroup, "backendUrl"),
-    backendApiKey: optStr(offloadGroup, "backendApiKey"),
+    backendApiKey: offloadBackendKey,
     backendTimeoutMs: num(offloadGroup, "backendTimeoutMs") ?? 120000,
     offloadRetentionDays: normalizeOffloadRetentionDays(num(offloadGroup, "offloadRetentionDays") ?? 0),
     logMaxSizeMb: num(offloadGroup, "logMaxSizeMb") ?? 50,
@@ -577,10 +698,24 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     persona: {
       triggerEveryN: num(personaGroup, "triggerEveryN") ?? 50,
       maxScenes: num(personaGroup, "maxScenes") ?? 15,
+      maxSceneBytes: num(personaGroup, "maxSceneBytes") ?? 262144,
+      sceneTimeoutMs: num(personaGroup, "sceneTimeoutMs") ?? 480_000,
+      l2MaxRecordsPerRun: Math.max(1, num(personaGroup, "l2MaxRecordsPerRun") ?? 200),
+      l2MaxCharsPerRun: Math.max(1, num(personaGroup, "l2MaxCharsPerRun") ?? 60_000),
       backupCount: num(personaGroup, "backupCount") ?? 3,
       sceneBackupCount: num(personaGroup, "sceneBackupCount") ?? 10,
       model: optStr(personaGroup, "model"),
       promptMode: normalizePromptMode(str(personaGroup, "promptMode"), globalPromptMode),
+      triggerMode,
+      jev: {
+        provider: jevProvider,
+        endpoint: jevEndpoint,
+        apiKey: jevApiKey,
+        model: jevModel,
+        timeoutMs: jevTimeoutMs,
+        ...(jevOptions ? { options: jevOptions } : {}),
+        diagnostics: { mode: diagnosticsMode },
+      },
     },
     pipeline: {
       everyNConversations: num(pipelineGroup, "everyNConversations") ?? 5,
@@ -692,6 +827,12 @@ function normalizePromptMode(value: string | undefined, fallback: MemoryPromptMo
 function optStr(src: Record<string, unknown>, key: string): string | undefined {
   const v = src[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/** Resolve only the explicit `${NAME}` form used by config examples. */
+function resolveExactEnvReference(value: string): string {
+  const match = value.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
+  return match ? process.env[match[1]!] ?? "" : value;
 }
 
 function num(src: Record<string, unknown>, key: string): number | undefined {

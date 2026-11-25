@@ -29,6 +29,7 @@ import { isInsideRoot } from "./safe-path.js";
 import { rebuildIndexFile } from "./index-builder.js";
 import { appendIngestLog, appendIngestLogBatch } from "./log-writer.js";
 import { createLogger } from "../../../logger.js";
+import { toSourceText } from "../../../document-converter/index.js";
 
 const log = createLogger("wiki-ingest");
 
@@ -118,9 +119,17 @@ export async function extractSource(
   options: IngestOptions = {},
 ): Promise<Map<string, string>> {
   if (!existsSync(sourcePath)) throw new Error(`源文件不存在: ${sourcePath}`);
-  const sourceText = readFileSync(sourcePath, "utf-8");
+  // 原始文件原样落盘，此处按字节读出后交给转换层：
+  // 文本类直通，富文档类（docx/pdf/...）转纯文本。转换失败抛 ConvertError，
+  // 由 runIngestIncremental 的 try/catch 标记该源 failed，不影响同批其它源。
   const sourceName = basename(sourcePath);
-  if (!sourceText.trim()) throw new Error(`源文件为空: ${sourceName}`);
+  const { text: sourceText } = await toSourceText({
+    bytes: readFileSync(sourcePath),
+    filename: sourceName,
+  });
+  // 转换层对空产物已抛明确错误（如扫描件 PDF → SCANNED_PDF_UNSUPPORTED），
+  // 此处只是兜底：走到这里说明转换成功但内容确实为空（例如空白的 txt）。
+  if (!sourceText.trim()) throw new Error(`源文件内容为空: ${sourceName}`);
 
   const llm = options.llm ?? createLlmClient(llmConfig);
   const template = loadTemplate(projectPath);

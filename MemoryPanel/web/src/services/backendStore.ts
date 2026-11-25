@@ -66,7 +66,13 @@ export interface Agent {
 }
 
 export type TaskStatus = 'running' | 'completed';
-export type TaskSourceType = 'manual' | 'tapd';
+/**
+ * 来源**大类**，与后端 TaskSourceType 对齐。
+ *
+ * 不含具体来源（tapd / jira / …）—— 那类信息读 `metadata_json.external.provider`，
+ * 见 readExternalProvider()。新增来源无需改这里。
+ */
+export type TaskSourceType = 'manual' | 'external' | 'other';
 
 export interface Task {
   task_id: string;
@@ -243,7 +249,8 @@ export function adaptTask(bt: BackendTask, linkedAgents: string[]): Task {
     participants: ui.participants,
     title: bt.title,
     description: bt.description ?? '',
-    source_type: bt.source_type === 'tapd' ? 'tapd' : 'manual',
+    // 大类即可：具体来源在 metadata_json.external.provider 里。
+    source_type: bt.source_type === 'manual' ? 'manual' : ('external' as TaskSourceType),
     source_url: bt.source_url ?? '',
     linked_agents: linkedAgents,
     status: normalizeTaskStatus(bt.status),

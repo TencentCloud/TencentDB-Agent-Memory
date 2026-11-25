@@ -1066,6 +1066,10 @@ async function uploadViaConversationAdd(client: PanelClient, ctx: WriteCtx, inpu
           ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
           ...(m.tool_name ? { tool_name: m.tool_name } : {}),
         })),
+        // 冷启动固定走严格模式:批量灌入历史会话时,只捕获高价值 SOP (v1 五分类+四维打分 gate),
+        // 避免 v2 宽松 prompt 抽出成百上千个 Background/Preference 类低价值 skill 淹没库。
+        // 服务端 fallback: SkillTaskEntry.mode='strict' → Worker → SkillExtractor STRICT prompt。
+        strict_mode: true,
       };
       const env = await client.post('/skill/conversation/add', body);
       if (env.code !== 0) {
@@ -1432,6 +1436,13 @@ async function main(): Promise<void> {
     if (ids.size) sessions = sessions.filter((s) => ids.has(s.sessionId));
   }
   console.log(`[探测] kind=${kind}${workspaceLabel} skills=${skills.length} sessions=${sessions.length}`);
+  if (sessions.length > 0) {
+    console.log(
+      '[skill 抽取模式] 冷启动固定使用严格模式 (strict_mode=true) — 只捕获高价值 SOP,\n' +
+      '                 减少 Background/Preference 类低价值 skill 噪音。' +
+      '实时抽取(日常代理调用)仍走宽松默认模式。',
+    );
+  }
   sessions = await selectItems(
     `上传 session 到 agent ${agent.agentId}`,
     sessions,

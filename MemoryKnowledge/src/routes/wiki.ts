@@ -18,9 +18,10 @@
 
 import { Hono } from "hono";
 
-import type { WikiService } from "../store/index.js";
+import type { WikiService, RawContent } from "../store/index.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
 import type { WikiStatus } from "../store/index.js";
+import { maxBytesOf, toWireFormats } from "../document-converter/format-registry.js";
 import {
   extractIdFields,
   isValidIdSegment,
@@ -74,6 +75,9 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     const wikiId = body.wiki_id;
     if (!isValidIdSegment(wikiId)) return c.json(wrapError(400, "wiki_id is required"), 400);
     const requesterUserId = typeof body.user_id === "string" && body.user_id ? body.user_id : undefined;
+    // 设计 2026-09-21 §3.3：可选 on_busy，默认 'reject' 保持原并发拒绝语义；
+    // 'replace' 由 Panel 复合端点专用（取消旧任务 + 排队新任务）。
+    const onBusy = body.on_busy === "replace" ? "replace" : "reject";
 
     const row = wikiService.getById(serviceId, wikiId);
     if (!row) return c.json(wrapError(404, "wiki not found"), 404);
@@ -84,13 +88,21 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       return c.json(wrapError(400, "wiki has no source files, upload before ingest"), 400);
     }
 
-    const result = wikiService.ingest(serviceId, row.team_id, wikiId, requesterUserId);
+    const result = wikiService.ingest(serviceId, row.team_id, wikiId, requesterUserId, { onBusy });
     if (result.kind === "not_found") return c.json(wrapError(404, "wiki not found"), 404);
     if (result.kind === "busy") {
       // 并发拒绝：干净最小的 409 响应体（调用方用 code 判断，不 parse message）。
       return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
     }
-    return c.json(wrapOk({ wiki_id: result.row.wiki_id, status: result.row.status }), 202);
+    // ok = 直接入队；queued = 已有在途任务，按 replace 取消旧任务后排队新任务。
+    return c.json(
+      wrapOk({
+        wiki_id: result.row.wiki_id,
+        status: result.row.status,
+        queued: result.kind === "queued",
+      }),
+      202,
+    );
   });
 
   app.post("/delete", async (c) => {
@@ -160,10 +172,25 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     const name = body.name;
     if (typeof name !== "string" || !name) return c.json(wrapError(400, "name is required"), 400);
 
+    // 外部来源（iWiki 等）：source_type 决定详情页 UI 走「上传文件」还是「从外部拉取」。
+    // 二者必须成对出现：有 URL 无类型 → 前端无法判断来源；有类型无 URL → 导入无从下手。
+    const sourceType =
+      typeof body.source_type === "string" && body.source_type ? body.source_type : undefined;
+    const sourceUrl =
+      typeof body.source_url === "string" && body.source_url ? body.source_url : undefined;
+    if (sourceType && !sourceUrl) {
+      return c.json(wrapError(400, "source_url is required when source_type is set"), 400);
+    }
+    if (sourceUrl && !sourceType) {
+      return c.json(wrapError(400, "source_type is required when source_url is set"), 400);
+    }
+
     const { row, existed } = wikiService.create({
       service_id: ids.service_id,
       team_id: ids.team_id,
       name,
+      source_type: sourceType,
+      source_url: sourceUrl,
       owner_user_id: ids.user_id,
       user_id: ids.user_id,
       agent_id: ids.agent_id,
@@ -195,6 +222,20 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     const items = wikiService.list(ids.service_id, ids.team_id, { syncStatus: status, limit, offset });
     const total = wikiService.count(ids.service_id, ids.team_id, status ? { syncStatus: status } : undefined);
     return c.json(wrapOk({ items: items.map(toWikiDetail), total }));
+  });
+
+  /**
+   * 格式注册表下发 —— **单一真源**的唯一出口。
+   *
+   * Panel 与前端的白名单 / 上传通道 / 大小档位 / 预览形态全部从此派生，
+   * 不再各自硬编码扩展名清单。新增一种格式只需在
+   * `document-converter/format-registry.ts` 加一条，全链路自动生效。
+   */
+  app.post("/formats", async (c) => {
+    // 显式投影：只下发 Panel 实际消费的字段（含运行时算出的 maxBytes），
+    // 后端内部实现细节（htmlPostProcessor / markdownPostProcessor / note / ...）
+    // 不通过 API 泄漏。见 `toWireFormats()` 文档。
+    return c.json(wrapOk({ items: toWireFormats() }));
   });
 
   // ═══════════════════ File Layer raw/* ═══════════════════
@@ -235,7 +276,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     if (!row) return c.json(wrapError(404, "wiki not found"), 404);
 
     try {
-      const result = wikiService.rawReadMany(serviceId, row.team_id, wikiId, filenames);
+      const result = await wikiService.rawReadMany(serviceId, row.team_id, wikiId, filenames);
       const err = maybeWriteError(result);
       if (err) return err;
       return c.json(wrapOk({ items: result }));
@@ -259,16 +300,15 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       return c.json(wrapError(400, "files is required (non-empty array)"), 400);
     }
 
-    // 上传大小限制（防御纵深，Panel 侧已有同样校验）
-    const MAX_FILE_SIZE = 512 * 1024;
+    // 上传大小限制（防御纵深，Panel 侧已有同样校验，两处阈值语义必须一致）
     const MAX_FILES = 10;
-    const MAX_TOTAL = 5 * 1024 * 1024;
+    const MAX_TOTAL = 20 * 1024 * 1024;
     if (files.length > MAX_FILES) {
       return c.json(wrapError(413, `too many files (max ${MAX_FILES})`), 413);
     }
     let totalSize = 0;
 
-    const validated: { filename: string; content: string }[] = [];
+    const validated: { filename: string; content: RawContent }[] = [];
     for (const item of files) {
       if (!item || typeof item !== "object") {
         return c.json(wrapError(400, "files items must be {filename, content}"), 400);
@@ -280,12 +320,35 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       if (typeof r.content !== "string") {
         return c.json(wrapError(400, "content must be string for each file"), 400);
       }
-      const size = Buffer.byteLength(r.content, "utf-8");
-      if (size > MAX_FILE_SIZE) {
-        return c.json(wrapError(413, `file too large: ${r.filename} (max ${MAX_FILE_SIZE} bytes)`), 413);
+      // **默认 base64，缺省/utf8 兜底为 utf8**：
+      // - 文件上传路径（readUploadFile → 二进制文件）必传 base64，后端按原始
+      //   字节落盘。UTF-8 解码对二进制有损不可逆（非法字节 → U+FFFD）。
+      // - 手工粘贴 MD 场景（useWikiSources `knowledgeApi.wiki.upload({ content })`
+      //   不传 encoding）直接把字符串按 utf8 落盘，不必多走一次 base64 编码。
+      // 两条路径在同一端点内分流，与扩展名无关。
+      const encoding = r.encoding === "utf8" ? "utf8" : "base64";
+      let buf: Buffer;
+      try {
+        buf = Buffer.from(r.content, encoding);
+      } catch {
+        return c.json(wrapError(400, `invalid content encoding: ${r.filename}`), 400);
+      }
+      if (encoding === "base64") {
+        // 严格校验：非法 base64 会被 Buffer.from 静默忽略（产出乱码），必须拦下。
+        // Node 的 base64 解码是宽松的，故用正则 + 往返比对确认为严格 base64。
+        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(r.content) || buf.toString("base64") !== r.content) {
+          return c.json(wrapError(400, `invalid base64 content: ${r.filename}`), 400);
+        }
+      }
+      // 按**原始字节**计费：base64 串长比原始字节膨胀约 33%，按串长校验会误杀
+      const size = buf.length;
+      // 单文件上限按格式取（逐 ext 覆盖 > sizeTier 档位默认），见 maxBytesOf
+      const max = maxBytesOf(r.filename);
+      if (size > max) {
+        return c.json(wrapError(413, `file too large: ${r.filename} (max ${max} bytes)`), 413);
       }
       totalSize += size;
-      validated.push({ filename: r.filename, content: r.content });
+      validated.push({ filename: r.filename, content: buf });
     }
     if (totalSize > MAX_TOTAL) {
       return c.json(wrapError(413, `total too large (max ${MAX_TOTAL} bytes)`), 413);

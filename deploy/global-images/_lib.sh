@@ -178,7 +178,7 @@ check_llm_openai() {
     if grep -q "\"$model\"" "$body_file" 2>/dev/null; then
       ok "$label OpenAI 协议通路 OK（$model 在 /models 列表内）"
     else
-      ok "$label OpenAI 协议通路 OK（未在 /models 里显式列出 $model，业务侧仍可能可用）"
+      ok "$label OpenAI 协议通路 OK（未在 /models 里显式列出 ${model}，业务侧仍可能可用）"
     fi
   elif [[ "$code" == "401" || "$code" == "403" ]]; then
     warn "$label API key 无效（HTTP ${code}）：$url"
@@ -319,6 +319,26 @@ set_env_value() {
     ' "$file" > "$tmp" && mv "$tmp" "$file"
   else
     printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
+# ensure_knowledge_service_key
+#   Knowledge 服务间鉴权 key（Panel ↔ Knowledge 共用）。
+#   为空或占位符时自动生成随机值并回写 .env（幂等：已生成则复用，重启不漂移）。
+#   调用方随后把同一个值分两次注入 memory-hub 容器：
+#     KNOWLEDGE_SERVICE_KEY → Knowledge 进程校验侧
+#     KNOWLEDGE_AUTH_TOKEN  → Panel 进程调用侧
+ensure_knowledge_service_key() {
+  if [[ -z "${KNOWLEDGE_SERVICE_KEY:-}" || "${KNOWLEDGE_SERVICE_KEY}" == "REPLACE_ME" ]]; then
+    local rand
+    if command -v openssl >/dev/null 2>&1; then
+      rand="$(openssl rand -hex 24)"
+    else
+      rand="$(head -c 24 /dev/urandom | od -A n -t x1 | tr -d ' \n')"
+    fi
+    KNOWLEDGE_SERVICE_KEY="ks-svc-${rand}"
+    set_env_value KNOWLEDGE_SERVICE_KEY "$KNOWLEDGE_SERVICE_KEY" "$ENV_FILE"
+    info "已生成 KNOWLEDGE_SERVICE_KEY 并写回 ${ENV_FILE}（Panel 与 Knowledge 共用）"
   fi
 }
 

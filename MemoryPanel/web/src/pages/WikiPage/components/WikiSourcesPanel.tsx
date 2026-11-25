@@ -6,7 +6,7 @@
 import { useTranslation } from 'react-i18next';
 import { Button, Card, Form, Input, Justify, MetricsBoard, Modal, SearchBox, Segment, Select, StatusTip, Table, Text } from 'tea-component';
 import { BooksIcon, ChevronRightIcon, UsergroupIcon, ViewListIcon, ViewModuleIcon } from 'tea-icons-react';
-import { knowledgeApi } from '@/lib/api/knowledge-api';
+import { knowledgeApi, type SourceProviderFormField } from '@/lib/api/knowledge-api';
 import { tea } from '@/lib/tea-bridge';
 import AllocateAssetDialog from '@/components/asset/AllocateAssetDialog';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
@@ -48,6 +48,16 @@ export default function WikiSourcesPanel() {
     newName,
     setNewName,
     submitting,
+    // external source (iWiki etc.)
+    openCreate,
+    formSourceType,
+    setFormSourceType,
+    sourceProviders,
+    formCredential,
+    setFormCredential,
+    setCredentialField,
+    formSourceUrl,
+    setFormSourceUrl,
     // allocate
     allocateTarget,
     setAllocateTarget,
@@ -65,7 +75,6 @@ export default function WikiSourcesPanel() {
     stats,
     filteredSources,
     runningWikiIds,
-    ingestBusy,
   } = wiki;
 
   if (subView === 'detail') {
@@ -113,7 +122,7 @@ export default function WikiSourcesPanel() {
           // 创建（新增团队池资产）与 memory/skill 对齐，放右上角 header；
           // 仅「团队资产」tab 开放，固定资产 tab 只做绑定/查看。
           scopeTab !== 'fixed' ? (
-            <Button type="primary" onClick={() => setShowCreate(true)} data-guide="create-wiki">
+            <Button type="primary" onClick={openCreate} data-guide="create-wiki">
               {t('wiki.create')}
             </Button>
           ) : undefined
@@ -217,7 +226,6 @@ export default function WikiSourcesPanel() {
                   <WikiActions
                     source={source}
                     scopeTab={scopeTab}
-                    ingestBusy={ingestBusy}
                     isCurrentIngesting={runningWikiIds.has(source.wiki_id)}
                     onIngest={handleIngest}
                     onAllocate={setAllocateTarget}
@@ -301,7 +309,6 @@ export default function WikiSourcesPanel() {
                     <WikiActions
                       source={source}
                       scopeTab={scopeTab}
-                      ingestBusy={ingestBusy}
                       isCurrentIngesting={runningWikiIds.has(source.wiki_id)}
                       onIngest={handleIngest}
                       onAllocate={setAllocateTarget}
@@ -336,6 +343,92 @@ export default function WikiSourcesPanel() {
                   placeholder={t('wiki.create.placeholder')}
                 />
               </Form.Item>
+
+              {/* 来源选择：有启用来源时才显示 */}
+              {sourceProviders.length > 0 && (
+                <>
+                  <Form.Item label={t('wiki.register.source')}>
+                    <Select
+                      size="full"
+                      value={formSourceType}
+                      onChange={(value) => {
+                        setFormSourceType(value);
+                        setFormCredential({});
+                      }}
+                      options={[
+                        { value: '', text: t('wiki.register.sourcePublic') },
+                        ...sourceProviders.map((p) => {
+                          const key = `wiki.source.${p.id}`;
+                          const localized = t(key);
+                          return { value: p.id, text: localized === key ? p.id : localized };
+                        }),
+                      ]}
+                    />
+                  </Form.Item>
+
+                  {/* 凭据字段：按 provider.form_fields 动态渲染 */}
+                  {formSourceType &&
+                    (sourceProviders.find((p) => p.id === formSourceType)?.form_fields ?? []).map(
+                      (
+                        field: SourceProviderFormField,
+                        idx: number,
+                        arr: readonly SourceProviderFormField[],
+                      ) => {
+                        const provider = sourceProviders.find((p) => p.id === formSourceType)!;
+                        const isLast = idx === arr.length - 1;
+                        const labelKey = `code.credField.${field.name}.label`;
+                        const label = t(labelKey);
+                        const phKey = `code.credField.${field.name}.placeholder`;
+                        const ph = t(phKey);
+                        return (
+                          <Form.Item
+                            key={field.name}
+                            label={label === labelKey ? field.name : label}
+                            required={field.required}
+                            extra={
+                              isLast && provider.token_doc_url ? (
+                                <a
+                                  href={provider.token_doc_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="_wikilist-token-doc"
+                                >
+                                  {t('code.register.tokenDoc')}
+                                </a>
+                              ) : undefined
+                            }
+                          >
+                            <Input
+                              size="full"
+                              type={field.secret ? 'password' : 'text'}
+                              value={formCredential[field.name] ?? ''}
+                              onChange={(v) => setCredentialField(field.name, v)}
+                              placeholder={ph === phKey ? '' : ph}
+                            />
+                          </Form.Item>
+                        );
+                      },
+                    )}
+
+                  {/* 来源地址 */}
+                  {formSourceType && (
+                    <Form.Item
+                      label={t('wiki.register.sourceUrl')}
+                      required
+                      extra={t('wiki.register.sourceUrlExtra')}
+                    >
+                      <Input
+                        size="full"
+                        value={formSourceUrl}
+                        onChange={setFormSourceUrl}
+                        placeholder={t('wiki.register.sourceUrlPlaceholder')}
+                      />
+                    </Form.Item>
+                  )}
+                </>
+              )}
+
+              {/* 文档树只在详情页「添加」里出现：新建不再拉取列表（与手工新建一致） */}
             </Form>
           </Modal.Body>
           <Modal.Footer>
@@ -345,7 +438,7 @@ export default function WikiSourcesPanel() {
               disabled={submitting || !newName.trim()}
               loading={submitting}
             >
-              {submitting ? t('wiki.create.submitting') : t('wiki.create.submit')}
+              {t('wiki.create.submit')}
             </Button>
             <Button onClick={() => setShowCreate(false)} disabled={submitting}>
               {t('common.cancel')}

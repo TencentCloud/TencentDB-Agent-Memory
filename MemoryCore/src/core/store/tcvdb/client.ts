@@ -260,6 +260,15 @@ export class TcvdbClient {
     });
   }
 
+  async fullTextSearch(collection: string, searchParams: Record<string, unknown>): Promise<SearchResponse> {
+    return this.request<SearchResponse>("/document/fullTextSearch", {
+      database: this.database,
+      collection,
+      readConsistency: "strongConsistency",
+      search: searchParams,
+    });
+  }
+
   async hybridSearch(collection: string, searchParams: Record<string, unknown>): Promise<SearchResponse> {
     return this.request<SearchResponse>("/document/hybridSearch", {
       database: this.database,

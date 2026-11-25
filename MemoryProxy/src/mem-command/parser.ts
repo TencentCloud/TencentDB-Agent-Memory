@@ -43,6 +43,13 @@ const MEM_COMMANDS_ARGS: Record<string, boolean> = {
   "create-task": true,
   "update-task": true,
   "session-reset": false,
+  // v3.3 user-session-default (TAPD 1070195170):
+  //   config-lock  **接受 args** —— 仅在"已有旧配置且新旧不同"时需要二次确认,
+  //   此时用户回 `mem:config-lock confirm` 落库 / `cancel` 撤销。其余场景一步生效。
+  //   （PRD: "执行 mem:config-lock 前需展示待保存的配置并让用户确认，避免误覆盖"。）
+  //   config-unlock 严格匹配 —— 幂等清除, 无需确认。
+  "config-lock": true,
+  "config-unlock": false,
 };
 
 /**

@@ -300,6 +300,15 @@ export interface SkillExtractRequest extends SkillIdFields {
   /** Reason the primary agent decided to trigger extract; injected into the review prompt. */
   reason?: string;
   options?: SkillExtractOptions;
+  /**
+   * Cold-start / bulk-import flag. Set `true` to run the strict skill review
+   * prompt (v1 five-class classification + four-dimension ≥72 acceptance gate)
+   * used by `agents/setup-proxy.sh` → `agents/asset-import.ts` when replaying
+   * historical sessions in bulk. Default (unset / false) uses the current v2
+   * broad-capture prompt — realtime extraction behaviour is unchanged.
+   * Fully backward compatible: server treats missing/false as the default path.
+   */
+  strict_mode?: boolean;
 }
 /**
  * Direct-trigger returns immediately after the archive is written; the
@@ -365,6 +374,15 @@ export interface SkillConversationAddRequest {
   task_id?: string;
   /** 1–500 messages per call. Bytes are additionally bounded by handler thresholds. */
   messages: SkillConversationMessage[];
+  /**
+   * Cold-start / bulk-import flag. When this call trips an archive threshold
+   * and the resulting task is later processed by the extract worker, `true`
+   * routes it through the strict v1 skill review prompt (five-class
+   * classification + four-dimension acceptance gate). Default (unset / false)
+   * uses the current v2 broad-capture prompt — realtime turn-by-turn ingest
+   * behaviour is unchanged. Fully backward compatible.
+   */
+  strict_mode?: boolean;
 }
 
 /**

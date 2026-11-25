@@ -25,6 +25,9 @@ export const zhCN = {
   'menu.desc.team_agents': 'Agent / 可配置范围 / 固定资产',
   'menu.desc.api_keys': '管理你的 API Key，用于外部客户端接入',
 
+  // ===== TabBar =====
+  'tabbar.close': '关闭{{name}}',
+
   // ===== GlobalHeader =====
   'header.guide': '使用说明',
   'header.sync': '实时同步',
@@ -137,6 +140,8 @@ export const zhCN = {
   // ===== Common =====
   'common.cancel': '取消',
   'common.confirm': '确认',
+  'common.selectAll': '全选',
+  'common.deselectAll': '取消全选',
   'common.delete': '删除',
   'common.create': '创建',
   'common.save': '保存',
@@ -196,6 +201,52 @@ export const zhCN = {
   'task.sessionAgents': '实际参与 Agent',
   'task.sessionAgents.tooltip': 'proxy 侧观测到起过 session 的 agent · agent_id={{id}}',
   'task.description': '任务描述',
+  'task.sourceLink': '在 {{source}} 中查看',
+
+
+  // ===== Task 外部来源（导入 Task）=====
+  'task.import': '导入 Task',
+  'task.importFrom': '从 {{source}} 导入',
+  'task.source': '来源',
+  'task.source.tapd': 'TAPD',
+  'taskImport.caption': '导入 Task',
+  'taskImport.captionFrom': '从 {{source}} 导入 Task',
+  'taskImport.authHint': '需要授权以访问 {{provider}}。点击下方按钮完成授权，令牌不会保存在浏览器。',
+  'taskImport.connect': '连接',
+  'taskImport.refresh': '刷新状态',
+  'taskImport.workspace': '项目：',
+  'taskImport.selectWorkspace': '请选择项目',
+  'taskImport.next': '下一步',
+  'taskImport.searchPlaceholder': '按标题搜索',
+  'taskImport.search': '搜索',
+  'taskImport.filter': '过滤',
+  'taskImport.total': '共 {{count}} 条',
+  'taskImport.type': '类型：',
+  'taskImport.title': '标题：',
+  'taskImport.status': '状态',
+  'taskImport.updated': '更新时间',
+  'taskImport.import': '导入 {{count}} 项',
+  'taskImport.overLimit': '单次最多导入 {{max}} 项，请取消部分勾选。',
+  'taskImport.result': '成功导入 {{created}} 项，失败 {{failed}} 项。',
+  'taskImport.notConnected': '尚未连接来源系统，请先完成授权。',
+  'taskImport.tokenPlaceholder': '请输入令牌',
+  // 与 iWiki / 工蜂来源注册弹窗的「如何获取令牌？」保持同一文案与行为：
+  // 链接地址由部署配置下发，未配置则整条不显示。
+  'taskImport.tokenDoc': '如何获取令牌？',
+  'taskImport.allWorkspaces': '所有项目',
+  'taskImport.needWorkspace': '请先选择项目（TAPD 接口要求必须指定项目）',
+  'taskImport.tokenInvalid.empty': '请输入令牌',
+  'taskImport.tokenInvalid.placeholder': '检测到占位符文本，请填写完整令牌（不要复制示例中的省略号）',
+  'taskImport.tokenInvalid.tooShort': '令牌长度不足，请检查是否复制完整',
+  'taskImport.noWorkspaces': '令牌已通过校验，但该账号下没有可访问的项目。请确认令牌所属账号有 TAPD 项目权限。',
+  'taskImport.allTypes': '全部类型',
+  'taskImport.titlePlaceholder': '按标题关键字',
+  'taskImport.ownerPlaceholder': '输入处理人账号',
+  'taskImport.owner': '处理人：',
+  'taskImport.onlyTodo': '待办',
+  'taskImport.onlyTodoHint': '待办接口不支持标题与处理人筛选',
+  'taskImport.submit': '提交',
+  'taskImport.selected': '已选 {{count}} 项',
   'task.descriptionPlaceholder': '包含背景、目标、验收标准…',
   'task.footer': '创建：{{created}} · 更新：{{updated}}',
   'task.noPermissionEdit': '你不是该 team 的成员，无权修改此 task。',
@@ -206,6 +257,11 @@ export const zhCN = {
   'task.agents.tooltip': '实际参与 Agent：\n{{agents}}',
   'task.peopleCount': '{{count}} 人',
   'task.agentCount': '{{count}} 个 Agent',
+  // ===== 任务卡片 =====
+  'task.noDesc': '暂无描述',
+  'task.createdAt': '创建于 {{time}}',
+  'task.source.manual': '手动创建',
+  'task.source.other': '其他',
 
   // ===== TaskCreateDialog =====
   'taskCreate.caption': '新建 Task',
@@ -226,6 +282,18 @@ export const zhCN = {
     'Admin 账号当前仅用于组织管理（新建 Team、新增成员）。资源管理请使用普通成员账号操作。',
 
   // ===== Wiki =====
+  // 设计 2026-09-21：合并后的单一导入入口（替代原「添加」+「Ingest」）
+  'wiki.detail.import': '导入文档',
+  'wiki.import.caption': '导入文档',
+  'wiki.import.uploadAndIngest': '上传并抽取',
+  'wiki.import.importAndIngest': '导入并抽取',
+  'wiki.import.reingest': '重新抽取',
+  'wiki.import.selectedPages': '已选 {{count}} 个页面',
+  'wiki.detail.mdName': '文件名（如 note.md）',
+  'wiki.detail.mdContent': 'Markdown 内容',
+  'wiki.detail.mdNameRequired': '请填写文件名（如 note.md）',
+  'wiki.detail.mdContentRequired': '请填写 Markdown 内容',
+  'common.remove': '移除',
   'wiki.title': 'Wiki 知识库',
   'wiki.breadcrumb': 'Wiki 知识库',
   'wiki.scope.all': '全部',
@@ -293,13 +361,15 @@ export const zhCN = {
   'wiki.detail.addDoc.hint': '选择方式导入文档',
   'wiki.detail.addDoc.file': '上传文件',
   'wiki.detail.addDoc.markdown': 'Markdown',
-  'wiki.detail.dropzone': '拖拽或点击选择 Markdown 文件（可多选）',
+  'wiki.detail.addDoc.external': '外部来源（iWiki 等）',
+  'wiki.detail.dropzone': '拖拽或点击选择文件（可多选，支持 .md/.txt/.docx/.xlsx/.pptx/.pdf 等）',
   'wiki.detail.upload.footer': '{{count}} 个文件待上传',
+  'wiki.detail.upload.fileTooLarge': '{{filename}} 超过大小上限（{{maxMB}} MB），已取消上传。',
   'wiki.detail.upload.submitting': '上传中…',
   'wiki.detail.upload.confirm': '确认上传',
   'wiki.detail.md.add': '+ 添加一条',
   'wiki.detail.md.pending': '{{count}} 个待上传',
-  'wiki.detail.ignored': '已忽略 {{count}} 个非 Markdown 文件（仅支持 .md/.txt/.markdown）',
+  'wiki.detail.ignored': '已忽略 {{count}} 个不支持的文件（支持 .md/.markdown/.txt/.html/.htm/.csv/.docx/.xlsx/.pptx/.pdf/.odt/.ods/.odp/.odg/.rtf/.epub）',
   'wiki.detail.overwrite.title': '检测到 {{count}} 个同名文件',
   'wiki.detail.overwrite.desc': '继续上传将覆盖原有内容：{{files}}',
   'wiki.detail.overwrite.ok': '覆盖并上传',
@@ -432,16 +502,68 @@ export const zhCN = {
   'code.register.caption': '注册代码仓库',
   'code.register.gitUrl': 'Git URL',
   'code.register.gitUrlExtra': '注册后将自动 clone 并建立代码索引。',
+  // Git URL 输入框示例：按「来源」切换（SSH 来源显示 git@，其余保持 https://）。
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
+  'code.register.gitUrlPlaceholderSsh': 'git@github.com:namespace/repo.git 或 ssh://git@host:2222/namespace/repo.git',
   'code.register.branch': '分支',
-  'code.register.sshWarning':
-    '当前版本不支持 SSH 格式的仓库地址，请改用 HTTPS 格式（如 https://gitlab.example.com/namespace/repo.git）。',
+  'code.register.sshHint':
+    '已识别为 SSH 仓库。点击「注册」后会先为你生成 SSH 公钥，请把公钥添加到代码平台后再继续。',
   'code.register.urlError':
-    '请输入合法的 HTTP(S) Git 仓库地址，且必须以 .git 结尾（如 https://gitlab.example.com/namespace/repo.git），不能含空格。',
+    '请输入合法的 Git 仓库地址（HTTPS 或 SSH），且必须以 .git 结尾，不能含空格。',
   'code.register.invalidUrl':
-    '请输入合法的 HTTPS Git 仓库地址，且必须以 .git 结尾（如 https://gitlab.example.com/namespace/repo.git），不能含空格。',
+    '请输入合法的 Git 仓库地址：HTTPS 形如 https://gitlab.example.com/namespace/repo.git，SSH 形如 git@github.com:namespace/repo.git 或 ssh://git@host:2222/namespace/repo.git。',
   'code.register.submitting': '注册中…',
   'code.register.submit': '注册',
+  'code.register.source': '来源',
+  'code.register.sourceExtra': '私有仓库请选择来源并填写访问令牌；公开仓库保持「公开」即可。',
+  'code.register.sourceSshExtra': 'SSH 仓库无需令牌，使用你账号下的 SSH 密钥拉取。',
+  'code.register.sourcePublic': '公开（无需令牌）',
+  // 来源展示名按来源 id 本地化；后端若下发 display_name 则以其为准（见 CodeSourcesPanel）。
+  'code.source.gongfeng': '腾讯工蜂',
+  'code.source.ssh': 'SSH',
+  // SSH 公钥（两段式注册第 1 段）
+  'code.sshKey.caption': '配置 SSH 公钥',
+  'code.sshKey.publicKey': 'SSH 公钥',
+  'code.sshKey.copy': '复制',
+  'code.sshKey.guideTitle': '请按以下步骤完成配置：',
+  'code.sshKey.guideStep1': '复制上方公钥；',
+  'code.sshKey.guideStep2': '到代码平台的 SSH Keys 设置页添加该公钥；',
+  'code.sshKey.guideStep3': '确认添加完成后，点击右下角「已配置，继续注册」。',
+  'code.sshKey.guideNote': '同一账号只会生成一次密钥，之后注册其它 SSH 仓库可直接复用，无需重复配置。',
+  'code.sshKey.continue': '已配置，继续注册',
+  'code.register.token': '访问令牌',
+  // 凭据字段 i18n：按 form_field.name 组织，支持不同认证方式的动态渲染
+  'code.credField.secret.label': '访问令牌',
+  'code.credField.secret.placeholder': '粘贴你的 Personal Access Token',
+  'code.credField.username.label': '用户名',
+  'code.credField.username.placeholder': '仓库账户名',
+  // wiki 外部来源（iWiki 等）
+  'wiki.source.iwiki': 'iWiki',
+  'wiki.register.source': '来源',
+  'wiki.register.sourcePublic': '本地上传',
+  'wiki.register.sourceUrl': '来源地址',
+  'wiki.register.sourceUrlPlaceholder': '粘贴空间或文档链接（…/spaces/xxx 或 …/p/xxx）',
+  'wiki.register.sourceUrlExtra': 'iWiki 空间地址导入整库，单文档地址只导入该页。',
+  'wiki.register.fetch': '获取文档列表',
+  'wiki.register.fetching': '正在获取…',
+  'wiki.register.saveAndFetch': '保存令牌并获取',
+  'wiki.register.credHint': '令牌按 wiki 保存，同一 wiki 只需填写一次；保存后才可拉取文档。',
+  'wiki.register.crawlMode': '遍历方式',
+  'wiki.register.crawlMode.tree': '遍历子文档',
+  'wiki.register.crawlMode.links': '遍历文本超链接',
+  'wiki.register.crawlHint.tree': '按目录结构逐层展开，覆盖完整；空间较大时耗时较长。',
+  'wiki.register.crawlHint.links': '从页面正文里的超链接发现文档，固定 1 层（只取入口页直接链接到的页面）。',
+  'wiki.register.selectPages': '选择要导入的文档',
+  'wiki.register.selectedCount': '已选 {{count}} / {{total}} 篇',
+  'wiki.register.dirCount': '{{count}} 篇',
+  'wiki.register.emptyTree': '该地址下没有可导入的文档',
+  'wiki.register.import': '确认导入',
+  'wiki.register.importing': '正在导入…',
+  'wiki.register.imported': '已导入 {{n}} 篇文档',
+  'wiki.register.dirHint': '目录（不可单独导入）',
+  'code.register.tokenPlaceholder': '粘贴你的 Personal Access Token',
+  'code.register.tokenDoc': '如何获取令牌？',
+  'code.register.tokenRequired': '选择了外部来源，请填写访问令牌',
   'code.confirm.delete': '确定要删除仓库「{{name}} ({{branch}})」吗？',
   'code.confirm.unbind': '确认解绑该代码图谱？',
   'code.confirm.unbind.desc': '将从当前 agent 移除该代码图谱绑定。',
@@ -481,7 +603,7 @@ export const zhCN = {
   'skills.import.tooltip.noAgent': '当前 team 暂无 agent，请先创建 agent',
   'skills.export': '导出 Skill',
   'skills.export.tooltip.empty': '请先选择一个 Skill',
-  'skills.export.partial': '部分文件导出失败：{warnings}',
+  'skills.export.partial': '部分文件导出失败：{{warnings}}',
   'skills.export.timeout': '导出超时，请稍后重试',
   'skills.tag.private': '私密',
   'skills.tag.shared': '共享',
@@ -564,7 +686,8 @@ export const zhCN = {
 
   // ===== ImportSkillDialog =====
   'importSkill.caption': '导入 Skill',
-  'importSkill.hint': '上传 SKILL.md 目录，或粘贴一段对话让系统自动提炼出 skill。',
+  'importSkill.hint':
+    '上传 SKILL.md 目录、一个或多个 Skill 压缩包，或粘贴一段对话让系统自动提炼出 skill。',
   'importSkill.agent': '归属 Agent（必选）',
   'importSkill.agent.extra':
     'Skill 将作为该 agent 的固定资产 —— 仅当 task 关联了该 agent 时才会被加载。',
@@ -572,6 +695,7 @@ export const zhCN = {
   'importSkill.agent.noAgent':
     '当前 team 暂无 agent，无法导入。请先到团队管理中创建至少一个 agent。',
   'importSkill.mode.directory': '目录导入',
+  'importSkill.mode.zip': '压缩包导入',
   'importSkill.mode.session': '对话导入',
   'importSkill.directory.label': '选择本地目录（应包含 SKILL.md 和可选的 files/ 子目录）',
   'importSkill.directory.selectFile': '选择文件夹',
@@ -581,6 +705,40 @@ export const zhCN = {
   'importSkill.directory.resources': '资源文件：{{count}} 个',
   'importSkill.directory.warning':
     '目录中找不到 SKILL.md。请确保至少有一个 SKILL.md 在根目录或 <skill-name>/ 下。',
+  'importSkill.zip.label': '选择压缩包（.zip，可多选；一个压缩包 = 一个 Skill）',
+  'importSkill.zip.multiHint':
+    '支持一次选择多个 .zip。包内目录结构需与目录导入一致：SKILL.md 在压缩包根目录或 <skill-name>/ 下，其余文件作为资源文件导入。单个包对应一个 Skill，包含多个 SKILL.md 的包会被跳过。',
+  'importSkill.zip.dropHint': '将 .zip 压缩包拖拽到此处，或点击下方按钮选择（可多选）',
+  'importSkill.zip.selectFile': '选择压缩包',
+  'importSkill.zip.clear': '清空',
+  'importSkill.zip.picked': '已选择 {{count}} 个压缩包',
+  'importSkill.zip.parsing': '解析中…',
+  'importSkill.zip.ready': '{{count}} 个资源文件，结构校验通过',
+  'importSkill.zip.invalid': '结构校验未通过',
+  'importSkill.zip.submit': '导入 {{count}} 个 Skill',
+  'importSkill.zip.done': '完成',
+  'importSkill.zip.summary': '导入完成：成功 {{ok}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个',
+  'importSkill.zip.result.ok': '{{count}} 个资源文件',
+  'importSkill.zip.result.skipped': '已跳过：{{reason}}',
+  'importSkill.zip.result.failed': '导入失败：{{reason}}',
+  'importSkill.zip.error.notZip': '不是有效的 .zip 压缩包',
+  'importSkill.zip.error.empty': '压缩包内没有文件',
+  'importSkill.zip.error.noSkillMd':
+    '压缩包内未找到 SKILL.md（需位于根目录或 <skill-name>/ 下）',
+  'importSkill.zip.error.noFrontmatter':
+    'SKILL.md 缺少 YAML frontmatter（文件需以 --- 开头的 name/description 块开始）',
+  'importSkill.zip.error.noDescription': 'SKILL.md 的 frontmatter 缺少必填字段 description',
+  'importSkill.zip.error.invalidName':
+    'SKILL.md 的 name「{{name}}」不合法（只能是小写字母/数字/连字符，且以字母或数字开头，最长 64 字符）',
+  'importSkill.zip.error.bodyTooLong': 'SKILL.md 正文超过 {{size}} 字符上限',
+  'importSkill.zip.error.multiSkill':
+    '压缩包内包含多个 SKILL.md，一个压缩包只能对应一个 Skill，请拆分后重试',
+  'importSkill.zip.error.unsafePath': '压缩包内存在非法路径（绝对路径或包含 ".."）：{{path}}',
+  'importSkill.zip.error.tooLarge': '压缩包超过 {{size}} 上限',
+  'importSkill.zip.error.totalTooLarge':
+    '解压后总大小超过 {{size}} 上限（受接口请求体限制）。请精简资源文件后重新打包。',
+  'importSkill.zip.error.tooManyEntries': '压缩包内文件数量超过 {{count}} 个上限',
+  'importSkill.zip.error.noReady': '没有结构校验通过的压缩包，请检查包内是否包含 SKILL.md。',
   'importSkill.session.hintPrefix':
     '粘贴一段与该 agent 的对话，系统会自动从中提炼可复用的 skill 沉淀到该 agent 下。对话 JSON 需包含 ',
   'importSkill.session.hintSuffix': ' 数组。',
@@ -598,6 +756,8 @@ export const zhCN = {
   'importSkill.error.tooManyMessages':
     '对话消息过多（{{count}} 条），接口最多支持 500 条，请删减后重试。',
   'importSkill.error.noMainFile': '请选择包含 SKILL.md 的目录。',
+  'importSkill.error.payloadTooLarge':
+    '内容过大（约 {{actual}}），超过单次导入上限 {{size}}。请减少资源文件体积后重试。',
   'importSkill.error.noName':
     '无法从 SKILL.md 或目录结构推断 skill 名称，请检查 frontmatter 或目录布局。',
   'importSkill.result.session':
@@ -1135,10 +1295,24 @@ export const zhCN = {
   'wiki.ingest.warning': '已有 Wiki 正在提取，请等待当前任务完成后再试。',
   'wiki.ingest.stateRecovery': '状态恢复：{{stage}}{{pageHint}}',
   'wiki.ingest.currentPage': '，当前 {{count}} 页',
+  // 自动检查暂停（issue #1917：轮询必须有界）。文案必须如实说明"只是停止自动
+  // 检查"，既不宣称完成也不宣称失败 —— 后台可能仍在处理。
+  'wiki.ingest.pollPaused.timeout': '已自动检查 {{minutes}} 分钟，自动检查已暂停；抽取可能仍在后台进行，可点「重新检查」再次获取状态。',
+  'wiki.ingest.pollPaused.network': '连续多次无法读取抽取状态，自动检查已暂停；请检查网络后点「重新检查」。',
+  'wiki.detail.recheck': '重新检查',
   'wiki.notify.readRawFailed': '读取原始文档失败',
+  'wiki.notify.rawNotFound': '原始文档不存在或已被删除',
   'wiki.notify.uploadCancelled': '获取已有文档失败，已取消上传',
   'wiki.error.selectTeam': '请先选择 team',
   'wiki.detail.md.placeholder': '# 标题',
+  // 原始文档预览失败原因（错误码来自 KS 转换层）
+  'wiki.rawPreview.unsupported': '暂不支持预览该文件类型',
+  'wiki.rawPreview.mismatch': '文件内容与扩展名不符，无法解析',
+  'wiki.rawPreview.encrypted': '文档已加密，需要密码才能解析',
+  'wiki.rawPreview.scannedPdf': '扫描件 PDF 无可提取文本（未开启 OCR）',
+  'wiki.rawPreview.notReady': '文档解析组件未就绪，请联系管理员',
+  'wiki.rawPreview.timeout': '文档解析超时，文件可能过大',
+  'wiki.rawPreview.failed': '文档解析失败，无法预览',
 
   // ===== skill-api =====
   'skillApi.error.unauthorized': 'Unauthorized - 用户登录已失效或缺少用户密钥',
@@ -1264,10 +1438,12 @@ export const zhCN = {
   'error.NO_VALID_MESSAGES': '没有可导入的有效消息。',
   'error.MISSING_WIKI_ID': '缺少 Wiki 信息。',
   'error.WIKI_NOT_FOUND': 'Wiki 不存在或已被删除。',
-  'error.WIKI_EMPTY_NO_SOURCES': 'Wiki 还没有上传源文件，请先上传 .md 文件后再抽取。',
+  'error.WIKI_EMPTY_NO_SOURCES': 'Wiki 还没有上传源文件，请先上传文件后再抽取。',
   'error.MISSING_FILES': '请至少上传一个文件。',
   'error.TOO_MANY_FILES': '上传文件数量超过限制（最多 10 个），请分批上传。',
-  'error.FILE_TOO_LARGE': '单个文件不能超过 512KB，请精简后再上传。',
+  // 不写死 512KB：上限按格式档位动态取（文本档 512KB / 富文档档 10MB，
+  // 且支持按格式覆盖），写死会误导用户以为所有格式都是 512KB。
+  'error.FILE_TOO_LARGE': '单个文件超过该格式的大小上限，请精简后再上传。',
   'error.TOTAL_TOO_LARGE': '单次上传总量不能超过 5MB，请分批上传。',
   'error.MISSING_CODE_GRAPH_ID': '缺少 CodeGraph 信息。',
   'error.CODE_GRAPH_NOT_FOUND': 'CodeGraph 不存在或已被删除。',
@@ -1332,7 +1508,7 @@ export const zhCN = {
   // 文案统一按「是什么 → 怎么导入 → 怎么使用」三段展开，帮首次用户建立完整心智）
   'onboarding.guide.asset.wiki.title': 'Wiki 知识库：团队文档资产',
   'onboarding.guide.asset.wiki.desc':
-    '是什么：沉淀团队共享文档的知识库。怎么导入：点击「新建 Wiki」创建知识库 → 进入详情上传 Markdown 文件（.md/.txt，支持多选与拖拽）→ 手动触发「知识抽取」生成可检索的知识页面。怎么用：在 Wiki 卡片点「分配给 Agent」，或在 Agent 编辑弹窗勾选；绑定后 Agent 对话时即可检索引用这些文档。',
+    '是什么：沉淀团队共享文档的知识库。怎么导入：点击「新建 Wiki」创建知识库 → 进入详情上传文件（支持 .md/.txt/.docx/.xlsx/.pptx/.pdf 等，支持多选与拖拽）→ 手动触发「知识抽取」生成可检索的知识页面。怎么用：在 Wiki 卡片点「分配给 Agent」，或在 Agent 编辑弹窗勾选；绑定后 Agent 对话时即可检索引用这些文档。',
   'onboarding.guide.asset.code.title': 'CodeGraph：团队代码资产',
   'onboarding.guide.asset.code.desc':
     '是什么：对团队代码仓库建立的索引与调用关系图谱。怎么导入：点击「注册仓库」，粘贴 Git HTTPS 地址，系统自动完成索引构建。怎么用：「分配给 Agent」后，Agent 对话时可直接检索代码、探索调用链，回答仓库相关问题。',
@@ -1780,4 +1956,51 @@ export const zhCN = {
   'analytics.drill.categoryHint': '该类资产的调用',
   'analytics.drill.knowledgeAmbiguous':
     'Wiki 与 Code Graph 同属 knowledge-service，内核仅支持按 bridge_source 过滤，因此以下结果包含 knowledge 全部调用，无法只显示单一类别。',
+
+  // ===== SessionDefault（v3.3 用户级 Session 默认 Team/Agent/Task 三元组）=====
+  'sessionDefault.title': 'Session 默认配置',
+  'sessionDefault.desc': '新 Session 自动使用，跳过选择。',
+  'sessionDefault.empty': '尚未设置',
+  'sessionDefault.create': '设置默认',
+  'sessionDefault.create.tooltip': '选择默认的 Team / Agent / Task',
+  'sessionDefault.edit': '修改',
+  'sessionDefault.edit.tooltip': '修改默认配置',
+  'sessionDefault.clear': '清除',
+  'sessionDefault.clear.tooltip': '清除后新 Session 恢复手动选择',
+  'sessionDefault.clear.confirm': '确认清除默认配置？',
+  'sessionDefault.clear.desc': '清除后新 Session 恢复手动选择，已开始的会话不受影响。',
+  'sessionDefault.clear.ok': '清除',
+
+  // Dialog
+  'sessionDefault.dialog.create.caption': '设置 Session 默认',
+  'sessionDefault.dialog.edit.caption': '修改 Session 默认',
+  'sessionDefault.dialog.desc': '依次选择 Team、Agent、Task。配置失效时会自动回退到手动选择，不会打断对话。',
+  'sessionDefault.dialog.submit': '保存',
+  'sessionDefault.dialog.cancel': '取消',
+
+  // Fields
+  'sessionDefault.field.team': 'Team',
+  'sessionDefault.field.agent': 'Agent',
+  'sessionDefault.field.task': 'Task',
+
+  // Placeholders
+  'sessionDefault.team.placeholder.select': '选择 Team',
+  'sessionDefault.team.placeholder.empty': '你尚未加入任何 Team',
+  'sessionDefault.agent.placeholder.select': '选择 Agent',
+  'sessionDefault.agent.placeholder.needTeam': '请先选择 Team',
+  'sessionDefault.agent.placeholder.empty': '当前 Team 下没有可用的 Agent',
+  'sessionDefault.task.placeholder.select': '选择 Task 或"不绑定任何 Task"',
+  'sessionDefault.task.placeholder.needTeam': '请先选择 Team',
+  'sessionDefault.task.extra': '选"default"则不关联 Task，记忆在该 Agent 全部记忆中召回。',
+  'sessionDefault.task.sentinel.label': 'default（不绑定任何 Task）',
+
+  // Summary rows
+  'sessionDefault.summary.team': 'Team',
+  'sessionDefault.summary.agent': 'Agent',
+  'sessionDefault.summary.task': 'Task',
+  'sessionDefault.summary.unresolved': '（已失效 / 无法读取）',
+
+  // Toast
+  'sessionDefault.notify.saved': '默认配置已保存，新 Session 将自动使用',
+  'sessionDefault.notify.cleared': '默认配置已清除',
 };

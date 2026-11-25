@@ -15,6 +15,31 @@
 import type { SessionInitConfig } from "../types.js";
 import type { TeamOption } from "./types.js";
 
+/**
+ * Agents whose identity is driven ENTIRELY by request headers
+ * (`x-team-id` / `x-agent-id` / `x-task-id`) and which have **no interactive
+ * form UI** to fall back on:
+ *
+ *   - `pi`       — openai-chat, no `ask_followup_question` tool in body.tools
+ *   - `hermes`   — anthropic, no ask-user tool available
+ *   - `openclaw` — anthropic, same as hermes
+ *
+ * For these clients, `handleSessionInit` MUST NOT emit a fake tool_call form
+ * on preset failure/mismatch — the client renders unknown tool_use as an
+ * error. See `session/codebuddy/init.ts` header-preselect branch and the
+ * `mem:session-reset` pre-hooks in `handler.ts` / `anthropicHandler.ts`.
+ */
+export const HEADER_ONLY_AGENTS: ReadonlySet<string> = new Set([
+  "hermes",
+  "openclaw",
+  "pi",
+]);
+
+/** True when the agent has no interactive form UI to fall back on. */
+export function isHeaderOnlyAgent(agentSource: string | undefined | null): boolean {
+  return !!agentSource && HEADER_ONLY_AGENTS.has(agentSource);
+}
+
 /** Raw identity values parsed from request headers (may be partial / absent). */
 export interface PresetIdentity {
   teamId?: string;
@@ -41,6 +66,15 @@ export interface PresetResolution {
    * back to the interactive form (or bypass) per `headerAutoSelect.onMismatch`.
    */
   hadMismatch: boolean;
+  /**
+   * v3.3 user-session-default: 命中账户默认时携带的 agent 展示名。
+   *
+   * 用途: 账户默认允许选 team 可见的、别人 owner 的 agent, 而 `cachedTeams[].agents`
+   * 只含 owner=self 的 agent —— 下游 findTeamIdForAgent 会匹配不到。调用方需要把
+   * 命中 agent 补进 cachedTeams 时用此名字填充 agent_name(仅展示用)。
+   * header preset 路径不设置该字段(undefined)。
+   */
+  agentName?: string;
 }
 
 /**

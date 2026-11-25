@@ -24,7 +24,9 @@ import {
   isRequestPrepareEnabledByDefault,
   shutdownRequestPrepare,
 } from "./request-prepare-adapter.js";
+import { DynamicConfigRuntime } from "./config-runtime.js";
 import { initLogger, shutdownLogger, log } from "./report/log.js";
+import { installUpstreamDispatcher } from "./common/upstream-dispatcher.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
 import { initTraceArchive, shutdownTraceArchive } from "./trace-archive.js";
@@ -48,6 +50,13 @@ initLogger({
 // Enable extension debug logging if log.level === "debug"
 setExtensionDebug(config.log.level === "debug");
 
+// ── Relax undici's default 300s body/header timeouts for upstream streams ────
+// Must run before any fetch is issued.
+installUpstreamDispatcher({
+  bodyTimeoutMs: config.server.upstreamBodyTimeoutMs,
+  headersTimeoutMs: config.server.upstreamHeadersTimeoutMs,
+});
+
 // ── Initialize ClickHouse writer ─────────────────────────────────────────────
 initClickHouse(config.clickhouse);
 
@@ -59,7 +68,7 @@ initClickHouse(config.clickhouse);
 
 // ── Initialize Langfuse tracing (official SDK) ───────────────────────────────
 initLangfuse(config).catch((err: unknown) => {
-  log.warn("langfuse.init_error", { error: String(err) });
+  log.warn("【P2】langfuse.init_error", { error: String(err) });
 });
 
 // ── Initialize auth client (user_key verification + user_id resolution) ──────
@@ -74,7 +83,7 @@ initSystemUsers(config.systemUsers);
 await initProxyStorage(config.storage);
 const effectiveStorage = getEffectiveBackend();
 if (config.storage.enabled && config.storage.backend === "cos" && effectiveStorage.effective !== "cos") {
-  log.warn("storage.degraded", {
+  log.warn("【P1】storage.degraded", {
     requested: effectiveStorage.requested,
     effective: effectiveStorage.effective,
     reason: effectiveStorage.error,
@@ -89,7 +98,7 @@ try {
   }
 } catch (err: unknown) {
   // A management-plane outage must not prevent the LLM data plane from starting.
-  log.warn("private_control_plane.start_failed", { error: String(err) });
+  log.warn("【P1】private_control_plane.start_failed", { error: String(err) });
 }
 
 // ── Bring up the optional request-preparation stage ─────────────────────────
@@ -98,7 +107,7 @@ if (isRequestPrepareActive(config)) {
   if (!config.redis.enabled) {
     // The stage keeps its cross-request state in Redis. Without it every
     // request starts cold — correct, but it gives up the shared cache.
-    log.warn("request_prepare.no_redis", {
+    log.warn("【P2】request_prepare.no_redis", {
       note: "costGuard.requestPrepare is configured but redis.enabled=false — running uncached",
     });
   }
@@ -111,7 +120,13 @@ if (isRequestPrepareActive(config)) {
   });
 }
 
-const app = createApp(config);
+const configRuntime = new DynamicConfigRuntime({
+  overrides,
+  initial: config,
+});
+configRuntime.start();
+
+const app = createApp(configRuntime.getSnapshot, () => configRuntime.getInfo());
 
 log.info("server.starting", {
   host: config.server.host,
@@ -149,7 +164,7 @@ serve(
 
     // ── Startup connectivity check (fire-and-forget, never blocks) ───────
     checkConnectivity(config).catch((err: unknown) => {
-      log.warn("connectivity.check_error", { error: String(err) });
+      log.warn("【P1】connectivity.check_error", { error: String(err) });
     });
   },
 );
@@ -161,6 +176,7 @@ serve(
 // k8s 默认 terminationGracePeriodSeconds=30s，10s 留出充足余量。
 async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   log.info("server.shutdown", { signal });
+  configRuntime.stop();
   const pending = pendingWriteCount();
   if (pending > 0) {
     log.info("server.shutdown.flush_l0", { pending });

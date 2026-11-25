@@ -288,7 +288,9 @@ export default function ApiKeyPanel() {
       <Card>
         <Card.Body title={t('apiKey.endpoint.title')}>
           {auth?.instance_name && (
-            <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--tea-color-text-secondary)' }}>
+            <div
+              style={{ marginBottom: 8, fontSize: 11, color: 'var(--tea-color-text-secondary)' }}
+            >
               {t('apiKey.endpoint.current')}
               <code>{auth.instance_name}</code>
               <span style={{ opacity: 0.6, marginLeft: 6 }}>({auth.instance_id})</span>
@@ -327,8 +329,8 @@ export default function ApiKeyPanel() {
                 // OpenAI Chat Completions（POST /v1/chat/completions），与 CB/dsh 同族。
                 // proxy 侧 agent-adapters/opencode.ts 已适配 form 回填 + mem: 命令族全套。
                 { label: 'OpenCode', url: `${base}/opencode/${iid}` },
-                { label: 'OpenClaw', url: `${base}/openclaw/default` },
-                { label: 'Hermes', url: `${base}/hermes/default` },
+                { label: 'OpenClaw', url: `${base}/openclaw/${iid}` },
+                { label: 'Hermes', url: `${base}/hermes/${iid}` },
               ];
               return endpoints.map((ep) => (
                 <div className="_memory-apikey-endpoint" key={ep.label}>

@@ -15,6 +15,8 @@ import { getEnv } from "../utils/env.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
+// v2.6 方案 E fallback:yaml 未配 supportedAgents 时用此常量
+import { DEFAULT_SUPPORTED_AGENTS_FALLBACK } from "../metadata/default-supported-agents.js";
 
 // ============================
 // Gateway config types
@@ -383,6 +385,19 @@ export interface GatewayConfig {
    */
   metadata: GatewayMetadataConfig;
   /**
+   * Task 外部来源配置（env 优先于 yaml；见 applyTaskSourceEnvFromGatewayConfig）。
+   * yaml: taskSource.*（驼峰键，与 metadata / skill 等段同风格）
+   * env:  TASK_SOURCE_* / TAI_PAT_URL
+   *
+   * 各来源下有哪些键由 provider 自己的 requiredEnv 声明，通用层不预设，
+   * 故 sources 用 Record 而非固定字段；驼峰键 → env 名的转换统一由
+   * task-source-env.ts 负责，此处只保留结构化配置。
+   *
+   * 注意：overrides 里若传本字段会**整体替换**（与 metadata / upstream 同，
+   * 不做一层浅合并），传部分字段会丢掉从 yaml 解析出的其余字段。
+   */
+  taskSource: GatewayTaskSourceConfig;
+  /**
    * Analytics 查询模块配置（读取 Proxy 侧 ClickHouse 的 usage/session/tool-call 数据）。
    * 与 observability.clickhouse（OTel 导出到 tdai_eval）完全独立。
    *
@@ -392,6 +407,21 @@ export interface GatewayConfig {
   analytics?: {
     clickhouse: ClickHouseConfig;
   };
+  /**
+   * v2 InstanceUpstream:supported-agents 元数据。
+   * 详见 docs/design/2026-08-25-instance-upstream-config.md §6.A 数据来源与同步机制。
+   *
+   * 事实源在 Proxy `src/supported-agents.ts` 代码常量;这里的 yaml 是 Core 侧运行时副本,
+   * 用于 §6.A supported-agents HTTP 接口 + Core store 层 seed default 组。
+   *
+   * 缺失或空数组时,Core 侧的 seed 逻辑触发时会拿到空数组 → 不 seed default 行,
+   * Panel B1 list 返回 items=[] → Proxy 侧走"零行 fallback",行为等同 v1(全走全局 upstream)。
+   * 这样保证 Core yaml 忘配也不会导致业务中断,但缺配置时 v2 面板 UI 表现异常(空列表)。
+   */
+  upstream: {
+    supportedAgents: import("../metadata/types.js").SupportedAgent[];
+  };
+
   /** Offload server executor 配置 (yaml: offload) */
   offload: {
     forceTriggerThreshold: number;
@@ -440,6 +470,33 @@ export interface GatewayMetadataConfig {
   store?: GatewayMetadataStoreConfig;
   /** 内部静态系统用户（仅 auth/verify；不落库）。 */
   systemUser?: GatewayMetadataSystemUserConfig;
+}
+
+/**
+ * Task 外部来源配置（yaml: `taskSource`）。
+ *
+ * 沿用 yaml 里其它段的**驼峰**风格：键是配置项（驼峰），不是 env 名。
+ * 由 task-source-env.ts 把驼峰键转成 provider 实际读取的
+ * `TASK_SOURCE_<ID>_<SUFFIX>` 再回填 env。
+ */
+export interface GatewayTaskSourceConfig {
+  /** 启用的来源 id，逗号分隔（对应 env `TASK_SOURCE_ENABLED`）。 */
+  enabled?: string;
+  /**
+   * 各来源自己的配置，键是来源 id（小写，如 `tapd`）。
+   *
+   * 每个来源下的键是驼峰配置项名，会转成 `TASK_SOURCE_<ID>_<大写下划线形式>`。
+   * 例如 `tapd: { mcpUrl }` → `TASK_SOURCE_TAPD_MCP_URL`。
+   *
+   * 之所以不预设有哪些键：后缀由 provider 自己的 `requiredEnv` 声明
+   * （如 TAPD 是 MCP_URL / SITE_BASE_URL），通用层不该知道。
+   */
+  sources?: Record<string, Record<string, string>>;
+  /**
+   * 跨来源共用的令牌申请页（对应 env `TAI_PAT_URL`）。
+   * 多个来源共用同一个令牌页（如太湖 PAT），故提到顶层而非各来源下。
+   */
+  taiPatUrl?: string;
 }
 
 // ============================
@@ -881,6 +938,62 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
         }
       : undefined,
   };
+  /**
+   * Task 外部来源：yaml 用**驼峰**风格（与 metadata / skill 等段一致），
+   * 这里读成结构化配置，再由 task-source-env.ts 转成 env 名回填。
+   *
+   * 值已在文件加载时过一遍 expandEnvVars，所以 `${VAR}` 插值照样可用 ——
+   * 便于把内网地址继续留在 .env、只在 yaml 里做映射。
+   */
+  const taskSourceConfig = obj(fileConfig, "taskSource");
+  const sourcesRaw = obj(taskSourceConfig, "sources");
+  const taskSourceSources: Record<string, Record<string, string>> = {};
+  for (const [sourceId, raw] of Object.entries(sourcesRaw)) {
+    const id = sourceId.trim();
+    if (!id || !isSafeTaskSourceId(id)) continue;
+    const entries = (raw && typeof raw === "object" && !Array.isArray(raw))
+      ? raw as Record<string, unknown>
+      : {};
+    const cfg: Record<string, string> = {};
+    for (const [k, v] of Object.entries(entries)) {
+      if (typeof v !== "string") continue;
+      const key = k.trim();
+      if (!key) continue;
+      cfg[key] = v.trim();
+    }
+    if (Object.keys(cfg).length) taskSourceSources[id] = cfg;
+  }
+  const taskSource: GatewayTaskSourceConfig = {
+    enabled: str(taskSourceConfig, "enabled")?.trim() || undefined,
+    sources: Object.keys(taskSourceSources).length ? taskSourceSources : undefined,
+    taiPatUrl: str(taskSourceConfig, "taiPatUrl")?.trim() || undefined,
+  };
+
+  // v2 InstanceUpstream 的 supported-agents(§6.A):
+  // ── 数据源优先级(v2.6+) ──
+  //   1. yaml `upstream.supportedAgents` **非空** → 以 yaml 为准(允许运维临时下线某 agent)
+  //   2. yaml 未配 / 空数组 → **自动 fallback** 到 `DEFAULT_SUPPORTED_AGENTS_FALLBACK`
+  //      (Core 代码常量,与 Proxy `src/supported-agents.ts` 一一对应)
+  //
+  // 这样 Core 升级上线新 agent 时,只要**同步改 fallback 常量**即可,无需强制运维改 yaml,
+  // 避免"忘配 yaml → seed 空数组 → 老实例行为静默丢失"的坑。
+  const upstreamConfig = obj(fileConfig, "upstream");
+  const supportedAgentsRaw = (upstreamConfig["supportedAgents"] ?? []) as unknown[];
+  const parsedFromYaml: import("../metadata/types.js").SupportedAgent[] = Array.isArray(supportedAgentsRaw)
+    ? supportedAgentsRaw
+        .filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null)
+        .map((e) => ({
+          agent_source: String(e.agent_source ?? ""),
+          protocol: (e.protocol as "anthropic" | "openai-chat" | "openai-responses") ?? "openai-chat",
+          display_name: String(e.display_name ?? ""),
+        }))
+        .filter((a) => a.agent_source !== "")
+    : [];
+  // yaml 有值(非空)以 yaml 为准;否则 fallback 到代码常量
+  const supportedAgents = parsedFromYaml.length > 0
+    ? parsedFromYaml
+    : [...DEFAULT_SUPPORTED_AGENTS_FALLBACK];
+  const upstream = { supportedAgents };
 
   const offloadConfig = obj(fileConfig, "offload");
   const offload = {
@@ -919,6 +1032,8 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
     observability,
     analytics: { clickhouse: analyticsClickhouse },
     metadata,
+    upstream,
+    taskSource,
     offload,
     skill: skillFromAnywhere,
   };
@@ -1015,6 +1130,19 @@ function envInt(key: string): number | undefined {
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {
   const v = c[key];
   return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+/**
+ * 来源 id 的合法形状：小写字母 / 数字 / 连字符（如 `tapd`、`jira`）。
+ *
+ * 来源 id 会参与拼 env 名（`TASK_SOURCE_<大写ID>_<后缀>`），而 env 名里的
+ * 字符必须可控 —— 否则 yaml 能借 id 注入 `_` 或换行，把 env 名拼成
+ * `TASK_SOURCE_A_ENV_B` 之类意外名字，甚至覆盖其它变量。故收紧到这个字符集。
+ */
+const TASK_SOURCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+function isSafeTaskSourceId(id: string): boolean {
+  return TASK_SOURCE_ID_PATTERN.test(id);
 }
 
 function str(src: Record<string, unknown>, key: string): string | undefined {

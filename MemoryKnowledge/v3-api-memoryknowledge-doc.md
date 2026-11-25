@@ -45,8 +45,8 @@ KS 走 **内网信任模型**，与 MemoryCore 的 user-key 体系不同：
 | 项 | 说明 |
 |---|---|
 | 唯一必填 Header | `x-tdai-service-id`（租户/service 标识，即内核路由键） |
-| 其他鉴权 | **无**（无 Bearer、无 user-key；service_id 自报，内网信任） |
-| 例外 | `POST /v3/internal/llm-binding/list` 不需要 `x-tdai-service-id` 头（返回全部 binding，供 Panel 启动缓存）；`/v3/auto-sync/*` 无鉴权 |
+| 其他鉴权 | 可选 Bearer：`KNOWLEDGE_SERVICE_KEY` 非空时，除只读白名单外的端点需 `Authorization: Bearer <key>`（含 `internal/llm-binding/*` 全部）；为空则不启用（向后兼容，内网信任） |
+| 例外 | `POST /v3/internal/llm-binding/list` 不需要 `x-tdai-service-id` 头（返回全部 binding，供 Panel 启动缓存；key 启用时仍需 Bearer） |
 
 > `service_id` / `team_id` / 资源 ID 统一做**路径分段白名单校验**（`^[A-Za-z0-9_-]+$`、长度 ≤200），防止路径穿越。
 

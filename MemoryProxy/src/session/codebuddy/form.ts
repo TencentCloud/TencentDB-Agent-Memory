@@ -101,6 +101,13 @@ export interface FormData {
    * 未设置时默认 true。
    */
   questionsAsArray?: boolean;
+  /**
+   * v3.3: 表单顶部追加的一行说明（账户默认回退原因等），会拼进 title 展示。
+   *
+   * 满足 PRD "配置已失效或无权限：不使用该配置，**提示原因**并回退到手动选择"。
+   * 为空 / 不传时 title 与历史完全一致。语义同 `session/form.ts` 的同名字段。
+   */
+  notice?: string;
 }
 
 // ── Form Builder ───────────────────────────────────────────────────────────────
@@ -112,15 +119,18 @@ export interface FormData {
  */
 function buildFollowupQuestionArgs(data: FormData): { title: string; questions: Array<Record<string, unknown>> | string } {
   const asArray = data.questionsAsArray !== false;
-  const { teams, stage, selectedTeamId, retry } = data;
+  const { teams, stage, selectedTeamId, retry, notice } = data;
 
-  const title = retry
+  let title = retry
     ? "⚠️ " + RETRY_FORM_TITLE
     : stage === "asset_confirm"
       ? ASSET_CONFIRM_FORM_TITLE
       : stage === "team"
         ? TEAM_FORM_TITLE
         : AGENT_TASK_FORM_TITLE;
+
+  // v3.3: 回退原因横幅拼到标题后，用户一眼能看见为什么没走默认配置。
+  if (notice) title = `${title} — ${notice}`;
 
   const questions: Array<{
     id: string;

@@ -26,6 +26,9 @@ import {
 import { tea } from '@/lib/tea-bridge';
 import { TeamHeaderCard } from '@/components/team/TeamHeaderCard';
 import TaskCreateDialog, { type TaskDraft } from './TaskCreateDialog';
+import TaskImportDialog from './TaskImportDialog';
+import { taskSourceApi, type TaskSourceProvider } from '../../../lib/api/taskSource';
+import { invalidateBackendCache } from '@/stores/backend';
 import BoardView from './BoardView';
 import { useTeamParticipation } from '../hooks/useTeamParticipation';
 import { errMsg, type AgentOption, type WorkbenchTab } from '../utils/workbench-utils';
@@ -60,16 +63,41 @@ export default function TaskWorkbench(props: {
   const { t } = useTranslation();
   const { activeTeamId, currentUser, agents } = props;
   // 后端分页：useTasks 根据 page + pageSize 调 Panel 聚合接口，内核只返回当前页
-  const PAGE_SIZE = 12;
   const [currentPage, setCurrentPage] = useState(1);
-  const { tasks, total: tasksTotal, loading: tasksLoading } = useTasks(activeTeamId, currentPage, PAGE_SIZE);
+  const [pageSize, setPageSize] = useState(12);
+  const { tasks, total: tasksTotal, loading: tasksLoading } = useTasks(activeTeamId, currentPage, pageSize);
   const { teams, activeTeam } = useTeams();
   const participationByTask = useTeamParticipation(activeTeamId);
   const [showCreate, setShowCreate] = useState(false);
+  /** 当前正在导入的来源 id（非空即弹窗打开）。由「导入 Task」下拉框选中项决定。 */
+  const [importProviderId, setImportProviderId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** 已启用的外部来源。空数组 → BoardView 隐藏「导入 Task」入口。 */
+  const [providers, setProviders] = useState<TaskSourceProvider[]>([]);
 
   // 切换 team 时重置到第 1 页
   useEffect(() => { setCurrentPage(1); }, [activeTeamId]);
+
+  // 越界页码拉回：总数收缩（删掉末页最后几条 / 页长调大后页数变少）时，
+  // 若 currentPage 仍停在失效页，fetch 会用越界 offset 拿到空数组，
+  // 看板会错误地显示「暂无 task」空态 —— 这里把页码拉回有效末页。
+  const totalPages = Math.max(1, Math.ceil(tasksTotal / pageSize));
+  useEffect(() => {
+    if (!tasksLoading && tasksTotal > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [tasksLoading, tasksTotal, currentPage, totalPages]);
+
+  // 拉取已启用的外部来源。失败静默（未配置来源时本就不显示入口，不打扰用户）。
+  useEffect(() => {
+    if (!activeTeamId) return;
+    let alive = true;
+    taskSourceApi
+      .providers(activeTeamId)
+      .then((res) => { if (alive) setProviders(res.providers ?? []); })
+      .catch(() => { if (alive) setProviders([]); });
+    return () => { alive = false; };
+  }, [activeTeamId]);
 
   const sortedTasks = useMemo(() => {
     return [...tasks].sort((a, b) => b.updated_at_ms - a.updated_at_ms);
@@ -122,10 +150,15 @@ export default function TaskWorkbench(props: {
           tasksTotal={tasksTotal}
           currentPage={currentPage}
           setCurrentPage={setCurrentPage}
-          pageSize={PAGE_SIZE}
+          pageSize={pageSize}
+          setPageSize={setPageSize}
           selected={selected}
           onSelect={(id) => setSelectedId(id)}
           onCreate={() => setShowCreate(true)}
+          // 下拉选源：把选中的 provider_id 传上来，据此打开对应来源的导入弹窗。
+          // 未启用外部来源时传 undefined → 入口隐藏。
+          onImport={providers.length ? (providerId) => setImportProviderId(providerId) : undefined}
+          importSources={providers.map((p) => ({ id: p.id }))}
           onDelete={async (task) => {
             // 权限：删除 task 仅创建者 / team admin / 全局 admin
             const team = teams.find((t) => t.team_id === task.team_id) ?? null;
@@ -190,6 +223,16 @@ export default function TaskWorkbench(props: {
           team={{ team_id: activeTeam.team_id, name: activeTeam.name }}
           onClose={() => setShowCreate(false)}
           onCreate={handleCreate}
+        />
+      )}
+      {importProviderId && activeTeamId && (
+        <TaskImportDialog
+          teamId={activeTeamId}
+          providers={providers}
+          providerId={importProviderId}
+          onClose={() => setImportProviderId(null)}
+          // 导入后清缓存 + 广播，触发 useTasks 重新拉取（与其他写操作同一机制）
+          onImported={() => invalidateBackendCache()}
         />
       )}
     </div>

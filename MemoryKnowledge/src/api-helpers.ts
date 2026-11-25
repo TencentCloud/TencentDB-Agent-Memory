@@ -97,6 +97,10 @@ export interface WikiDetail {
   wiki_id: string;
   team_id: string;
   name: string;
+  /** 来源类型：null=手工上传；'iwiki' 等=外部来源（决定详情页 UI 走"添加文件"还是"从外部拉取"）。 */
+  source_type: string | null;
+  /** 外部来源 URL；仅 source_type 非 null 时有值。 */
+  source_url: string | null;
   service_url: string | null;
   summary: string | null;
   status: string;
@@ -115,6 +119,8 @@ export function toWikiDetail(row: WikiRow): WikiDetail {
     wiki_id: row.wiki_id,
     team_id: row.team_id,
     name: row.name,
+    source_type: row.source_type,
+    source_url: row.source_url,
     service_url: row.service_url ?? null,
     summary: row.summary ?? null,
     status: row.status,

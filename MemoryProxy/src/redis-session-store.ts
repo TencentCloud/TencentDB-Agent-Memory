@@ -73,7 +73,7 @@ export class RedisSessionStore implements SessionStore {
 
     this.client.on("error", (err) => {
       this.connected = false;
-      log.warn("redis.error", { error: String(err) });
+      log.warn("【P1】redis.error", { error: String(err) });
     });
 
     this.client.on("close", () => {
@@ -82,7 +82,7 @@ export class RedisSessionStore implements SessionStore {
 
     // Initiate connection
     this.client.connect().catch((err) => {
-      log.warn("redis.connect_failed", { error: String(err) });
+      log.warn("【P1】redis.connect_failed", { error: String(err) });
     });
   }
 
@@ -117,7 +117,7 @@ export class RedisSessionStore implements SessionStore {
 
       return JSON.parse(raw) as unknown;
     } catch (err) {
-      log.warn("redis.get_error", { key, error: String(err) });
+      log.warn("【P1】redis.get_error", { key, error: String(err) });
       return null;
     }
   }
@@ -149,10 +149,10 @@ export class RedisSessionStore implements SessionStore {
         ? results.flatMap(([err], index) => err ? [`${commandNames[index] ?? index}: ${String(err)}`] : [])
         : ["pipeline returned no result"];
       if (failures.length > 0) {
-        log.warn("redis.set_error", { key, error: failures.join("; ") });
+        log.warn("【P1】redis.set_error", { key, error: failures.join("; ") });
       }
     } catch (err) {
-      log.warn("redis.set_error", { key, error: String(err) });
+      log.warn("【P1】redis.set_error", { key, error: String(err) });
     }
   }
 
@@ -168,7 +168,7 @@ export class RedisSessionStore implements SessionStore {
         this.buildJudgeVerdictKey(key),
       );
     } catch (err) {
-      log.warn("redis.delete_error", { key, error: String(err) });
+      log.warn("【P1】redis.delete_error", { key, error: String(err) });
     }
   }
 
@@ -195,7 +195,7 @@ export class RedisSessionStore implements SessionStore {
         .exec();
       const incrResult = results?.[0];
       if (!incrResult || incrResult[0]) {
-        log.warn("redis.incr_turnseq_error", {
+        log.warn("【P1】redis.incr_turnseq_error", {
           key,
           error: String(incrResult?.[0] ?? "pipeline returned no result"),
         });
@@ -203,7 +203,7 @@ export class RedisSessionStore implements SessionStore {
       }
       return Number(incrResult[1]);
     } catch (err) {
-      log.warn("redis.incr_turnseq_error", { key, error: String(err) });
+      log.warn("【P1】redis.incr_turnseq_error", { key, error: String(err) });
       return 0;
     }
   }
@@ -216,7 +216,7 @@ export class RedisSessionStore implements SessionStore {
       if (!raw) return null;
       return JSON.parse(raw) as unknown;
     } catch (err) {
-      log.warn("redis.get_archive_error", { key, error: String(err) });
+      log.warn("【P1】redis.get_archive_error", { key, error: String(err) });
       return null;
     }
   }
@@ -231,7 +231,7 @@ export class RedisSessionStore implements SessionStore {
     try {
       await this.client.setex(this.buildArchiveKey(key), this.ttlSeconds, JSON.stringify(state));
     } catch (err) {
-      log.warn("redis.set_archive_error", { key, error: String(err) });
+      log.warn("【P1】redis.set_archive_error", { key, error: String(err) });
     }
   }
 
@@ -247,7 +247,7 @@ export class RedisSessionStore implements SessionStore {
         .exec();
       const incrResult = results?.[0];
       if (!incrResult || incrResult[0]) {
-        log.warn("redis.incr_judge_count_error", {
+        log.warn("【P1】redis.incr_judge_count_error", {
           key,
           error: String(incrResult?.[0] ?? "pipeline returned no result"),
         });
@@ -257,7 +257,7 @@ export class RedisSessionStore implements SessionStore {
       const frequency = Math.max(1, Math.floor(everyN));
       return { count, shouldJudge: count % frequency === 0 };
     } catch (err) {
-      log.warn("redis.incr_judge_count_error", { key, error: String(err) });
+      log.warn("【P1】redis.incr_judge_count_error", { key, error: String(err) });
       return { count: 0, shouldJudge: false };
     }
   }
@@ -268,7 +268,7 @@ export class RedisSessionStore implements SessionStore {
       const raw = await this.client.get(this.buildJudgeVerdictKey(key));
       return raw ? JSON.parse(raw) as unknown : null;
     } catch (err) {
-      log.warn("redis.get_judge_verdict_error", { key, error: String(err) });
+      log.warn("【P1】redis.get_judge_verdict_error", { key, error: String(err) });
       return null;
     }
   }
@@ -282,7 +282,7 @@ export class RedisSessionStore implements SessionStore {
         JSON.stringify(verdict),
       );
     } catch (err) {
-      log.warn("redis.set_judge_verdict_error", { key, error: String(err) });
+      log.warn("【P1】redis.set_judge_verdict_error", { key, error: String(err) });
     }
   }
 

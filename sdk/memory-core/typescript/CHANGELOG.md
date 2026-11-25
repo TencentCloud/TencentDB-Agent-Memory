@@ -1,5 +1,19 @@
 # Changelog — @tencentdb-agent-memory/memory-sdk-ts
 
+## Unreleased — 2026-09-20
+
+### Added
+
+- **Optional `strict_mode: boolean` on `extract()` and `conversationAdd()`** —
+  when `true`, server routes the resulting extract task through the strict
+  v1 skill review prompt (five-class classification + four-dimension ≥72
+  acceptance gate) instead of the default v2 broad-capture prompt. Intended
+  for cold-start / bulk-import scenarios (e.g. `agents/setup-proxy.sh` →
+  `agents/asset-import.ts` replaying historical IDE sessions) where the
+  library would otherwise fill up with low-value candidates. Realtime
+  extraction should leave it unset — behaviour is unchanged. Fully backward
+  compatible: omitted / `false` keeps the existing default path.
+
 ## Unreleased — 2026-07-31
 
 ### Added

@@ -18,7 +18,8 @@ import { useTranslation } from 'react-i18next';
 import { Alert, Tag, Input, Button, Form, Modal } from 'tea-component';
 import '../styles/task-create-dialog.css';
 
-export type TaskSourceType = 'manual' | 'tapd';
+/** 来源**大类**（新建恒为 manual）；导入来源的具体系统读 metadata_json.external.provider。 */
+export type TaskSourceType = 'manual' | 'external' | 'other';
 
 export interface TaskDraft {
   team_id: string;

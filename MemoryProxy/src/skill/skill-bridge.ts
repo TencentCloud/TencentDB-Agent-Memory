@@ -23,6 +23,7 @@ import { getSessionStore } from "../session/store.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { RedisBindingRepo } from "../db/binding-repo.js";
+import { DependencyError, dependencyStatus } from "../common/dependency-error.js";
 // getSkillExtractTrigger / KvExtractStore 已随老链路一起删除。
 // 详见 handler-glue.ts 顶部注释 —— skill_extract 触发路径当前不可用,
 // core 侧后续会出手动归档接口, 到时 agent 工具再重新指向那个接口。
@@ -32,8 +33,9 @@ import { KvVersionPinRepo } from "./kv-version-pin-repo.js";
 import { getProxyStorage } from "../storage/factory.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { ProxyConfig } from "../types.js";
-import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "../memory/bridge-telemetry.js";
+import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, emitSkillUsageTelemetry, agentSourceFromSessionKey, logCoreAuthFailed } from "../memory/bridge-telemetry.js";
 import { getCoreSkillClient, type CoreSkillClient } from "./core-client.js";
+import { renderSkillResult } from "./selection/query.js";
 
 /**
  * 二选一的 pin repo（KvVersionPinRepo 或 VersionPinRepo）——
@@ -152,6 +154,8 @@ const ALLOWED_SUBPATHS = new Set<string>([
   "files/write",
   "files/remove",
   "listing",
+  // proxy 主动加载（skillRuntime.selection 启用时）：返回 Markdown 正文而非 JSON。
+  "raw",
   // agent 侧 tool 名叫 skill_extract, bridge 转发到 core force-archive
   // (不依赖 messages, core 从 conversation buffer 拿)。见下方 sub === "extract" 分支。
   "extract",
@@ -232,6 +236,11 @@ interface SessionIdFields {
  * L2 fallthrough 走拍平的 (spaceId, sessionId) → binding.json 直接 stamp。
  */
 function deriveSessionId(c: Context): string | null {
+  // subagent 归一：带 x-parent-conversation-id 时优先用 parent id，让 subagent
+  // 调 bridge 工具时命中主会话 binding，避免 session_not_initialized
+  // （对齐 session/session-key.ts，2026-09-20 WorkBuddy subagent 修复）。
+  const parentId = c.req.header("x-parent-conversation-id");
+  if (parentId && parentId.length > 0) return parentId;
   return (
     c.req.header("x-conversation-id") ??
     c.req.header("x-session-id") ??
@@ -320,14 +329,11 @@ async function loadSessionIdsL2(
   sessionId: string,
 ): Promise<SessionIdFields | null> {
   if (!bindingRepo) return null;
-  try {
-    const binding = await bindingRepo.getBinding(spaceId, sessionId);
-    if (!binding) return null;
-    return bindingToIdFields(binding, spaceId, sessionId);
-  } catch (err) {
-    console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
-    return null;
-  }
+  const binding = await bindingRepo.getBinding(spaceId, sessionId, { strict: true });
+  if (!binding || binding.outcome === "bypassed") return null;
+  const ids = bindingToIdFields(binding, spaceId, sessionId);
+  if (!ids) throw new DependencyError(500, "Invalid stored session binding");
+  return ids;
 }
 
 function envelope(code: number, message: string, httpStatus = 200) {
@@ -515,7 +521,12 @@ export function createSkillBridgeHandler(
     let ids = loadSessionIdsL1(sessionKey);
     if (!ids && bindingRepoInline && spaceId) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
-      ids = await loadSessionIdsL2(bindingRepoInline, spaceId, sessionKey);
+      try {
+        ids = await loadSessionIdsL2(bindingRepoInline, spaceId, sessionKey);
+      } catch (err) {
+        const status = dependencyStatus(err, err instanceof SyntaxError ? 500 : 503);
+        return envelope(status, `${TAG} session binding unavailable`, status);
+      }
     }
     if (!ids) {
       emitBridgeRejectTelemetry({
@@ -525,6 +536,38 @@ export function createSkillBridgeHandler(
       });
       return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
     }
+
+    // Team-memory master switch gate. Blocks LLM-side curl calls after the
+    // instance admin flips team_memory.enabled → "0" at Core. Residual tool
+    // definitions in old prompts would otherwise still work via the ids
+    // we just resolved from the binding. See
+    // MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md §6.4.
+    try {
+      const { fetchTeamMemoryEnabled } = await import("../tdai/team-memory-switch.js");
+      const teamMemoryEnabled = await fetchTeamMemoryEnabled({
+        endpoint: config.tdai.endpoint,
+        apiKey: config.tdai.apiKey,
+        instanceId: spaceId,
+        userKey: ids.user_key ?? null,
+        userId: ids.user_id,
+        timeoutMs: config.tdai.memory.timeoutMs,
+        strict: true,
+      });
+      if (!teamMemoryEnabled) {
+        emitBridgeRejectTelemetry({
+          sessionKey, bridgeSource: "skill-bridge",
+          rejectReason: "team_memory_disabled", httpStatus: 503,
+          executedEndpoint: sub, spaceId,
+          userId: ids.user_id, teamId: ids.team_id,
+          agentId: ids.agent_id, agentSource: ids.agent_source,
+        });
+        return envelope(50301, `${TAG} team memory disabled for this instance`, 503);
+      }
+    } catch (err) {
+      const status = dependencyStatus(err, 503);
+      return envelope(status, `${TAG} team memory configuration unavailable`, status);
+    }
+
     // backing.redis 之前给老链路 SkillExtractTrigger 用, 老链路已删,
     // 本函数体内不再直接使用 redis; backing 结构上保留是因为 pinRepo
     // 走 redis 的分支还需要它。
@@ -709,6 +752,23 @@ export function createSkillBridgeHandler(
         })(),
         ...(reason ? { reason } : {}),
       };
+    } else if (sub === "raw") {
+      // 只取 skill_id + version（白名单），其余字段一律丢弃；转发到 core get。
+      const skillId = typeof inboundBody.skill_id === "string" ? inboundBody.skill_id : "";
+      const version = inboundBody.version;
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(skillId) || !Number.isInteger(version) || (version as number) < 1) {
+        return envelope(40001, `${TAG} raw requires skill_id and a positive integer version`, 400);
+      }
+      upstreamSubpathOverride = "get";
+      outbound = {
+        skill_id: skillId,
+        version,
+        include_content: true,
+        include_manifest: false,
+        team_id: ids.team_id,
+        agent_id: ids.agent_id,
+        user_id: ids.user_id,
+      };
     } else {
       // v3 strict-isolation: ALL /v3 paths need team_id + agent_id + user_id.
       // Core layer strips user_id when team_id is present (team-shared semantics).
@@ -780,22 +840,17 @@ export function createSkillBridgeHandler(
             pagination: { limit: 1000 },
           },
           { serviceId: ids.space_id },
-        ).then(r => r.items.map(s => s.skill_id))
-          .catch(err => {
-            console.warn(`${TAG} team search B (list) failed, treating as empty: ${(err as Error).message}`);
-            return [] as string[];
-          });
+        ).then(r => ({ ok: true as const, ids: r.items.map(s => s.skill_id) }))
+          .catch(err => ({ ok: false as const, err }));
 
-        const [aResult, bIds] = await Promise.all([promiseA, promiseB]);
+        const [aResult, bResult] = await Promise.all([promiseA, promiseB]);
 
-        if (!aResult.ok) {
-          // Fail-closed: A 挂掉不能降级到不过滤搜索。
-          console.warn(`${TAG} team search whitelist resolver (A) failed, fail-closed: ${aResult.err.message}`);
-          return new Response(
-            JSON.stringify({ code: 0, message: "ok", request_id: `bridge-${(deps.now ?? Date.now)()}`, data: { items: [] } }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
+        if (!aResult.ok || !bResult.ok) {
+          const error = !aResult.ok ? aResult.err : !bResult.ok ? bResult.err : undefined;
+          const status = dependencyStatus(error);
+          return envelope(status, `${TAG} skill visibility unavailable`, status);
         }
+        const bIds = bResult.ids;
 
         const whitelist: string[] = Array.from(new Set<string>([...aResult.ids, ...bIds]));
         console.log(
@@ -906,6 +961,11 @@ export function createSkillBridgeHandler(
       `${TAG} sub=${sub} status=${resp.status} elapsed=${elapsed}ms`,
     );
 
+    // core 拒绝（内部鉴权失败）→ 结构化 warn，透传行为不变
+    if (resp.status === 401 || resp.status === 403) {
+      logCoreAuthFailed({ status: resp.status, sub, spaceId: ids.space_id });
+    }
+
     // 埋点：upstream 已响应（含 4xx/5xx），记录实际状态与耗时
     const emitKey = ids.composite_key ?? sessionKey;
     emitBridgeToolCallTelemetry({
@@ -946,8 +1006,29 @@ export function createSkillBridgeHandler(
     // Only on 2xx success; failures don't advance the pin. Use the FILTERED
     // response so we don't pin versions of skills the caller can't see.
     if (pinRepoInline && resp.status >= 200 && resp.status < 300) {
-      await tryLazyPin(sub, finalRespText, ids.space_id ?? "", ids.user_id, ids.agent_source, sessionKey, pinRepoInline).catch(() => {});
+      await tryLazyPin(sub === "raw" ? "get" : sub, finalRespText, ids.space_id ?? "", ids.user_id, ids.agent_source, sessionKey, pinRepoInline).catch(() => {});
     }
+
+    // ── Skill usage 埋点 (default-task 活跃度召回数据源) ──────────────
+    // 只在 2xx 成功 view/search 上埋。view: 一次调用一条; search: 遍历过滤后
+    // 的 items[] 每条一发。CH 未配置时 emitSkillUsageTelemetry no-op。
+    // 用 FILTERED 响应, 保证不埋 whitelist 之外的 skill_id。
+    // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+    if (resp.status >= 200 && resp.status < 300 && (sub === "get" || sub === "search" || sub === "raw")) {
+      try {
+        emitSkillUsageFromResponse({
+          sub,
+          respText: finalRespText,
+          inboundBody,
+          ids,
+          sessionKey: emitKey,
+        });
+      } catch {
+        // 埋点绝不阻塞业务
+      }
+    }
+
+    if (sub === "raw") return renderRawSkillResponse(resp.status, finalRespText);
 
     return new Response(finalRespText, {
       status: resp.status,
@@ -956,6 +1037,113 @@ export function createSkillBridgeHandler(
       },
     });
   };
+}
+
+/**
+ * `/raw` 响应：成功时返回 `<loaded_skill …>` 包裹的 Markdown（客户端执行结果即
+ * 模型读到的内容，免去 JSON 转义）；失败时原样返回 core 信封，便于模型/proxy 识别。
+ * 包裹标签同时是 proxy 判定「加载成功」的依据（见 client-tool-detect.scanLoadHistory）。
+ */
+function renderRawSkillResponse(status: number, respText: string): Response {
+  let env: { code?: number; data?: Record<string, unknown> } | null = null;
+  try {
+    env = JSON.parse(respText) as { code?: number; data?: Record<string, unknown> };
+  } catch {
+    env = null;
+  }
+  const data = env?.data;
+  const content = typeof data?.content === "string" ? data.content.trim() : "";
+  if (status < 200 || status >= 300 || !env || env.code !== 0 || !content) {
+    return new Response(respText, { status: status >= 200 && status < 300 ? 502 : status, headers: { "content-type": "application/json" } });
+  }
+  const attr = (v: unknown) => String(v ?? "").replace(/[^A-Za-z0-9._ -]/g, "").slice(0, 128);
+  const text = [
+    `<loaded_skill id="${attr(data?.skill_id)}" version="${attr(data?.version)}" name="${attr(data?.name)}">`,
+    renderSkillResult(typeof data?.name === "string" ? data.name : "", content),
+    "</loaded_skill>",
+    "",
+  ].join("\n");
+  return new Response(text, { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } });
+}
+
+/**
+ * Skill usage 埋点 —— 从 upstream 响应体解析 skill_id 并转发到
+ * `emitSkillUsageTelemetry`。
+ *
+ * - `sub === "get"`: 一次调用一条 event_type='view', skill_id 优先从
+ *   response.data.skill_id 拿(plugin skill-handlers.ts:toSummary), 拿不到
+ *   fallback 到 inboundBody.skill_id (LLM 请求时必带)。
+ * - `sub === "search"`: 遍历 FILTERED 响应的 data.items[] 每条发一条
+ *   event_type='search_hit'。空 items / 非 JSON / envelope 异常一律静默。
+ *
+ * 硬约束: 绝不 throw, 绝不阻塞业务。所有解析错误吞掉。
+ */
+function emitSkillUsageFromResponse(args: {
+  sub: string;
+  respText: string;
+  inboundBody: Record<string, unknown>;
+  ids: {
+    space_id?: string;
+    team_id?: string;
+    agent_id?: string;
+    user_id?: string;
+    agent_source?: string;
+  };
+  sessionKey: string;
+}): void {
+  const { sub, respText, inboundBody, ids, sessionKey } = args;
+
+  // Parse envelope; non-JSON or non-envelope response → no telemetry.
+  let env: { code?: number; data?: unknown };
+  try {
+    env = JSON.parse(respText) as { code?: number; data?: unknown };
+  } catch {
+    return;
+  }
+  if (env.code !== 0 || !env.data || typeof env.data !== "object") return;
+  const data = env.data as Record<string, unknown>;
+
+  const common = {
+    spaceId: ids.space_id,
+    teamId: ids.team_id,
+    agentId: ids.agent_id,
+    userId: ids.user_id,
+    agentSource: ids.agent_source,
+    sessionKey,
+  };
+
+  if (sub === "get") {
+    // response.data.skill_id (plugin toSummary flat) 优先; 兜底 inbound。
+    const respSkillId = typeof data.skill_id === "string" ? data.skill_id : undefined;
+    const inboundSkillId = typeof inboundBody.skill_id === "string" ? inboundBody.skill_id : undefined;
+    const skillId = respSkillId || inboundSkillId;
+    if (skillId) {
+      emitSkillUsageTelemetry({ ...common, eventType: "view", skillId });
+    }
+    return;
+  }
+
+  if (sub === "raw") {
+    // proxy 主动加载：独立事件类型，不计入 activity 召回的 view/search_hit。
+    const skillId = typeof data.skill_id === "string" ? data.skill_id : inboundBody.skill_id;
+    if (typeof skillId === "string" && skillId) {
+      emitSkillUsageTelemetry({ ...common, eventType: "proxy_load", skillId });
+    }
+    return;
+  }
+
+  if (sub === "search") {
+    const items = Array.isArray(data.items) ? data.items : [];
+    for (const it of items) {
+      if (!it || typeof it !== "object") continue;
+      const rec = it as Record<string, unknown>;
+      const skillId = rec.skill_id;
+      if (typeof skillId === "string" && skillId) {
+        emitSkillUsageTelemetry({ ...common, eventType: "search_hit", skillId });
+      }
+    }
+    return;
+  }
 }
 
 /**

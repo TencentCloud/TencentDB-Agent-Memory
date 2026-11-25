@@ -50,7 +50,7 @@ function validPositiveInteger(
   if (raw === undefined) return fallback;
   if (Number.isInteger(raw) && raw > 0) return raw;
   logger.warn(
-    `${TAG} ${fieldName}=${raw} invalid (must be positive integer); falling back to ${fallback}`,
+    `【P2】${TAG} ${fieldName}=${raw} invalid (must be positive integer); falling back to ${fallback}`,
   );
   return fallback;
 }
@@ -84,7 +84,7 @@ export function resolveSkillConfig(
       level: "warn",
     });
     logger.warn(
-      `${TAG} storeBackend=tcvdb requested but credentials missing — degrading to sqlite`,
+      `【P2】${TAG} storeBackend=tcvdb requested but credentials missing — degrading to sqlite`,
     );
     storeBackend = "sqlite";
   }
@@ -136,7 +136,7 @@ export function resolveSkillConfig(
       level: "warn",
     });
     logger.warn(
-      `${TAG} routing.mode=${routingMode} requested but embedding unavailable — degrading to bm25`,
+      `【P2】${TAG} routing.mode=${routingMode} requested but embedding unavailable — degrading to bm25`,
     );
     routingMode = "bm25";
   }
@@ -153,7 +153,7 @@ export function resolveSkillConfig(
       level: "warn",
     });
     logger.warn(
-      `${TAG} extraction.enabled=true but no LLMRunner — extract will return empty candidates`,
+      `【P2】${TAG} extraction.enabled=true but no LLMRunner — extract will return empty candidates`,
     );
   }
 
@@ -167,7 +167,7 @@ export function resolveSkillConfig(
   if (rawArchive !== undefined) {
     if (!Number.isInteger(rawArchive) || rawArchive <= 0) {
       logger.warn(
-        `${TAG} extraction.archiveBytes=${rawArchive} invalid (must be positive integer); ` +
+        `【P2】${TAG} extraction.archiveBytes=${rawArchive} invalid (must be positive integer); ` +
           `falling back to default ${DEFAULT_ARCHIVE_BYTES}`,
       );
     } else {
@@ -192,7 +192,7 @@ export function resolveSkillConfig(
       envConcurrencyValid = true;
     } else {
       logger.warn(
-        `${TAG} TDAI_SKILL_WORKER_CONCURRENCY=${envConcurrencyRaw} invalid (must be positive integer); ignored`,
+        `【P2】${TAG} TDAI_SKILL_WORKER_CONCURRENCY=${envConcurrencyRaw} invalid (must be positive integer); ignored`,
       );
     }
   }
@@ -202,7 +202,7 @@ export function resolveSkillConfig(
       workerConcurrency = raw;
     } else {
       logger.warn(
-        `${TAG} worker.concurrency=${raw} invalid (must be positive integer); ` +
+        `【P2】${TAG} worker.concurrency=${raw} invalid (must be positive integer); ` +
           `falling back to default ${DEFAULT_WORKER_CONCURRENCY}`,
       );
     }
@@ -268,6 +268,15 @@ export function resolveSkillConfig(
       allowExecutable: input.resources?.allowExecutable === true,
     },
     versionTtlSeconds: (input.versionTtlDays ?? 0) * 86400,
+    // maxVersions:
+    //  - 不配 / 显式 0: 关闭 (向后兼容: 所有未配置的旧实例保持原行为)
+    //  - 正整数: 作为非 head 版本数上限
+    //  - 非法值 (负数 / 非整数 / NaN): 走 validPositiveInteger 的 warn + 落回 0
+    // 显式 0 走短路, 避免被 validPositiveInteger 当"must be positive"误报 warn。
+    maxNonHeadVersions:
+      input.maxVersions === 0
+        ? 0
+        : validPositiveInteger(input.maxVersions, 0, logger, "maxVersions"),
     worker: {
       concurrency: workerConcurrency,
       brpopBlockMs: workerBrpopMs,

@@ -18,7 +18,22 @@ export interface AgentTurnJudgeRequest {
   sessionId: string;
   messages: unknown[];
   requestId?: string;
+  /** Wire format of `messages`; the judge infers it when absent. */
+  protocol?: "openai" | "anthropic";
+  /** Model the client asked for, for the judge's decision log. */
+  modelId?: string;
+  turnSeq?: number;
+  toolTurnCount?: number;
+  /** Eval-harness run ids (X-Job-Id / X-Trial-Id), logged next to the decision. */
+  jobId?: string;
+  trialId?: string;
+  /** `shadow` marks a decision that is logged but not written into the request. */
+  effortPolicy?: string;
 }
+
+/** The seven-rung decision ladder; the proxy folds a rung onto each model's own. */
+export const REASONING_EFFORT_RUNGS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningEffortRung = typeof REASONING_EFFORT_RUNGS[number];
 
 export interface AgentTurnJudgeResponse {
   upgrade: boolean;
@@ -29,12 +44,20 @@ export interface AgentTurnJudgeResponse {
   evidence_turns: number[];
   blocker_category: string;
   reason: string;
+  reasoning_effort?: ReasoningEffortRung;
 }
 
 export interface UserTurnJudgeRequest {
   sessionId: string;
   userQuery: string;
   requestId?: string;
+  /** Observability only: lets the judge log which model the user turn went to. */
+  turnSeq?: number;
+  modelId?: string;
+  protocol?: "openai" | "anthropic";
+  jobId?: string;
+  trialId?: string;
+  effortPolicy?: string;
 }
 
 export interface UserTurnJudgeResult {
@@ -61,6 +84,9 @@ function judgeEndpoint(config: JudgeServiceConfig, kind: "user-turn" | "agent-tu
 function isJudgeResponse(value: unknown): value is AgentTurnJudgeResponse {
   if (!value || typeof value !== "object") return false;
   const response = value as Record<string, unknown>;
+  const effort = response.reasoning_effort;
+  const effortOk = effort === undefined
+    || (REASONING_EFFORT_RUNGS as readonly unknown[]).includes(effort);
   return (
     typeof response.upgrade === "boolean"
     && typeof response.turn_id === "string"
@@ -73,6 +99,7 @@ function isJudgeResponse(value: unknown): value is AgentTurnJudgeResponse {
     && response.evidence_turns.every((turn) => typeof turn === "number" && Number.isFinite(turn))
     && typeof response.blocker_category === "string"
     && typeof response.reason === "string"
+    && effortOk
   );
 }
 
@@ -121,7 +148,16 @@ export async function judgeAgentTurn(
         "x-session-id": request.sessionId,
         "x-request-id": request.requestId ?? randomUUID(),
       },
-      body: JSON.stringify({ messages: request.messages }),
+      body: JSON.stringify({
+        messages: request.messages,
+        protocol: request.protocol,
+        model: request.modelId,
+        turn_seq: request.turnSeq,
+        tool_turn_count: request.toolTurnCount,
+        job_id: request.jobId,
+        trial_id: request.trialId,
+        effort_policy: request.effortPolicy,
+      }),
       signal: controller.signal,
     });
 
@@ -159,7 +195,15 @@ export async function judgeUserTurn(
         "x-session-id": request.sessionId,
         "x-request-id": requestId,
       },
-      body: JSON.stringify({ user_query: request.userQuery }),
+      body: JSON.stringify({
+        user_query: request.userQuery,
+        turn_seq: request.turnSeq,
+        model: request.modelId,
+        protocol: request.protocol,
+        job_id: request.jobId,
+        trial_id: request.trialId,
+        effort_policy: request.effortPolicy,
+      }),
       signal: controller.signal,
     });
 

@@ -56,10 +56,11 @@ RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
       sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
     fi
 
+# openssh-client：SSH 仓库 clone 需要 `ssh`（GIT_SSH_COMMAND）+ `ssh-keygen`（为用户生成 RSA 密钥对）。
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates tini \
+      git curl ca-certificates tini openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

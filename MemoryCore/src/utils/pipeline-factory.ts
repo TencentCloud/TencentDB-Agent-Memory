@@ -13,11 +13,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import type { MemoryTdaiConfig } from "../config.js";
+import { sliceL2Batch } from "./l2-batch.js";
 import { MemoryPipelineManager } from "./pipeline-manager.js";
-import type { L2Runner, L3Runner } from "./pipeline-manager.js";
+import type { L2Runner } from "./pipeline-manager.js";
 import { SessionFilter } from "./session-filter.js";
 import { extractL1Memories } from "../core/record/l1-extractor.js";
+import { latestTimestamp } from "../core/record/l1-writer.js";
 import { readConversationMessagesGroupedBySessionId } from "../core/conversation/l0-recorder.js";
 import type { ConversationMessage } from "../core/conversation/l0-recorder.js";
 import { CheckpointManager } from "./checkpoint.js";
@@ -37,6 +40,8 @@ import {
 } from "../core/memory-generation-log/types.js";
 import { writeGenerationProvenanceBestEffort } from "../core/memory-generation-log/best-effort.js";
 import { LocalStorageBackend } from "../core/storage/local-backend.js";
+import { StoragePaths } from "../core/storage/types.js";
+import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import {
   readManifest,
@@ -48,6 +53,14 @@ import {
 import { SceneExtractor } from "../core/scene/scene-extractor.js";
 import { PersonaTrigger } from "../core/persona/persona-trigger.js";
 import { PersonaGenerator } from "../core/persona/persona-generator.js";
+import {
+  evaluateL3JevGate,
+  JEV_PROMPT_VERSION,
+  summarizeSceneDiff,
+  type L3JevExecutionContext,
+  type L2SceneDiffDiagnostic,
+} from "../core/persona/jev-gate.js";
+import { emitJevDiagnostic } from "../core/persona/jev-diagnostics.js";
 import {
   DEFAULT_PROFILE_SCOPE,
   buildProfileIsolationScope,
@@ -354,12 +367,12 @@ async function _doInitStores(
           }
         }
       } catch (err) {
-        logger.warn(`${TAG} Failed to read/write manifest (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(`【P1】${TAG} Failed to read/write manifest (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   } catch (err) {
     logger.warn(
-      `${TAG} Store init failed; vector/FTS recall and dedup conflict detection will be unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      `【P1】${TAG} Store init failed; vector/FTS recall and dedup conflict detection will be unavailable: ${err instanceof Error ? err.message : String(err)}`,
     );
     vectorStore = undefined;
     embeddingService = undefined;
@@ -419,6 +432,7 @@ export function createL1Runner(opts: {
       return { processedCount: 0, storedCount: 0, hasMore: false, hasFullBacklog: false, profileScopes: [] };
     }
 
+    const l1RunStartMs = Date.now();
     const checkpoint = new CheckpointManager(pluginDataDir, logger, storage, checkpointLock);
     const cp = await checkpoint.read();
     const runnerState = checkpoint.getRunnerState(cp, sessionKey);
@@ -657,12 +671,14 @@ export function createL1Runner(opts: {
       // skip same-ms siblings on the next round.
       await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
       logger.info(
-        `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`,
+        `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s)) dur_ms=${Date.now() - l1RunStartMs}`,
       );
 
       return { processedCount: totalMessages, storedCount: totalStored, hasMore, hasFullBacklog, profileScopes: Array.from(profileScopes) };
     } catch (err) {
-      logger.error(`${TAG} [l1] L1 failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+      logger.error(
+        `【P1】${TAG} [l1] L1 failed: ${err instanceof Error ? err.stack ?? err.message : String(err)} dur_ms=${Date.now() - l1RunStartMs}`,
+      );
       throw err;
     }
   };
@@ -716,12 +732,17 @@ export function createL2Runner(opts: {
    * service 模式下必须提供，否则同instance 的多节点并发会丢失计数器修复结果。
    */
   checkpointLock?: import("./checkpoint.js").CheckpointLockOptions;
+  /** Service-task correlation. Omitted for the in-process scheduler. */
+  executionContext?: L3JevExecutionContext;
 }): L2Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage, checkpointLock } = opts;
   let profileBaseline = new Map<string, { version: number; contentMd5: string; createdAtMs: number }>();
 
   return async (sessionKey: string, cursor?: string) => {
+    const jevGateId = opts.executionContext?.jevGateId ?? randomUUID();
+    let latestSceneDiff: L2SceneDiffDiagnostic | undefined;
     const profileFilter = parseProfileL2Key(sessionKey);
+    const l2RunStartMs = Date.now();
     logger.debug?.(
       `${TAG} [L2] session=${sessionKey}, profile=${profileFilter ? buildIsolationScope(profileFilter) : "(legacy-session)"}, updatedAfter=${cursor ?? "(full)"}`,
     );
@@ -731,7 +752,8 @@ export function createL2Runner(opts: {
       return;
     }
 
-    let records: Array<{ content: string; created_at: string; id: string; updatedAt: string; teamId?: string; userId?: string; agentId?: string; sessionId?: string; taskId?: string }>;
+    let records: Array<{ content: string; created_at: string; event_time: string; id: string; updatedAt: string; teamId?: string; userId?: string; agentId?: string; sessionId?: string; taskId?: string }>;
+    let hasMore = false;
 
     if (vectorStore && !vectorStore.isDegraded()) {
       const { queryMemoryRecords } = await import("../core/record/l1-reader.js");
@@ -757,9 +779,25 @@ export function createL2Runner(opts: {
         `${TAG} [L2] Incremental query returned ${memRecords.length} record(s) (session=${sessionKey})`,
       );
 
-      records = memRecords.map((r) => ({
+      // 分批：积压很大时一次全部交给 LLM 会每次都超时。按 updatedAt 升序取前一批，
+      // 剩下的留在游标之后，由 worker 立即续排的 L2 继续处理。
+      // 游标是严格大于（updatedAfter >），所以切点不能把同一 updatedAt 的记录拆开，
+      // 否则下一批会永久跳过同时间戳的剩余记录。
+      memRecords.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+      const batch = sliceL2Batch(memRecords, cfg.persona.l2MaxRecordsPerRun, cfg.persona.l2MaxCharsPerRun);
+      if (batch.length < memRecords.length) {
+        hasMore = true;
+        logger.info(
+          `${TAG} [L2] Backlog split (session=${sessionKey}): processing ${batch.length}/${memRecords.length} record(s) this run`,
+        );
+      }
+
+      records = batch.map((r) => ({
         content: r.content,
         created_at: r.createdAt,
+        // 对话发生时间：取该记忆时间线中最晚的一个；旧数据的 timestamps
+        // 是抽取时间，没有时退回写入时间，与升级前行为一致。
+        event_time: latestTimestamp(r.timestamps) ?? r.createdAt,
         id: r.id,
         updatedAt: r.updatedAt,
         teamId: r.teamId,
@@ -768,6 +806,8 @@ export function createL2Runner(opts: {
         sessionId: r.sessionId,
         taskId: r.taskId,
       }));
+      // 按对话时间升序交给 L2，而不是按写入时间：积压乱序时 LLM 仍按真实先后阅读。
+      records.sort((a, b) => a.event_time.localeCompare(b.event_time));
     } else {
       throw new Error(`${TAG} [L2] VectorStore unavailable — cannot read L1 memories for scene extraction (session=${sessionKey})`);
     }
@@ -814,6 +854,8 @@ export function createL2Runner(opts: {
           layer: "l2",
         })),
         maxScenes: cfg.persona.maxScenes,
+        maxSceneBytes: cfg.persona.maxSceneBytes,
+        timeoutMs: cfg.persona.sceneTimeoutMs,
         sceneBackupCount: cfg.persona.sceneBackupCount,
         logger,
         instanceId,
@@ -826,6 +868,7 @@ export function createL2Runner(opts: {
       const memories = groupRecords.map((r) => ({
         content: r.content,
         created_at: r.created_at,
+        event_time: r.event_time,
         id: r.id,
       }));
 
@@ -841,11 +884,94 @@ export function createL2Runner(opts: {
         layer: "l2",
       }));
       const extractResult = await extractor.extract(memories);
-      if (!(extractResult.success && extractResult.memoriesProcessed > 0)) continue;
+      if (!(extractResult.success && extractResult.memoriesProcessed > 0)) {
+        // A failed batch used to be swallowed here with a bare `continue`, so
+        // the orchestration layer logged nothing at all. Surface the stage and
+        // the propagated reason (the extractor already logged the stack).
+        logger.warn(
+          `【P1】${TAG} [L2] Extraction failed, skipping group: session=${sessionKey} ` +
+          `success=${extractResult.success} processed=${extractResult.memoriesProcessed} ` +
+          `err=${extractResult.error ?? "(none)"} dur_ms=${Date.now() - l2RunStartMs}`,
+        );
+        continue;
+      }
       if (extractResult.emptyExtraction) {
         anyEmptyExtraction = true;
         logger.warn(`${TAG} [L2] Extraction produced no file changes (empty run), skipping checkpoint increment`);
         continue;
+      }
+      const diagnosticsMode = cfg.persona.jev?.diagnostics?.mode ?? "off";
+      if (extractResult.sceneDiff && diagnosticsMode !== "off") {
+        latestSceneDiff = summarizeSceneDiff(extractResult.sceneDiff);
+        const fullDiagnostics = diagnosticsMode === "full";
+        emitJevDiagnostic(logger, diagnosticsMode, "memory.l2.scene_diff", {
+          instance_id: instanceId,
+          team_id: ctx.teamId,
+          user_id: ctx.userId,
+          agent_id: ctx.agentId,
+          session_id: ctx.sessionId,
+          l2_task_id: opts.executionContext?.l2TaskId,
+          l3_task_id: opts.executionContext?.l3TaskId,
+          jev_gate_id: jevGateId,
+          prompt_version: JEV_PROMPT_VERSION,
+        }, {
+          ...latestSceneDiff,
+          scene_meta: {
+            created: extractResult.sceneDiff.created.map((scene) => ({
+              filename: scene.filename,
+              created: scene.created,
+              updated: scene.updated,
+              summary_sha256: createHash("sha256").update(scene.summary).digest("hex"),
+              summary_chars: scene.summary.length,
+              heat: scene.heat,
+              ...(fullDiagnostics ? { summary: scene.summary } : {}),
+            })),
+            updated: extractResult.sceneDiff.updated.map(({ before, after }) => ({
+              filename: after.filename,
+              before: {
+                created: before.created,
+                updated: before.updated,
+                summary_sha256: createHash("sha256").update(before.summary).digest("hex"),
+                summary_chars: before.summary.length,
+                heat: before.heat,
+                ...(fullDiagnostics ? { summary: before.summary } : {}),
+              },
+              after: {
+                created: after.created,
+                updated: after.updated,
+                summary_sha256: createHash("sha256").update(after.summary).digest("hex"),
+                summary_chars: after.summary.length,
+                heat: after.heat,
+                ...(fullDiagnostics ? { summary: after.summary } : {}),
+              },
+            })),
+            deleted: extractResult.sceneDiff.deleted.map((scene) => ({
+              filename: scene.filename,
+              created: scene.created,
+              updated: scene.updated,
+              summary_sha256: createHash("sha256").update(scene.summary).digest("hex"),
+              summary_chars: scene.summary.length,
+              heat: scene.heat,
+              ...(fullDiagnostics ? { summary: scene.summary } : {}),
+            })),
+          },
+          updated_timestamp_invariants: extractResult.sceneDiff.updated.map(({ before, after }) => ({
+            filename: after.filename,
+            content_changed: before.content !== after.content,
+            updated_strictly_advanced:
+              Number.isFinite(Date.parse(before.updated)) &&
+              Number.isFinite(Date.parse(after.updated)) &&
+              Date.parse(after.updated) > Date.parse(before.updated),
+          })),
+          ...(fullDiagnostics ? {
+            created_final_content: extractResult.sceneDiff.created.map((scene) => ({
+              filename: scene.filename, content: scene.raw,
+            })),
+            updated_final_content: extractResult.sceneDiff.updated.map(({ after }) => ({
+              filename: after.filename, content: after.raw,
+            })),
+          } : {}),
+        });
       }
 
       //⚠️ 这里**不能**用 `checkpoint.write({...postState})`：
@@ -931,8 +1057,18 @@ export function createL2Runner(opts: {
 
     if (processedTotal > 0) {
       const latestCursor = records.reduce((latest, r) => r.updatedAt > latest ? r.updatedAt : latest, "");
-      logger.debug?.(`${TAG} [L2] Extraction complete: processed=${processedTotal}, latestCursor=${latestCursor}`);
-      return { latestCursor: latestCursor || undefined };
+      // Completion was debug-only: a successful L2 run left no info-level trace
+      // and carried no duration, so a slow scene extraction was invisible.
+      logger.info(
+        `${TAG} [L2] Extraction complete: session=${sessionKey} processed=${processedTotal} ` +
+        `latestCursor=${latestCursor} dur_ms=${Date.now() - l2RunStartMs}`,
+      );
+      return {
+        latestCursor: latestCursor || undefined,
+        hasMore,
+        sceneDiff: latestSceneDiff,
+        jevGateId,
+      };
     }
     if (anyEmptyExtraction) return { skipped: true };
   };
@@ -959,12 +1095,29 @@ export function createL3Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
   /** StorageAdapter for file operations (COS/local). */
   storage?: StorageAdapter;
-}): L3Runner {
+  checkpointLock?: import("./checkpoint.js").CheckpointLockOptions;
+}): ((context?: L3JevExecutionContext) => Promise<void>) {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage } = opts;
 
-  return async () => {
+  return async (context?: L3JevExecutionContext) => {
     const scopes = await discoverProfileScopes(pluginDataDir, storage, logger);
-    const executionScopes = scopes.length > 0 ? scopes : [DEFAULT_PROFILE_SCOPE];
+    const taskIsolation = context &&
+      (context.teamId || context.userId || context.agentId)
+      ? {
+          teamId: context.teamId,
+          userId: context.userId,
+          agentId: context.agentId,
+          sessionId: context.sessionId,
+        }
+      : undefined;
+    // Service tasks hold one agent-scoped lock and must only touch that
+    // originating profile. The in-process scheduler has no task identity and
+    // retains the legacy behavior of walking every discovered profile scope.
+    const executionScopes = taskIsolation
+      ? [buildProfileIsolationScope(taskIsolation)]
+      : scopes.length > 0
+        ? scopes
+        : [DEFAULT_PROFILE_SCOPE];
     let generatedAny = false;
     const l3PromptTargets = executionScopes.map((scope) => {
       // The default scope ("global") carries no team/agent, so parsing yields
@@ -976,9 +1129,13 @@ export function createL3Runner(opts: {
     const l3Prompts = await resolveMemoryPrompts(vectorStore, l3PromptTargets);
 
     for (const scope of executionScopes) {
+      const scopeStartedAt = Date.now();
       const scopedDir = scopedDataDirForScope(pluginDataDir, scope);
       const scopedStore = scopedStorageForScope(storage, scope);
       const profileOptions = profileOptionsForScope(scope);
+      const personaBeforeHash = (cfg.persona.jev?.diagnostics?.mode ?? "off") === "off"
+        ? undefined
+        : await readPersonaBodyHash(scopedDir, scopedStore);
 
       const trigger = new PersonaTrigger({
         dataDir: scopedDir,
@@ -987,9 +1144,73 @@ export function createL3Runner(opts: {
         storage: scopedStore,
       });
 
-      const { should, reason } = await trigger.shouldGenerate();
-      if (!should) {
-        logger.debug?.(`${TAG} [L3] Persona generation not needed (scope=${scope})`);
+      const triggerResult = await trigger.shouldGenerate();
+      let shouldGenerate = triggerResult.should;
+      let generationReason = triggerResult.reason;
+      let jevAddedLockMs = 0;
+      let gateId = context?.jevGateId;
+      const scopeIsolation = parseProfileIsolationScope(scope) ?? {};
+      if (!shouldGenerate && cfg.persona.triggerMode === "jev") {
+        const gateStartedAt = Date.now();
+        const gate = await evaluateL3JevGate({
+          dataDir: scopedDir,
+          cfg,
+          logger,
+          instanceId,
+          storage: scopedStore,
+          checkpointLock: opts.checkpointLock,
+          triggerReason: triggerResult.reason,
+          context: {
+            ...context,
+            teamId: scopeIsolation.teamId ?? context?.teamId,
+            userId: scopeIsolation.userId ?? context?.userId,
+            agentId: scopeIsolation.agentId ?? context?.agentId,
+            sessionId: scopeIsolation.sessionId ?? context?.sessionId,
+          },
+        });
+        jevAddedLockMs = Date.now() - gateStartedAt;
+        gateId = gate.gateId;
+        shouldGenerate = gate.shouldGenerate;
+        generationReason = gate.label
+          ? `JEV(${JEV_PROMPT_VERSION}): ${gate.label}`
+          : `JEV(${JEV_PROMPT_VERSION}) deferred: ${gate.reason}`;
+      } else if (cfg.persona.triggerMode === "jev") {
+        // Existing trigger policy has priority and bypasses JEV.
+        emitJevDiagnostic(logger, cfg.persona.jev.diagnostics.mode, "memory.l3_jev.eligibility", {
+          instance_id: instanceId,
+          team_id: scopeIsolation.teamId ?? context?.teamId,
+          user_id: scopeIsolation.userId ?? context?.userId,
+          agent_id: scopeIsolation.agentId ?? context?.agentId,
+          session_id: scopeIsolation.sessionId ?? context?.sessionId,
+          l2_task_id: context?.l2TaskId,
+          l3_task_id: context?.l3TaskId,
+          jev_gate_id: gateId ?? "not-created",
+          prompt_version: "l3-memory-change-v1",
+        }, {
+          trigger_mode: cfg.persona.triggerMode,
+          persona_trigger_should: true,
+          persona_trigger_reason: triggerResult.reason,
+          call_expected: false,
+          suppression_reason: "persona_trigger_bypass",
+        });
+      }
+      if (!shouldGenerate) {
+        logger.debug?.(`${TAG} [L3] Persona generation not needed (scope=${scope}, reason=${generationReason})`);
+        if ((cfg.persona.jev?.diagnostics?.mode ?? "off") !== "off") {
+          const skippedCheckpoint = await new CheckpointManager(scopedDir, logger, scopedStore, opts.checkpointLock).read();
+          emitCheckpointDiagnostic({
+            logger, cfg, instanceId, context, gateId,
+            scopeIsolation: parseProfileIsolationScope(scope) ?? {},
+            generationResult: "not_invoked",
+            checkpointBefore: skippedCheckpoint.last_persona_time,
+            checkpointAfter: skippedCheckpoint.last_persona_time,
+            advanceReason: generationReason,
+            personaBeforeHash,
+            personaAfterHash: personaBeforeHash,
+            scopeStartedAt,
+            jevAddedLockMs,
+          });
+        }
         continue;
       }
 
@@ -1015,10 +1236,14 @@ export function createL3Runner(opts: {
         profileBaseline = await pullProfilesToLocal(scopedDir, vectorStore, logger, scopedStore, profileOptions);
       }
 
-      logger.info(`${TAG} [L3] Starting persona generation: ${reason} (scope=${scope})`);
+      if (context?.signal?.aborted) {
+        throw context.signal.reason instanceof Error
+          ? context.signal.reason
+          : new Error(`${TAG} [L3] Task aborted before persona generation`);
+      }
+      logger.info(`${TAG} [L3] Starting persona generation: ${generationReason} (scope=${scope})`);
       // 反解 scope 拿回 teamId/userId/agentId/sessionId 给 langfuse trace 用。
       // 默认 scope ("global") 解不出维度，按空 isolation 处理。
-      const scopeIsolation = parseProfileIsolationScope(scope) ?? {};
       const l3StartMs = Date.now();
       const resolvedL3Prompt = l3Prompts.get(memoryPromptResolveKey({
         teamId: scopeIsolation.teamId,
@@ -1038,15 +1263,41 @@ export function createL3Runner(opts: {
         storage: scopedStore,
         traceContext: scopeIsolation,
       });
-      const genResult = await generator.generateLocalPersona(reason);
+      const genResult = await generator.generateLocalPersona(generationReason);
 
-      const checkpoint = new CheckpointManager(scopedDir, logger, scopedStore);
+      const checkpoint = new CheckpointManager(scopedDir, logger, scopedStore, opts.checkpointLock);
       const cp = await checkpoint.read();
       const personaMarker = cp.total_processed;
 
-      if (!genResult) {
+      if (genResult === "failed") {
+        emitCheckpointDiagnostic({
+          logger, cfg, instanceId, context, gateId, scopeIsolation,
+          generationResult: "failed", checkpointBefore: cp.last_persona_time,
+          checkpointAfter: cp.last_persona_time, advanceReason: "generation_failed",
+          personaBeforeHash,
+          personaAfterHash: await readPersonaBodyHash(scopedDir, scopedStore),
+          scopeStartedAt, jevAddedLockMs,
+        });
+        // The generator logs its own error without the orchestration scope, and
+        // this throw used to leave the L3 stage with no stage-level error line.
+        logger.error(
+          `【P1】${TAG} [L3] Persona generation failed: scope=${scope} reason=${generationReason} ` +
+          `dur_ms=${Date.now() - l3StartMs}`,
+        );
+        throw new Error(`${TAG} [L3] Persona generation failed (scope=${scope})`);
+      }
+      if (genResult === "unchanged") {
         logger.info(`${TAG} [L3] Persona generation skipped (no changes, scope=${scope})`);
         await checkpoint.markPersonaGenerated(personaMarker);
+        const after = await checkpoint.read();
+        emitCheckpointDiagnostic({
+          logger, cfg, instanceId, context, gateId, scopeIsolation,
+          generationResult: "unchanged", checkpointBefore: cp.last_persona_time,
+          checkpointAfter: after.last_persona_time, advanceReason: "generator_unchanged",
+          personaBeforeHash,
+          personaAfterHash: await readPersonaBodyHash(scopedDir, scopedStore),
+          scopeStartedAt, jevAddedLockMs,
+        });
         continue;
       }
 
@@ -1062,6 +1313,18 @@ export function createL3Runner(opts: {
       if (changedProfiles.length === 0) {
         logger.debug?.(`${TAG} [L3] No changed Persona profiles, skipping generation provenance`);
         await checkpoint.markPersonaGenerated(personaMarker);
+        const checkpointAfterSync = await checkpoint.read();
+        emitCheckpointDiagnostic({
+          logger, cfg, instanceId, context, gateId, scopeIsolation,
+          generationResult: "generated",
+          checkpointBefore: cp.last_persona_time,
+          checkpointAfter: checkpointAfterSync.last_persona_time,
+          advanceReason: "generation_succeeded_no_profile_diff",
+          personaBeforeHash,
+          personaAfterHash: await readPersonaBodyHash(scopedDir, scopedStore),
+          scopeStartedAt,
+          jevAddedLockMs,
+        });
         generatedAny = true;
         continue;
       }
@@ -1106,6 +1369,17 @@ export function createL3Runner(opts: {
       });
 
       await checkpoint.markPersonaGenerated(personaMarker);
+      const checkpointAfterGeneration = await checkpoint.read();
+      emitCheckpointDiagnostic({
+        logger, cfg, instanceId, context, gateId, scopeIsolation,
+        generationResult: "generated", checkpointBefore: cp.last_persona_time,
+        checkpointAfter: checkpointAfterGeneration.last_persona_time,
+        advanceReason: "generation_succeeded",
+        personaBeforeHash,
+        personaAfterHash: await readPersonaBodyHash(scopedDir, scopedStore),
+        scopeStartedAt,
+        jevAddedLockMs,
+      });
       generatedAny = true;
       logger.info(`${TAG} [L3] Persona generation succeeded (scope=${scope})`);
     }
@@ -1114,6 +1388,65 @@ export function createL3Runner(opts: {
       logger.debug?.(`${TAG} [L3] No scoped persona generated`);
     }
   };
+}
+
+function emitCheckpointDiagnostic(input: {
+  logger: PipelineLogger;
+  cfg: MemoryTdaiConfig;
+  instanceId?: string;
+  context?: L3JevExecutionContext;
+  gateId?: string;
+  scopeIsolation: Partial<ProfileIsolation>;
+  generationResult: "generated" | "unchanged" | "failed" | "not_invoked";
+  checkpointBefore: string;
+  checkpointAfter: string;
+  advanceReason: string;
+  personaBeforeHash?: string;
+  personaAfterHash?: string;
+  scopeStartedAt: number;
+  jevAddedLockMs: number;
+}): void {
+  emitJevDiagnostic(input.logger, input.cfg.persona.jev?.diagnostics?.mode ?? "off", "memory.l3.checkpoint", {
+    instance_id: input.instanceId,
+    team_id: input.scopeIsolation.teamId ?? input.context?.teamId,
+    user_id: input.scopeIsolation.userId ?? input.context?.userId,
+    agent_id: input.scopeIsolation.agentId ?? input.context?.agentId,
+    session_id: input.scopeIsolation.sessionId ?? input.context?.sessionId,
+    l2_task_id: input.context?.l2TaskId,
+    l3_task_id: input.context?.l3TaskId,
+    jev_gate_id: input.gateId ?? "not-created",
+    prompt_version: "l3-memory-change-v1",
+  }, {
+    generator_entered: input.generationResult !== "not_invoked",
+    generator_result: input.generationResult,
+    checkpoint_before: input.checkpointBefore,
+    checkpoint_after: input.checkpointAfter,
+    checkpoint_advanced: input.checkpointBefore !== input.checkpointAfter,
+    advance_reason: input.advanceReason,
+    persona_before_sha256: input.personaBeforeHash ?? null,
+    persona_after_sha256: input.personaAfterHash ?? null,
+    l3_lock_duration_ms: Date.now() - input.scopeStartedAt,
+    jev_added_lock_duration_ms: input.jevAddedLockMs,
+  });
+}
+
+async function readPersonaBodyHash(
+  dataDir: string,
+  storage?: StorageAdapter,
+): Promise<string | undefined> {
+  try {
+    let raw: string | null;
+    if (storage) {
+      raw = await storage.readFile(StoragePaths.persona);
+    } else {
+      raw = await fs.promises.readFile(path.join(dataDir, "persona.md"), "utf-8");
+    }
+    if (!raw) return undefined;
+    const body = stripSceneNavigation(raw).trim();
+    return body ? createHash("sha256").update(body).digest("hex") : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ============================
