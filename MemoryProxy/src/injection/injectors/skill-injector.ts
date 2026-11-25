@@ -101,6 +101,29 @@ const SKILL_LISTING_FOOTER =
  *   3. `<available_skills>` listing (verbatim from core).
  *   4. SKILL_LISTING_FOOTER — "only skip if genuinely nothing matches".
  */
+/**
+ * True when a `/v3/skill/listing` payload carries no skills at all.
+ *
+ * Core's two "empty" shapes are:
+ *   - `""` (no agent identity resolved)
+ *   - `"<available_skills>\n(none)\n</available_skills>"` (agent exists, owns nothing)
+ *
+ * The sentinel must be matched against the WHOLE body, not as a substring:
+ * a skill whose own `desc` mentions "(none)" (e.g. "…TDB scheduling
+ * capability (none)…") used to make `listing.includes("(none)")` true and
+ * silently drop a fully populated catalog — the agent then saw zero skills
+ * for the entire session, and the empty result also blocked the hook-cache
+ * self-heal, so every turn re-queried core and KV cache never warmed up.
+ */
+export function isEmptyListing(listing: string | undefined | null): boolean {
+  if (!listing) return true;
+  const body = listing
+    .replace(/<\/?available_skills>/g, "")
+    .trim();
+  if (!body) return true;
+  return body === "(none)";
+}
+
 export function wrapAvailableSkillsBlock(listing: string): string {
   return [
     SKILL_LISTING_HEADER,
@@ -270,7 +293,8 @@ export class SkillInjector implements InjectionHook {
    * Contract:
    *   - Missing team_id or agent_id → return [] (nothing to route on).
    *   - Any core error → log + return [] (never fails the request).
-   *   - Listing rendered as "(none)" or empty → return [].
+   *   - Listing that is empty, or whose *entire body* is the "(none)"
+   *     sentinel → return [].
    *   - Never throws.
    */
   private async renderListingBlocks(args: {
@@ -323,7 +347,7 @@ export class SkillInjector implements InjectionHook {
     }
 
     const listing = result.listing;
-    if (!listing || listing.includes("(none)")) return [];
+    if (isEmptyListing(listing)) return [];
 
     const content = wrapAvailableSkillsBlock(listing);
     return [{
