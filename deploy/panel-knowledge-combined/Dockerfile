@@ -64,6 +64,7 @@ ENV NODE_ENV=production \
     LLM_TIMEOUT_MS=1200000 \
     KNOWLEDGE_DATA_DIR=/data/knowledge \
     KNOWLEDGE_DB_PATH=/data/knowledge/knowledge.db \
+    PANEL_AUTH_IDENTITY_STORE_PATH=/data/knowledge/panel-auth-identities.json \
     TDAI_AGENT_TEMPLATE_DIR=/data/knowledge/agent-templates \
     KNOWLEDGE_SSH_KEY_DIR=/data/knowledge/ssh-keys \
     LOG_LEVEL=info \

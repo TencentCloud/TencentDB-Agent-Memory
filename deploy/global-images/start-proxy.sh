@@ -23,6 +23,7 @@ require_vars \
 
 # 与 memory-core 保持一致的 gateway 内部凭据（默认 local，仅本地体验）
 MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
+PROXY_DATA_VOLUME="${PROXY_DATA_VOLUME:-tdai-proxy-data}"
 
 CONTAINER=tdai-proxy
 NETWORK=tdai-memory-stack
@@ -156,6 +157,7 @@ $DOCKER run -d --name "$CONTAINER" \
   --add-host=host.docker.internal:host-gateway \
   -p "${PROXY_PORT}:8096" \
   -v "$CONFIG_FILE:/data/config.yaml:ro" \
+  -v "${PROXY_DATA_VOLUME}:/data/tdai-memory-proxy" \
   "$PROXY_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90
