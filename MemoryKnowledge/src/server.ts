@@ -11,6 +11,8 @@ import { initTelemetry } from "./telemetry.js";
 initTelemetry();
 
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { wrapError, resolveKnowledgeMaxBodyBytes } from "./api-helpers.js";
 import { serve } from "@hono/node-server";
 import { swaggerUI } from "@hono/swagger-ui";
 import { readFileSync } from "node:fs";
@@ -71,6 +73,12 @@ export function createApp() {
 
   // /v3 prefix applied once here — routes define paths without prefix
   const api = new Hono();
+  // Hono 会先把整个 body 读进来再走路由级校验 —— 不设上限时超大请求
+  // 体可无限缓冲（raw/write 的 5 MiB 内容检查发生在 JSON parse 之后）。
+  api.use("*", bodyLimit({
+    maxSize: resolveKnowledgeMaxBodyBytes(),
+    onError: (c) => c.json(wrapError(413, "request body too large"), 413),
+  }));
   // 服务间鉴权：serviceKey 非空时，除只读白名单外的 /v3 端点均需
   // Bearer 鉴权（fail-closed）；key 为空则全放行（向后兼容）。
   // /health、/docs、/openapi.json 挂在 api 之外，保持开放。

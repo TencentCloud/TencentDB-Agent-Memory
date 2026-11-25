@@ -197,3 +197,13 @@ export interface BatchDeleteResult {
   deleted_ids: string[];
   failed: Array<{ id: string; reason: string }>;
 }
+
+/**
+ * KNOWLEDGE_MAX_BODY_BYTES — request body cap for /v3 endpoints.
+ * Default 16 MiB (raw/write allows 5 MiB of content, which can roughly
+ * double once JSON-escaped). Invalid values fall back to the default.
+ */
+export function resolveKnowledgeMaxBodyBytes(raw = process.env.KNOWLEDGE_MAX_BODY_BYTES): number {
+  const parsed = raw == null ? NaN : Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 16 * 1024 * 1024;
+}
