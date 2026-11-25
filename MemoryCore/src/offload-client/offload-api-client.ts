@@ -12,16 +12,17 @@ export class OffloadApiClient {
   /** Health check: GET /v2/offload/health. Returns true if server is reachable (any HTTP response = reachable). */
   async checkHealth(): Promise<boolean> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${this.config.serverUrl}/v2/offload/health`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${this.config.apiKey}` },
-        signal: controller.signal,
+      const status = await this.withTimeout(5000, async (signal) => {
+        const res = await fetch(`${this.config.serverUrl}/v2/offload/health`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${this.config.apiKey}` },
+          signal,
+        });
+        await discardBody(res);
+        return res.status;
       });
-      clearTimeout(timeoutId);
       // Any HTTP response (including 401/403) means server is reachable
-      return res.status < 500;
+      return status < 500;
     } catch {
       return false;
     }
@@ -63,17 +64,10 @@ export class OffloadApiClient {
     const body = JSON.stringify(payload);
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.config.ingestTimeoutMs);
-
-      await fetch(url, {
-        method: "POST",
-        headers: this.buildHeaders(),
-        body,
-        signal: controller.signal,
+      await this.withTimeout(this.config.ingestTimeoutMs, async (signal) => {
+        const res = await fetch(url, { method: "POST", headers: this.buildHeaders(), body, signal });
+        await discardBody(res);
       });
-
-      clearTimeout(timer);
     } catch (err) {
       this.logger.warn(`[offload-client] ingest failed: ${err}`);
     }
@@ -94,20 +88,14 @@ export class OffloadApiClient {
     const body = JSON.stringify(payload);
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.config.ingestTimeoutMs);
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: this.buildHeaders(),
-        body,
-        signal: controller.signal,
+      const status = await this.withTimeout(this.config.ingestTimeoutMs, async (signal) => {
+        const res = await fetch(url, { method: "POST", headers: this.buildHeaders(), body, signal });
+        await discardBody(res);
+        return res.status;
       });
 
-      clearTimeout(timer);
-
-      if (!response.ok) {
-        this.logger.warn(`[offload-client] ingestL15 returned ${response.status}`);
+      if (status < 200 || status >= 300) {
+        this.logger.warn(`[offload-client] ingestL15 returned ${status}`);
       }
     } catch (err) {
       this.logger.warn(`[offload-client] ingestL15 failed: ${err}`);
@@ -137,24 +125,23 @@ export class OffloadApiClient {
     });
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.config.compactionTimeoutMs);
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: this.buildHeaders(),
-        body,
-        signal: controller.signal,
+      const result = await this.withTimeout(this.config.compactionTimeoutMs, async (signal) => {
+        const response = await fetch(url, { method: "POST", headers: this.buildHeaders(), body, signal });
+        if (!response.ok) {
+          await discardBody(response);
+          return { status: response.status, json: null };
+        }
+        // Body is read while the abort timer is still armed, so a server that
+        // sends headers and then stalls cannot hang compaction indefinitely.
+        return { status: response.status, json: (await response.json()) as any };
       });
 
-      clearTimeout(timer);
-
-      if (!response.ok) {
-        this.logger.warn(`[offload-client] compaction returned ${response.status}`);
+      if (!result.json) {
+        this.logger.warn(`[offload-client] compaction returned ${result.status}`);
         return null;
       }
 
-      const json = (await response.json()) as any;
+      const json = result.json;
       if (json.code !== 0 || !json.data) {
         this.logger.warn(`[offload-client] compaction error: ${json.message ?? "unknown"}`);
         return null;
@@ -167,11 +154,31 @@ export class OffloadApiClient {
     }
   }
 
+  /** Run `fn` with an AbortSignal that fires after `ms`; the timer is always cleared. */
+  private async withTimeout<T>(ms: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    try {
+      return await fn(controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private buildHeaders(): Record<string, string> {
     return {
       "Content-Type": "application/json",
       Authorization: `Bearer ${this.config.apiKey}`,
       "X-TDAI-Service-Id": this.config.serviceId,
     };
+  }
+}
+
+/** Release the connection back to the pool without buffering an unused body. */
+async function discardBody(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // ignore — body already consumed or stream errored
   }
 }
