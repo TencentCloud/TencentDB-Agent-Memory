@@ -270,6 +270,25 @@ else
   fi
 fi
 
+# ── 运行时兼容：host-gateway flag ───────────────────────────────────────────
+# 回归检查：Podman 下必须不带 --add-host=host.docker.internal:host-gateway，
+# 否则 docker run 直接失败（"host containers internal IP address is empty"）。
+if is_podman_runtime; then
+  if [[ -n "$(docker_host_gateway_args)" ]]; then
+    echo "${C_RED}✗ 运行时为 Podman，但仍会传 --add-host=host-gateway（容器将起不来）${C_RST}" >&2
+    ERRORS=$((ERRORS+1))
+  else
+    ok "运行时为 Podman，已跳过 host-gateway flag"
+  fi
+else
+  if [[ "$(docker_host_gateway_args)" == "--add-host=host.docker.internal:host-gateway" ]]; then
+    ok "运行时为 Docker，已带 host-gateway flag"
+  else
+    warn "运行时为 Docker，但未带 host-gateway flag —— 容器内可能访问不到宿主机"
+    WARNS=$((WARNS+1))
+  fi
+fi
+
 echo ""
 if (( ERRORS > 0 )); then
   echo "${C_RED}✗ ${ERRORS} 个错误，${WARNS} 个警告 —— 无法启动${C_RST}" >&2

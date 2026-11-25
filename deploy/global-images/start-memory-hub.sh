@@ -92,7 +92,7 @@ info "启动 memory-hub (image=$MEMORY_HUB_IMAGE, panel=$PANEL_PORT knowledge=$K
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias memory-hub \
-  --add-host=host.docker.internal:host-gateway \
+  $(docker_host_gateway_args) \
   -p "${PANEL_PORT}:8125" \
   -p "${KNOWLEDGE_PORT}:8424" \
   -v "${PANEL_VOLUME}:/data/knowledge" \
