@@ -168,7 +168,8 @@ export async function performAutoCapture(params: {
     `embeddingService=${embeddingService ? "available" : "UNAVAILABLE"}`,
   );
 
-  const supportsBgEmbed = vectorStore?.supportsDeferredEmbedding === true;
+  const vectorSearchReady = vectorStore?.getCapabilities?.().vectorSearch !== false;
+  const supportsBgEmbed = vectorSearchReady && vectorStore?.supportsDeferredEmbedding === true;
 
   if (filteredMessages.length > 0 && vectorStore) {
     const now = new Date().toISOString();
@@ -193,7 +194,7 @@ export async function performAutoCapture(params: {
 
         let embedding: Float32Array | undefined;
 
-        if (!supportsBgEmbed && embeddingService) {
+        if (vectorSearchReady && !supportsBgEmbed && embeddingService) {
           // Path B (VDB): embed synchronously — needed for upsertL0
           // Skip local embed when using server-side embedding (NoopEmbeddingService, dims=0)
           if (embeddingService.getDimensions() === 0) {
@@ -222,15 +223,18 @@ export async function performAutoCapture(params: {
         // Path A (sqlite): pass undefined embedding — metadata + FTS only
         // Path B (VDB): pass embedding (may be undefined on failure)
         const tUpsertStart = performance.now();
-        const upsertOk = await vectorStore.upsertL0(l0Record, supportsBgEmbed ? undefined : embedding);
+        const upsertOk = await vectorStore.upsertL0(
+          l0Record,
+          vectorSearchReady && !supportsBgEmbed ? embedding : undefined,
+        );
         l0UpsertTotalMs += performance.now() - tUpsertStart;
 
-        if (upsertOk) {
+        if (upsertOk && vectorSearchReady) {
           l0VectorsWritten++;
           if (supportsBgEmbed) {
             bgRecords.push({ recordId: l0Record.id, content: msg.content });
           }
-        } else {
+        } else if (!upsertOk) {
           logger?.warn(`${TAG} [L0-vec-index] upsertL0 returned false for message ${i}`);
         }
       } catch (err) {
