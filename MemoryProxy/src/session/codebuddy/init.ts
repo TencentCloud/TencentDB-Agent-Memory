@@ -109,10 +109,9 @@ export interface SessionInitResult {
    */
   teamName?: string | null;
   /**
-   * v3.3 user-session-default: 本次绑定账户默认配置时, Proxy 要让用户看到的
-   * 一段 markdown 文本(✅ 当前 session 绑定默认配置 + Team/Agent/Task 三行)。
+   * Proxy 在首次绑定账户默认配置或 dsh OpenAI 请求自动选定唯一资产时展示的 Markdown。
    * runner 层在 SSE 流最前面拼成一段 content delta 下发, 和 LLM 回复独立。
-   * null = 不是命中默认(header/form/后续轮次), 不需要插。
+   * header、手动选择和后续轮次不展示。
    */
   defaultBindingNotice?: string | null;
   /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
@@ -411,7 +410,7 @@ function applyArtifactsAndContext(
  */
 export async function completeRegistration(
   resolved: SessionInitData,
-  state: SessionInitState,
+  state: SessionInitState & { announceAutoBinding?: boolean },
   cachedTeams: TeamOption[],
   compositeKey: string,
   sessionKey: string,
@@ -546,12 +545,16 @@ export async function completeRegistration(
     messages, agentDetail, taskDetail, compositeKey, config,
   );
 
-  // v3.3 user-session-default: 命中账户默认时, 为"用户完全无感跳过表单"场景
-  // 构造一段**由 Proxy 自己下发**的绑定提示(供 runner 层在 SSE 流最前面插入,
-  // 保证用户 100% 看到 —— 之前让 LLM 转述的方案被证伪过 2 次, LLM 会漏/截断)。
-  // 格式: ✅ 标题 + 空行 + 三行 Team/Agent/Task(名称 + id)。
+  // Proxy delivers the notice directly when the user did not choose individual assets.
+  const noticeAgent = agentDetail ?? (state.announceAutoBinding
+    ? {
+      id: regData.agent_id,
+      name: selectedTeam?.agents.find((agent) => agent.agent_id === regData.agent_id)?.agent_name ?? "",
+    }
+    : null);
   const defaultBindingNotice = buildDefaultBindingNoticeIfApplicable(
-    effectivePresetSource, teamName, regData.team_id, agentDetail, taskDetail, regData.task_id,
+    state.announceAutoBinding ? "auto_select" : effectivePresetSource,
+    teamName, regData.team_id, noticeAgent, taskDetail, regData.task_id,
   );
 
   return {
@@ -634,6 +637,7 @@ async function handleSessionInitInner(
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);
+  const announceDshAutoBinding = agentSource === "dsh" && reqCtx.protocol === "openai";
 
   // ── codex-only pre-checks: Default gate + MORE 分页 ───────────────────────
   //
@@ -1135,7 +1139,8 @@ async function handleSessionInitInner(
           if (onlyTeam.tasks.length === 1) {
             return await completeRegistration(
               { agent_id: soloAgent.agent_id, task_id: onlyTeam.tasks[0].task_id },
-              nextState, teams, compositeKey, sessionKey, userId,
+              { ...nextState, announceAutoBinding: announceDshAutoBinding },
+              teams, compositeKey, sessionKey, userId,
               config, store, messages, metadataClient, userKey, spaceId,
             );
           }
@@ -1378,7 +1383,8 @@ async function handleSessionInitInner(
             );
             return await completeRegistration(
               { agent_id: soloAgent.agent_id, task_id: soleTaskId },
-              nextState, teams, compositeKey, sessionKey, userId,
+              { ...nextState, announceAutoBinding: announceDshAutoBinding },
+              teams, compositeKey, sessionKey, userId,
               config, store, messages, metadataClient, userKey, spaceId,
             );
           }
