@@ -4,6 +4,7 @@
  */
 
 import { CheckpointManager } from "../../utils/checkpoint.js";
+import { isSceneMarkdownFilename } from "../scene/filename-normalizer.js";
 import { stripSceneNavigation } from "../scene/scene-navigation.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
@@ -98,14 +99,16 @@ export class PersonaTrigger {
   private async hasSceneFiles(): Promise<boolean> {
     try {
       if (this.storage) {
-        const files = await this.storage.readdirNames(StoragePaths.sceneBlocksDir, ".md");
+        const files = (await this.storage.readdirNames(StoragePaths.sceneBlocksDir)).filter(
+          isSceneMarkdownFilename,
+        );
         return files.length > 0;
       }
       const fs = await import("node:fs/promises");
       const path = await import("node:path");
       const blocksDir = path.default.join(this.dataDir, "scene_blocks");
       const files = await fs.default.readdir(blocksDir);
-      return files.some((f) => f.endsWith(".md"));
+      return files.some(isSceneMarkdownFilename);
     } catch {
       return false;
     }

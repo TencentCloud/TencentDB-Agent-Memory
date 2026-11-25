@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IMemoryStore, ProfileRecord, ProfileSyncRecord } from "../store/types.js";
+import { isSceneMarkdownFilename } from "../scene/filename-normalizer.js";
 import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import type { StorageAdapter } from "../storage/adapter.js";
@@ -100,7 +101,9 @@ export async function listLocalProfiles(
   // ── List L2 scene blocks ──
   if (storage) {
     try {
-      const files = (await storage.readdirNames(StoragePaths.sceneBlocksDir, ".md")).sort();
+      const files = (await storage.readdirNames(StoragePaths.sceneBlocksDir))
+        .filter(isSceneMarkdownFilename)
+        .sort();
       for (const filename of files) {
         const content = await storage.readFile(`${StoragePaths.sceneBlocksDir}${filename}`);
         if (content === null) continue;
@@ -129,7 +132,7 @@ export async function listLocalProfiles(
   } else {
     const blocksDir = path.join(dataDir, "scene_blocks");
     try {
-      const files = (await fs.readdir(blocksDir)).filter((file) => file.endsWith(".md")).sort();
+      const files = (await fs.readdir(blocksDir)).filter(isSceneMarkdownFilename).sort();
       for (const filename of files) {
         const filePath = path.join(blocksDir, filename);
         const content = await fs.readFile(filePath, "utf-8");
