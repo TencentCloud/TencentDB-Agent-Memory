@@ -173,6 +173,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
           metadata: {
             media_type: source?.media_type,
             source_type: source?.type,
+            ...(source && source.type !== "base64" ? { image_source: source } : {}),
           },
         };
       }
@@ -263,7 +264,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
       case "image":
         return {
           type: "image",
-          source: {
+          source: block.metadata?.image_source ?? {
             type: block.metadata?.source_type ?? "base64",
             media_type: block.metadata?.media_type ?? "image/png",
             data: block.content,
