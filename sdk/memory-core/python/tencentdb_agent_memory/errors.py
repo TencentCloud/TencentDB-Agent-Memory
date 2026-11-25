@@ -21,7 +21,7 @@ class TDAMError(Exception):
         request_id: str = "",
         details: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        super().__init__()
+        super().__init__(code, message, request_id, details)
         self.code = code
         self.message = message
         self.request_id = request_id
