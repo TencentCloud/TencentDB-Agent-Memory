@@ -28,6 +28,7 @@ import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
 import type { MemoryRecord } from "../core/record/l1-writer.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
+import { deleteL1RecordsStrict } from "../core/store/delete-l1.js";
 
 // ── Zod schemas (validated types + defaults) ──
 import {
@@ -1310,15 +1311,12 @@ async function handleAtomicDelete(body: unknown, auth: V2AuthContext, requestId:
     ...(iso.taskId ? { taskId: iso.taskId } : {}),
     // 不传 sessionId：按 id 删除不应被默认 sessionId 限制
   } : undefined;
-  let deletedCount = 0;
-  const deletedIds: string[] = [];
-  for (const id of ids) {
-    const ok = await store.deleteL1(id, deleteFilter);
-    if (ok) {
-      deletedCount++;
-      deletedIds.push(id);
-    }
-  }
+  const { deletedIds, error: deleteError } = await deleteL1RecordsStrict(
+    store,
+    ids,
+    deleteFilter,
+  );
+  const deletedCount = deletedIds.length;
 
   // 审计：L1 delete — 每条删除一行 audit
   for (const id of deletedIds) {
@@ -1336,6 +1334,11 @@ async function handleAtomicDelete(body: unknown, auth: V2AuthContext, requestId:
   // Report memory deletion (non-fatal)
   if (deps.quotaManager && deletedCount > 0) {
     deps.quotaManager.reportMemoryDeleted(auth.serviceId, deletedCount).catch(() => {});
+  }
+
+  if (deleteError) {
+    deps.logger?.error?.(`${TAG} L1 atomic delete failed: ${deleteError.message}`);
+    return errorEnvelope(500, "Memory delete failed", requestId);
   }
 
   return successEnvelope<AtomicDeleteData>({ deleted_count: deletedCount }, requestId);

@@ -612,8 +612,8 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── L1 Write ─────────────────────────────────────────────
 
   upsertL1(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
-  deleteL1(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
-  deleteL1Batch(recordIds: string[], filter?: IsolationFilter): MaybePromise<boolean>;
+  deleteL1(recordId: string, filter?: IsolationFilter, options?: DeleteL1Options): MaybePromise<boolean>;
+  deleteL1Batch(recordIds: string[], filter?: IsolationFilter, options?: DeleteL1Options): MaybePromise<boolean>;
   deleteL1Expired(cutoffIso: string): MaybePromise<number>;
 
   // ── L1 Read ──────────────────────────────────────────────
@@ -762,6 +762,12 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── Memory Audit（修改审计；optional 让 store 可以选择不实现）──
   appendAudit?(entry: AuditEntry): MaybePromise<void>;
   queryAudit?(filter: AuditQueryFilter): MaybePromise<AuditEntry[]>;
+}
+
+/** Opt-in error semantics for callers that must distinguish a miss from a store failure. */
+export interface DeleteL1Options {
+  /** Default false: preserve legacy fault-tolerant false-on-error behavior. */
+  throwOnError?: boolean;
 }
 
 // ============================

@@ -45,6 +45,7 @@ import type {
   L1PaginatedFilter,
   L1PaginatedResult,
   IsolationFilter,
+  DeleteL1Options,
   TeamEntity,
   UserEntity,
   AgentEntity,
@@ -1447,8 +1448,11 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: logs a warning on failure, never throws.
    */
-  deleteL1(recordId: string, filter?: IsolationFilter): boolean {
-    if (this.degraded) return false;
+  deleteL1(recordId: string, filter?: IsolationFilter, options?: DeleteL1Options): boolean {
+    if (this.degraded) {
+      if (options?.throwOnError) throw new Error("L1 store is degraded");
+      return false;
+    }
     try {
       if (filter) {
         const meta = this.stmtGetMeta.get(recordId) as { user_id?: string; agent_id?: string; session_id?: string; session_key?: string } | undefined;
@@ -1471,6 +1475,7 @@ export class VectorStore implements IMemoryStore {
         throw err;
       }
     } catch (err) {
+      if (options?.throwOnError) throw err;
       this.logger?.warn(
         `${TAG} delete failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -1483,8 +1488,11 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: logs a warning on failure, never throws.
    */
-  deleteL1Batch(recordIds: string[], filter?: IsolationFilter): boolean {
-    if (this.degraded) return false;
+  deleteL1Batch(recordIds: string[], filter?: IsolationFilter, options?: DeleteL1Options): boolean {
+    if (this.degraded) {
+      if (options?.throwOnError) throw new Error("L1 store is degraded");
+      return false;
+    }
     if (recordIds.length === 0) return true;
 
     try {
@@ -1510,6 +1518,7 @@ export class VectorStore implements IMemoryStore {
       }
       return true;
     } catch (err) {
+      if (options?.throwOnError) throw err;
       this.logger?.warn(
         `${TAG} deleteBatch failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
