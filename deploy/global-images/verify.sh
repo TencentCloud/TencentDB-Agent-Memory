@@ -64,7 +64,7 @@ check_llm_openai() {
     rm -f "$body_file"
     return 0
   elif [[ "$code" == "401" || "$code" == "403" ]]; then
-    echo "${C_RED}[error]${C_RST} $label API key 无效（HTTP ${code}）：$url" >&2
+    tdai_echo "${C_RED}[error]${C_RST} $label API key 无效（HTTP ${code}）：$url" >&2
     head -c 200 "$body_file" >&2; echo >&2
     rm -f "$body_file"
     return 1
@@ -108,16 +108,16 @@ check_llm_anthropic() {
       ok "$label Anthropic 协议通路 OK（模型 $model 已应答）"
       rm -f "$body_file"; return 0 ;;
     401|403)
-      echo "${C_RED}[error]${C_RST} $label API key 无效（HTTP ${code}）：$url" >&2
+      tdai_echo "${C_RED}[error]${C_RST} $label API key 无效（HTTP ${code}）：$url" >&2
       head -c 200 "$body_file" >&2; echo >&2
       rm -f "$body_file"; return 1 ;;
     404)
-      echo "${C_RED}[error]${C_RST} $label URL 不存在（HTTP 404）：$url —— 检查 BASE_URL" >&2
+      tdai_echo "${C_RED}[error]${C_RST} $label URL 不存在（HTTP 404）：$url —— 检查 BASE_URL" >&2
       rm -f "$body_file"; return 1 ;;
     400)
       # 400 常见于模型名不存在或 body 校验失败
       if grep -qE "model.*not.*found|invalid.*model|model_not_found" "$body_file" 2>/dev/null; then
-        echo "${C_RED}[error]${C_RST} $label 模型名 '$model' 无效（HTTP 400）" >&2
+        tdai_echo "${C_RED}[error]${C_RST} $label 模型名 '$model' 无效（HTTP 400）" >&2
         rm -f "$body_file"; return 1
       fi
       warn "$label HTTP 400（可能是参数格式问题，非通路错）：$(head -c 150 "$body_file")"
@@ -178,16 +178,19 @@ if command -v "$DOCKER" >/dev/null 2>&1 || [[ -x "$DOCKER" ]]; then
   ok "docker 可用: $DOCKER"
 else
   ERRORS=$((ERRORS+1))
-  echo "${C_RED}[error]${C_RST} docker 不可用" >&2
+  tdai_echo "${C_RED}[error]${C_RST} docker 不可用" >&2
 fi
 
 # 2. .env
 if [[ ! -f "$ENV_FILE" ]]; then
   ERRORS=$((ERRORS+1))
-  echo "${C_RED}[error]${C_RST} $ENV_FILE 不存在。执行：cp .env.example .env" >&2
+  tdai_echo "${C_RED}[error]${C_RST} $ENV_FILE 不存在。执行：cp .env.example .env" >&2
 else
   ok ".env 存在"
   set -a; source "$ENV_FILE"; set +a
+  if [[ -n "${_TDAI_OUTPUT_LANGUAGE_OVERRIDE:-}" ]]; then
+    TDAI_OUTPUT_LANGUAGE="$_TDAI_OUTPUT_LANGUAGE_OVERRIDE"
+  fi
 
   # 3. 必填参数
   MISSING=()
@@ -205,7 +208,7 @@ else
   done
   if (( ${#MISSING[@]} > 0 )); then
     ERRORS=$((ERRORS+1))
-    echo "${C_RED}[error]${C_RST} 以下必填参数未设置：${MISSING[*]}" >&2
+    tdai_echo "${C_RED}[error]${C_RST} 以下必填参数未设置：${MISSING[*]}" >&2
   else
     ok "所有必填参数已填写"
   fi
@@ -272,12 +275,12 @@ fi
 
 echo ""
 if (( ERRORS > 0 )); then
-  echo "${C_RED}✗ ${ERRORS} 个错误，${WARNS} 个警告 —— 无法启动${C_RST}" >&2
+  tdai_echo "${C_RED}✗ ${ERRORS} 个错误，${WARNS} 个警告 —— 无法启动${C_RST}" >&2
   exit 1
 elif (( WARNS > 0 )); then
-  echo "${C_YLW}⚠ ${WARNS} 个警告 —— 可以启动，但请注意上面的提示${C_RST}"
+  tdai_echo "${C_YLW}⚠ ${WARNS} 个警告 —— 可以启动，但请注意上面的提示${C_RST}"
   exit 0
 else
-  echo "${C_GRN}✓ 全部检查通过 —— 可以直接 ./start-all.sh${C_RST}"
+  tdai_echo "${C_GRN}✓ 全部检查通过 —— 可以直接 ./start-all.sh${C_RST}"
   exit 0
 fi

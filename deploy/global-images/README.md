@@ -45,6 +45,16 @@ cd TencentDB-Agent-Memory/deploy/global-images
 > 想跳过交互、直接读 `.env` 也可以：手动 `cp .env.example .env` 并填好 LLM 后，
 > 运行 `./start-all.sh` 一路回车确认即可（默认值就是 `.env` 里的值）。
 
+### 输出语言
+
+部署脚本默认使用中文。要切换为英文，在 `.env` 中设置：
+
+```dotenv
+TDAI_OUTPUT_LANGUAGE=en
+```
+
+支持 `zh`（默认）和 `en`；该设置适用于启动、停止和环境校验脚本。
+
 ### MongoDB 存储后端（试验特性，可选）
 
 默认存储仍是 **sqlite**（零依赖，数据落容器卷）。MongoDB 数据面是**试验特性**，
