@@ -55,6 +55,7 @@ export default function AgentGrid({
   onCreateAgent,
   onEditAgent,
   onDeleteAgent,
+  onArchiveAgent,
 }: {
   activeTeam: Team;
   agents: StoreAgent[];
@@ -70,6 +71,7 @@ export default function AgentGrid({
   onCreateAgent: () => void;
   onEditAgent: (agent: StoreAgent) => void;
   onDeleteAgent: (agent: StoreAgent) => void;
+  onArchiveAgent: (agent: StoreAgent) => void;
 }) {
   const { t } = useTranslation();
   const [keyword, setKeyword] = useState('');
@@ -293,6 +295,9 @@ export default function AgentGrid({
                 {/* 资产计数区：counts 还在加载时只把 4 个数字换成小骨架占位，主体立刻可见 */}
                 {renderAssets(agent, countsLoading)}
                 <div className="_memory-agents-card-actions">
+                  <Button type="text" disabled={!editable} onClick={() => onArchiveAgent(agent)}>
+                    归档
+                  </Button>
                   <Button
                     type="text"
                     disabled={!editable}
@@ -353,9 +358,14 @@ export default function AgentGrid({
               render: (agent: StoreAgent) => {
                 const editable = canEdit(agent);
                 return (
-                  <Button type="link" disabled={!editable} onClick={() => onDeleteAgent(agent)}>
-                    {t('agentGrid.table.delete')}
-                  </Button>
+                  <>
+                    <Button type="link" disabled={!editable} onClick={() => onArchiveAgent(agent)}>
+                      归档
+                    </Button>
+                    <Button type="link" disabled={!editable} onClick={() => onDeleteAgent(agent)}>
+                      {t('agentGrid.table.delete')}
+                    </Button>
+                  </>
                 );
               },
             },

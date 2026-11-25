@@ -218,7 +218,12 @@ ${PERSONA_TRIGGER_YAML}
   # 此处保持同值仅为可读性；插件/SDK 形态才读这个字段。
   storeBackend: ${MEMORY_CORE_STORE_MODE}
   embedding:
-    provider: none
+    provider: ${MEMORY_EMBEDDING_PROVIDER:-none}
+    baseUrl: "${MEMORY_EMBEDDING_BASE_URL:-}"
+    apiKey: "${MEMORY_EMBEDDING_API_KEY:-}"
+    model: "${MEMORY_EMBEDDING_MODEL:-}"
+    dimensions: ${MEMORY_EMBEDDING_DIMENSIONS:-1024}
+    sendDimensions: ${MEMORY_EMBEDDING_SEND_DIMENSIONS:-true}
 
 # ── Skill 模块 ──
 skill:

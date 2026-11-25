@@ -363,7 +363,14 @@ const routeTable: Record<string, Handler> = {
     S.userSessionDefaultGetSchema,
     async (d, c, s) => {
       await requireEntity(s, EntityType.User, d.user_id);
-      return s.userSessionDefault.get(c.userId!, d.user_id);
+      return s.userSessionDefault.get(c.userId!, d.user_id, d.workspace_id);
+    },
+  ),
+  [`${V3_PREFIX}/user-session-default/list`]: bind(
+    S.userSessionDefaultListSchema,
+    async (d, c, s) => {
+      await requireEntity(s, EntityType.User, d.user_id);
+      return s.userSessionDefault.list(c.userId!, d.user_id);
     },
   ),
   [`${V3_PREFIX}/user-session-default/set`]: bind(
@@ -377,7 +384,7 @@ const routeTable: Record<string, Handler> = {
     S.userSessionDefaultDeleteSchema,
     async (d, c, s) => {
       await requireEntity(s, EntityType.User, d.user_id);
-      return s.userSessionDefault.delete(c.userId!, d.user_id);
+      return s.userSessionDefault.delete(c.userId!, d.user_id, d.workspace_id);
     },
   ),
 

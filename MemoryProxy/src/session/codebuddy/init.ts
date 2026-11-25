@@ -588,13 +588,14 @@ export async function handleSessionInit(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
   agentSource: string = "codebuddy",
+  workspaceId: string = "",
 ): Promise<SessionInitResult> {
   const compositeKey = `${agentSource}:${sessionKey}`;
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     const result = await handleSessionInitInner(
       sessionKey, userId, messages, config, store, reqCtx,
-      metadataClient, userKey, spaceId, presetIdentity, agentSource,
+      metadataClient, userKey, spaceId, presetIdentity, agentSource, workspaceId,
     );
     // codex-only 后置增强：把最新 state 里的 codexPageIndex 塞进 formData,
     // 让 codexHandler 的 buildCodexFormResponse 拿到正确的翻页页码。这样
@@ -629,6 +630,7 @@ async function handleSessionInitInner(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
   agentSource: string = "codebuddy",
+  workspaceId: string = "",
 ): Promise<SessionInitResult> {
   const compositeKey = `${agentSource}:${sessionKey}`;
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
@@ -884,6 +886,11 @@ async function handleSessionInitInner(
       metadataClient,
       compositeKey,
       defaultTaskId: config.defaultTaskId,
+      workspaceId,
+      // v3.5：传 sessionKey，resolver 内部先查会话级绑定（session:<id>）
+      sessionKey,
+      // v3.6：传 agentSource，resolver 据此匹配待命绑定（arm:<brand>:<ts>）
+      agentSource,
     });
     const userDefaultResolution = userDefaultResult.resolution;
     const userDefaultFallbackReason = userDefaultResult.fallbackReason;

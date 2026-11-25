@@ -40,8 +40,16 @@ export interface InstanceUpstreamOverrideResult {
   newModelId: string;
   /** 是否修改了 body.model (仅 applied 且 row.model_id) */
   bodyModelUpdated: boolean;
-  /** custom upstream 用户自付, credit 跳过 */
+  /** custom upstream 用户自付, credit 跳过。
+   *  ⚠️ 不纳入平台计费（CreditDelta 不上报 MemoryPlus），但**纳入用量统计**：
+   *     见 src/upstream-usage.ts 口径说明，贡献在面板「系统状态 → 用量统计」体现。 */
   skipCreditReport: boolean;
+  /** 命中的 custom 组 id（用量统计维度；未命中时为空串） */
+  groupId: string;
+  /** 命中的 custom 组名（用量统计维度；未命中时为空串） */
+  groupName: string;
+  /** 命中组的 team 归属（P4 用量统计维度；未命中/全局组时空串） */
+  teamId: string;
 }
 
 export function stageInstanceUpstreamOverride(
@@ -58,6 +66,9 @@ export function stageInstanceUpstreamOverride(
       newModelId: modelId,
       bodyModelUpdated: false,
       skipCreditReport: false,
+      groupId: "",
+      groupName: "",
+      teamId: "",
     };
   }
 
@@ -67,11 +78,19 @@ export function stageInstanceUpstreamOverride(
   const newTargetUrl = input.requestPath
     ? joinUrl(row.base_url, input.requestPath)
     : `${row.base_url.replace(/\/+$/, "")}${forwardEndpoint}`;
-  const newEffectiveApiKey = row.mode === "custom_unified"
-    ? row.api_key
-    : apiKey; // custom_passthrough
-  const bodyModelUpdated = !!row.model_id;
-  const newModelId = row.model_id || modelId;
+  // P2: default 组显式配置了 api_key → 用组内 Key;custom_unified 用组内 Key;
+  // custom_passthrough / default 未填 Key → 沿用原 apiKey(config.yaml)。
+  const useRowKey =
+    row.mode === "custom_unified" || (row.group_type === "default" && !!row.api_key);
+  const newEffectiveApiKey = useRowKey && row.api_key ? row.api_key : apiKey;
+  // P1 多模型清单口径：清单非空时,请求模型在清单内 → 放行(不改 body.model);
+  // 不在清单内(手工/API 直连构造的请求)→ 回落清单第一个作为默认模型,不报错;
+  // 清单为空 → 旧行为(model_id 单值 override 或原样透传)。
+  const modelList = row.model_ids && row.model_ids.length > 0
+    ? row.model_ids
+    : row.model_id ? [row.model_id] : [];
+  const bodyModelUpdated = modelList.length > 0 && !modelList.includes(modelId);
+  const newModelId = bodyModelUpdated ? (modelList[0] as string) : modelId;
 
   return {
     applied: true,
@@ -79,6 +98,10 @@ export function stageInstanceUpstreamOverride(
     newEffectiveApiKey,
     newModelId,
     bodyModelUpdated,
+    // 不纳入平台计费（用户自付）；仅纳入用量统计 —— upstream-usage.ts
     skipCreditReport: true,
+    groupId: row.group_id ?? "",
+    groupName: row.name ?? "",
+    teamId: row.team_id ?? "",
   };
 }

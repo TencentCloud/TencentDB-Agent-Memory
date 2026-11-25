@@ -25,7 +25,11 @@ export type PageId =
   | 'team_members'
   | 'team_agents'
   | 'api_keys'
-  | 'analytics';
+  | 'analytics'
+  | 'model_admin'
+  | 'vector'
+  | 'system_status'
+  | 'session_default';
 
 /** 页面元数据 */
 export interface PageMeta {
@@ -53,6 +57,11 @@ export function usePageMeta(): Record<PageId, PageMeta> {
     team_members:    { id: 'team_members',    label: t('menu.team_members'), desc: t('menu.desc.team_members'), group: t('menu.group.organization'), order: 0 },
     team_agents:     { id: 'team_agents',     label: t('menu.team_agents'), desc: t('menu.desc.team_agents'), group: t('menu.group.organization'), order: 1 },
     api_keys:        { id: 'api_keys',        label: t('menu.api_keys'), desc: t('menu.desc.api_keys'), group: t('menu.group.organization'), order: 2 },
+    // 新增（中文写死，不依赖 i18n key，避免缺 key 时回显 key 名）
+    model_admin:     { id: 'model_admin',     label: '模型管理', desc: '为每个 Agent 配置模型供应商', group: t('menu.group.organization'), order: 3 },
+    vector:          { id: 'vector',          label: '向量检索', desc: '配置语义向量模型服务', group: t('menu.group.assets'), order: 6 },
+    system_status:   { id: 'system_status',   label: '系统状态', desc: '健康检查与用量统计', group: t('menu.group.organization'), order: 5 },
+    session_default: { id: 'session_default', label: '会话绑定', desc: '按工作区配置新会话默认 Team/Agent', group: t('menu.group.organization'), order: 4 },
   };
 }
 
@@ -73,6 +82,36 @@ export const ITEM_ICON: Record<PageId, JSX.Element> = {
   team_members: <UserIcon size={16} />,
   team_agents: <UsergroupIcon size={16} />,
   api_keys: <LockOnIcon size={16} />,
+  session_default: (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="5" width="18" height="5" rx="1.5" />
+      <rect x="3" y="14" width="18" height="5" rx="1.5" />
+      <line x1="8" y1="7.5" x2="8.01" y2="7.5" />
+      <line x1="8" y1="16.5" x2="8.01" y2="16.5" />
+    </svg>
+  ),
+  model_admin: (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="6" rx="1.5" />
+      <rect x="3" y="14" width="18" height="6" rx="1.5" />
+      <line x1="7" y1="7" x2="7.01" y2="7" />
+      <line x1="7" y1="17" x2="7.01" y2="17" />
+    </svg>
+  ),
+  vector: (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="18" cy="18" r="2.5" />
+      <line x1="8" y1="8" x2="16" y2="16" />
+    </svg>
+  ),
+  system_status: (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2a10 10 0 1 0 10 10" />
+      <line x1="12" y1="12" x2="12" y2="7" />
+      <line x1="12" y1="12" x2="16" y2="14" />
+    </svg>
+  ),
   wiki: <BooksIcon size={16} />,
   code: <CodeIcon size={16} />,
   skills: <ToolsIcon size={16} />,
