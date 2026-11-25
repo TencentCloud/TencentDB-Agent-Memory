@@ -88,6 +88,7 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
         maxTokens: cfg.llm.maxTokens,
         timeoutMs: cfg.llm.timeoutMs,
         stream: cfg.llm.stream ?? false,
+        strictOpenAICompat: cfg.llm.strictOpenAICompat,
       },
       logger,
     });

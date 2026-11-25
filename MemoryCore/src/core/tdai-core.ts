@@ -645,6 +645,7 @@ export class TdaiCore {
     maxTokens: number;
     timeoutMs: number;
     stream: boolean;
+    strictOpenAICompat: boolean;
   } {
     const resolved = resolveStandaloneLlmForRuntime(this.cfg.llm, this.instanceId);
     return {
@@ -654,6 +655,7 @@ export class TdaiCore {
       maxTokens: resolved.maxTokens ?? 4096,
       timeoutMs: resolved.timeoutMs ?? 120_000,
       stream: resolved.stream ?? false,
+      strictOpenAICompat: resolved.strictOpenAICompat ?? false,
     };
   }
 
@@ -678,7 +680,8 @@ export class TdaiCore {
   private shouldOverrideRunnerFactory(useStandaloneRunner: boolean): boolean {
     if (!useStandaloneRunner || !this.cfg.llm.enabled) return false;
     if (this.hostAdapter.hostType === "openclaw") return true;
-    return this.cfg.llm.provider === "proxy";
+    // memory.llm may opt in independently of the host factory's top-level config.
+    return this.cfg.llm.provider === "proxy" || this.cfg.llm.strictOpenAICompat === true;
   }
 
   private wirePipelineRunners(): void {
@@ -1030,6 +1033,7 @@ export class TdaiCore {
         maxTokens: runtimeLlm.maxTokens,
         timeoutMs: runtimeLlm.timeoutMs,
         stream: runtimeLlm.stream,
+        strictOpenAICompat: runtimeLlm.strictOpenAICompat,
       },
       // Default to enabled so the runner doesn't strip caller-provided tools.
       enableTools: true,
