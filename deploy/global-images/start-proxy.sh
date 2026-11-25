@@ -119,6 +119,7 @@ knowledge:
 auth:
   enabled: $(bool $PROXY_ENABLE_AUTH)
   url: "http://memory-core:8420"
+  apiKey: "${MEMORY_CORE_GATEWAY_API_KEY}"
   timeoutMs: 5000
 
 sessionInit:

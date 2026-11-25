@@ -822,6 +822,8 @@ export interface AuthConfig {
   enabled: boolean;
   /** Auth service base URL (e.g. http://kernel.example.com:8420). */
   url: string;
+  /** Optional Core gateway Bearer key used to call /v3/meta/auth/verify. */
+  apiKey?: string;
   /** Request timeout in ms. Default: 5000. */
   timeoutMs: number;
 }
@@ -1142,6 +1144,7 @@ export interface RawYamlConfig {
   auth?: {
     enabled?: boolean;
     url?: string;
+    apiKey?: string;
     timeoutMs?: number;
   };
   systemUsers?: Partial<SystemUserEntry>[];
