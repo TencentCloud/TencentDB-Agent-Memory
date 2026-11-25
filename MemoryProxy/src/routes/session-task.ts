@@ -670,6 +670,22 @@ export async function confirmPendingTaskAction(
       error: `metadata updateTask failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+
+  // 普通轮次和 L2a 恢复都会复用 taskDetail；确认成功前将内核返回值写回快照。
+  // 重读当前状态，避免网络请求期间的会话变更被旧 resolved.state 覆盖。
+  const compositeKey = `${input.agentSource}:${input.sessionKey}`;
+  const store = getSessionStore();
+  const latestState = store.get(compositeKey);
+  if (latestState?.sessionInfo?.task_id === updated.task_id) {
+    await store.set(compositeKey, {
+      ...latestState,
+      taskDetail: {
+        id: updated.task_id,
+        name: updated.title,
+        description: normalizeDesc(updated.description),
+      },
+    });
+  }
   clearPending(key);
   return {
     success: true,
