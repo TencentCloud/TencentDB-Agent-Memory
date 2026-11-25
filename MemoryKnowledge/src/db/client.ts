@@ -6,7 +6,7 @@
 
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import * as schema from "./schema.js";
@@ -30,6 +30,7 @@ export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Databas
   }
 
   const raw = new Database(opts.path);
+  if (opts.path !== ":memory:") restrictToOwner(opts.path);
   raw.pragma("journal_mode = WAL");
   raw.pragma("busy_timeout = 5000");
 
@@ -40,6 +41,23 @@ export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Databas
   }
 
   return { db, raw };
+}
+
+/**
+ * The DB holds source credentials stored as base64 (not encrypted); their
+ * confidentiality relies on file permissions (see source-auth/credential-store.ts).
+ * Force 0600 on the DB and any pre-existing WAL/SHM sidecars — SQLite creates new
+ * sidecars with the main file's mode, so this must run before enabling WAL.
+ * Best effort: filesystems without POSIX modes (e.g. some mounts, Windows) are ignored.
+ */
+export function restrictToOwner(dbPath: string): void {
+  for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      if (existsSync(p)) chmodSync(p, 0o600);
+    } catch {
+      // ignore — permissions not supported on this filesystem
+    }
+  }
 }
 
 /**
