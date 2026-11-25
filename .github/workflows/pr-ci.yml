@@ -108,7 +108,22 @@ jobs:
             console.log('   openclawVersion:', oc.build.openclawVersion);
           "
 
-  # ── 6. Package size guard ──────────────────────────────────
+  # ── 6. Bash 3.2 variable parsing guard ─────────────────────
+  bash-utf8-vars:
+    name: Bash 3.2 Variables
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check unbraced variables before non-ASCII text
+        working-directory: .
+        run: node scripts/ci/check-bash-utf8-vars.mjs
+
+  # ── 7. Package size guard ──────────────────────────────────
   size:
     name: Size Guard
     needs: pack
@@ -138,7 +153,7 @@ jobs:
             echo "✅ Size OK"
           fi
 
-  # ── 7. Skill queue isolation guard ─────────────────────────
+  # ── 8. Skill queue isolation guard ─────────────────────────
   # 强约束：禁止 PR 触碰记忆模块红线文件（state/pipeline-worker/integrations/redis），
   # 禁止 src/core/skill/** 新增直接 fs import。详见
   # docs/design/2026-06-16-skill-extract-queue.md

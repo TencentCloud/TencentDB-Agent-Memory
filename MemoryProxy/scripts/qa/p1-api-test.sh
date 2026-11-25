@@ -66,7 +66,7 @@ head_ "P1-E 模型门控 + 别名 (4)"
 req "/claude-code/$SPACE/v1/messages" \
   "{\"model\":\"$MODEL\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
 if [[ "$HTTP_CODE" == "200" ]]; then ok "P1-E1" "价目表内 model → 200"; else
-  bad "P1-E1" "期望 200, 实际 $HTTP_CODE｜$(printf '%s' "$BODY" | head -c 150)"; fi
+  bad "P1-E1" "期望 200, 实际 ${HTTP_CODE}｜$(printf '%s' "$BODY" | head -c 150)"; fi
 
 # P1-E2 model 不在价目表 → 400 (须走不带 instance 覆盖的路径)
 req "/proxy/$SPACE/v1/messages" \
@@ -74,7 +74,7 @@ req "/proxy/$SPACE/v1/messages" \
 if [[ "$HTTP_CODE" == "400" ]] && printf '%s' "$BODY" | grep -q "not a registered display name"; then
   ok "P1-E2" "未登记 model → 400 + not a registered display name"
 else
-  bad "P1-E2" "期望 400+未登记文案, 实际 $HTTP_CODE｜$(printf '%s' "$BODY" | head -c 200)"
+  bad "P1-E2" "期望 400+未登记文案, 实际 ${HTTP_CODE}｜$(printf '%s' "$BODY" | head -c 200)"
 fi
 
 # P1-E3 alias 回写 → 上游收到 model_id (用 display name 发, 看上游是否接受)
@@ -158,7 +158,7 @@ req "/claude-code/$SPACE/v1/messages" \
 # mem 命令用同一 session + 预选 header。
 # ⚠️ 不能用 `delta=$(mem_req ...)` 调用 —— 命令替换会把函数放进子 shell，
 #    函数内设置的 BODY/HTTP_CODE 在父 shell 全部丢失（曾导致 txt 恒为空）。
-#    改为: 调 mem_req <cmd> 后, 读全局 $MEM_DELTA / $BODY。
+#    改为: 调 mem_req <cmd> 后, 读全局 $MEM_DELTA / ${BODY}。
 MEM_DELTA=""
 mem_req() {
   local cmd="$1"
