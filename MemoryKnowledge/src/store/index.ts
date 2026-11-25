@@ -46,7 +46,11 @@ export type {
   LlmBindingMode,
 } from "./llm-binding-store.js";
 
-export { CodeGraphService } from "./code-graph-service.js";
+export {
+  CodeGraphService,
+  DEFAULT_CODE_GRAPH_BUILD_TIMEOUT_MS,
+  resolveCodeGraphBuildTimeoutMs,
+} from "./code-graph-service.js";
 export type {
   CodeGraphWorker,
   CodeGraphBuildContext,

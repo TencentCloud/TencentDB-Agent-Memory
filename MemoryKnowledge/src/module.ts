@@ -14,7 +14,11 @@ import simpleGit from "simple-git";
 import type { Db } from "./db/client.js";
 import { SqliteKnowledgeStore, type IKnowledgeStore } from "./store/index.js";
 import { WikiService, type WikiWorker } from "./store/index.js";
-import { CodeGraphService, type CodeGraphWorker } from "./store/index.js";
+import {
+  CodeGraphService,
+  resolveCodeGraphBuildTimeoutMs,
+  type CodeGraphWorker,
+} from "./store/index.js";
 import { BuildQueue } from "./store/index.js";
 import {
   createLlmBindingStore,
@@ -267,7 +271,9 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, serviceId, setInternalStatus } = ctx;
+    const { dir, repoUrl, branch, codeGraphId, serviceId, setInternalStatus, signal } = ctx;
+
+    signal.throwIfAborted();
 
     // 外部来源（工蜂等）→ 注入令牌；无凭据行 → 公开仓。
     const cleanUrl = stripCredentials(repoUrl);
@@ -297,17 +303,24 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
       try {
         setInternalStatus("fetching");
         const res = await fetcher.sync(effectiveUrl, branch, dir, sshOpts);
+        signal.throwIfAborted();
         version = res.version;
 
         setInternalStatus("indexing");
         let instance = instancePool.get(codeGraphId);
         if (!instance) {
           instance = await openIndex(dir);
+          if (signal.aborted) {
+            closeIndex(instance);
+            signal.throwIfAborted();
+          }
         }
         await syncIndex(instance);
+        signal.throwIfAborted();
         instancePool.set(codeGraphId, instance);
         didIncrementalSync = true;
       } catch (err) {
+        if (signal.aborted) throw signal.reason ?? err;
         log.warn(
           `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -343,13 +356,19 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
         }
         throw err;
       }
+      signal.throwIfAborted();
       version = res.version;
       // ★ 凭据落地清理：clone 会把带令牌的 URL 写进 .git/config 的 origin。
       //   不清理等于把用户 PAT 明文留在磁盘上（后续 git fetch 也一直用它）。
       await sanitizeCloneRemote(dir, stripCredentials(repoUrl), serviceId, codeGraphId);
+      signal.throwIfAborted();
 
       setInternalStatus("indexing");
       const instance = await indexProject(dir);
+      if (signal.aborted) {
+        closeIndex(instance);
+        signal.throwIfAborted();
+      }
       instancePool.set(codeGraphId, instance);
     }
 
@@ -374,7 +393,9 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
    * 因此不会因网络、分支、令牌问题失败 —— 失败只可能是目录本身有问题。
    */
   const realLocalCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, codeGraphId, setInternalStatus } = ctx;
+    const { dir, codeGraphId, setInternalStatus, signal } = ctx;
+
+    signal.throwIfAborted();
 
     // 目录校验：build() 入队前已查过一次，这里再查是防「入队后到执行前」被删。
     if (!existsSync(dir)) {
@@ -383,6 +404,10 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
     setInternalStatus("indexing");
     const instance = await indexProject(dir);
+    if (signal.aborted) {
+      closeIndex(instance);
+      signal.throwIfAborted();
+    }
     instancePool.set(codeGraphId, instance);
 
     const rawStats = getStats(instance);
@@ -448,6 +473,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     localWorker: config.localCodeWorker ?? realLocalCodeWorker,
     queue: sharedQueue,
     logger: { info: log.info.bind(log), warn: log.warn.bind(log), error: log.error.bind(log) },
+    buildTimeoutMs: resolveCodeGraphBuildTimeoutMs(),
     callbackConfig,
     // 释放 code-graph 内存资源（008 delete 清理）：从 pool 移除并关闭索引句柄。幂等。
     releaseInstance: (codeGraphId: string) => {
