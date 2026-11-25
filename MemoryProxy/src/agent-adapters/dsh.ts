@@ -23,11 +23,11 @@
  * | 类别 | header 信号 | body 特征 |
  * |---|---|---|
  * | compaction | `x-deepseek-harness-compact: 1` | — |
- * | title-gen | 无 | tools 缺 + thinking.disabled + max_tokens<=128 + system 以 "Create a concise title..." 开头 |
+ * | title-gen | 无 | tools 缺失或为空 + system 以 "Create a concise title..." 开头 |
  * | main | 无 | 其它 |
  *
  * classifyRequest 优先级:**compact header > title body-shape > main**;
- * title 判据必须**三合一都满足**才当 aux(单一特征易误判)。
+ * title 必须同时匹配两项判据，避免误判普通对话。
  *
  * # 两个适配点
  *   - `classifyRequest`: 三重信号判(compact / title / main)
@@ -60,38 +60,19 @@ const DSH_TITLE_SYSTEM_PROMPT_PREFIX =
   "Create a concise title for an AI coding-assistant session";
 
 /**
- * dsh title-gen 请求的 max_tokens 上限。抓包实证 `max_tokens=64`;
- * 留 128 一点富余,避免上游微调后跟着漂。
- */
-const DSH_TITLE_MAX_TOKENS_CEIL = 128;
-
-/**
- * 判定 dsh 请求是否为 title-gen(body 特征三合一)。
- *
- * 全部条件必须满足才当 aux。任一条不满足即返 false(避免误判 main)。
+ * dsh v0.2 can omit thinking settings and use a larger token budget for titles.
+ * The fixed system prompt and absence of tools identify both client versions.
  */
 function isDshTitleGen(body: Record<string, unknown>): boolean {
-  // 条件 1: tools 缺失或空数组(主对话恒 25+ 个)
   const tools = body.tools;
   const hasTools = Array.isArray(tools) && tools.length > 0;
   if (hasTools) return false;
 
-  // 条件 2: thinking.type === "disabled"
-  const thinking = body.thinking as { type?: string } | undefined;
-  if (thinking?.type !== "disabled") return false;
-
-  // 条件 3: max_tokens <= 128
-  const maxTokens = body.max_tokens;
-  if (typeof maxTokens !== "number" || maxTokens > DSH_TITLE_MAX_TOKENS_CEIL) return false;
-
-  // 条件 4: 首条 system 消息 content 以 title prompt 前缀开头
   const messages = body.messages;
   if (!Array.isArray(messages) || messages.length === 0) return false;
   const first = messages[0] as { role?: string; content?: unknown } | undefined;
   if (!first || first.role !== "system" || typeof first.content !== "string") return false;
-  if (!first.content.startsWith(DSH_TITLE_SYSTEM_PROMPT_PREFIX)) return false;
-
-  return true;
+  return first.content.startsWith(DSH_TITLE_SYSTEM_PROMPT_PREFIX);
 }
 
 // ── User text extraction ─────────────────────────────────────────────────────
@@ -125,7 +106,7 @@ export const dshAdapter: AgentAdapter = {
     // `purpose:'compaction'` 时才塞,无歧义
     if (headers?.["x-deepseek-harness-compact"] === "1") return "auxiliary";
 
-    // 信号 2: title-gen body 特征三合一(见 isDshTitleGen)
+    // 信号 2: title-gen 的固定 system prompt，且请求不包含 tools。
     if (isDshTitleGen(body)) return "auxiliary";
 
     // 其它一律 main
