@@ -822,6 +822,15 @@ charts as "Not enabled" without erroring out.
 ./stop-all.sh --purge    # nuke volumes, admin key, and generated proxy config
 ```
 
+> **Proxy session persistence:** the proxy keeps its session store (sessions,
+> identity bindings, rate-limit buckets) in SQLite at
+> `PROXY_DB_PATH=/data/tdai-memory-proxy/proxy.db` inside the container.
+> `start-proxy.sh` now bind-mounts a named volume there (`PROXY_VOLUME`,
+> default `tdai-proxy-data`) so re-running the script no longer wipes active
+> sessions; `--purge` deletes this volume too. If you run your own `docker run`
+> for the proxy, mount a volume at `/data/tdai-memory-proxy` (or point
+> `PROXY_DB_PATH` at a mounted path) for the same effect.
+
 ## More
 
 Additional installation modes (OpenClaw, Hermes, CodeBuddy, WorkBuddy, SDK, running from source,
