@@ -3,16 +3,25 @@
  * Stateless, server-delegated offload client.
  * 1 hook (after_tool_call) + 1 Context Engine (assemble → compaction API).
  */
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { OffloadClientConfig, Logger } from "./types.js";
 import { defaultOffloadClientConfig } from "./types.js";
 import { OffloadApiClient } from "./offload-api-client.js";
 import { OffloadContextEngine } from "./context-engine.js";
+import type { OffloadSessionCache } from "./context-engine.js";
 import { createAfterToolCallHandler } from "./hooks/after-tool-call.js";
 
 export interface OpenClawPluginApi {
   on: (hookName: string, handler: (...args: any[]) => any) => void;
   registerContextEngine: (id: string, factoryOrInstance: any) => any;
   logger?: Logger;
+}
+
+function resolveTurnStateRoot(ctx?: { agentDir?: string; workspaceDir?: string }): string {
+  return ctx?.agentDir
+    ?? ctx?.workspaceDir
+    ?? join(homedir(), ".openclaw", "memory-tencentdb");
 }
 
 /**
@@ -34,9 +43,10 @@ export function registerOffloadClient(api: OpenClawPluginApi, userConfig: Partia
   }
 
   const client = new OffloadApiClient(config, logger);
+  const sessions: OffloadSessionCache = new Map();
 
   // Context Engine: occupies slot, assemble() calls compaction API
-  const engine = new OffloadContextEngine(client, config, logger);
+  const engine = new OffloadContextEngine(client, config, logger, { sessions });
 
   // Hook: fire-and-forget ingest on every tool call (with context from engine per session)
   const afterToolCallHandler = createAfterToolCallHandler(
@@ -63,7 +73,11 @@ export function registerOffloadClient(api: OpenClawPluginApi, userConfig: Partia
   });
 
   try {
-    const result = api.registerContextEngine("memory-tencentdb", () => engine) as any;
+    const result = api.registerContextEngine("memory-tencentdb", (ctx) =>
+      new OffloadContextEngine(client, config, logger, {
+        sessions,
+        stateRoot: resolveTurnStateRoot(ctx),
+      })) as any;
     if (result?.ok === false) {
       logger.error(
         `[offload-client] Context Engine slot occupied by "${result.existingOwner ?? "unknown"}". ` +
