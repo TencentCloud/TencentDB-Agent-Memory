@@ -76,7 +76,8 @@ class _MetadataMethodsMixin:
     ) -> Dict[str, Any]:
         if isinstance(team_id_or_request, str):
             return self._stub.post(f"{_V3}/user/list", _body({"team_id": team_id_or_request, **(pagination or {})}))
-        return self._stub.post(f"{_V3}/user/list", _body(team_id_or_request or {}))
+        payload = (pagination or {}) if team_id_or_request is None else team_id_or_request
+        return self._stub.post(f"{_V3}/user/list", _body(payload))
 
     # ── UserKey ──
 
@@ -91,7 +92,8 @@ class _MetadataMethodsMixin:
     ) -> Dict[str, Any]:
         if isinstance(user_id_or_request, str):
             return self._stub.post(f"{_V3}/user-key/list", _body({"user_id": user_id_or_request, **(pagination or {})}))
-        return self._stub.post(f"{_V3}/user-key/list", _body(user_id_or_request or {}))
+        payload = (pagination or {}) if user_id_or_request is None else user_id_or_request
+        return self._stub.post(f"{_V3}/user-key/list", _body(payload))
 
     def _get_user_key(self, key_id: str) -> Dict[str, Any]:
         return self._stub.post(f"{_V3}/user-key/get", {"key_id": key_id})
