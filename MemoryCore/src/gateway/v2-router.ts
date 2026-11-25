@@ -18,7 +18,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
 import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
-import type { EmbeddingService } from "../core/store/embedding.js";
+import { hasClientEmbedding, type EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, scopeProfileStorageView, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
 import type { Logger } from "../core/types.js";
@@ -710,7 +710,8 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
     }
   }
 
-  const embedding = deps.getEmbedding();
+  const clientEmbedding = deps.getEmbedding();
+  const embedding = hasClientEmbedding(clientEmbedding) ? clientEmbedding : undefined;
   const acceptedIds: string[] = [];
   const acceptedRecords: L0Record[] = [];
   const ingestBaseMs = Date.now();
@@ -1739,6 +1740,28 @@ async function syncProfileToVdb(
   }
 }
 
+async function syncWrittenProfile(
+  storage: StorageAdapter,
+  store: IMemoryStore | undefined,
+  type: "l2" | "l3",
+  filename: string,
+  content: string,
+  logger: Logger,
+  isolation?: RequestIsolation,
+): Promise<number> {
+  if (storage.getBackend().type !== "rowfs") {
+    return syncProfileToVdb(store, type, filename, content, logger, undefined, isolation);
+  }
+  const id = buildProfileStableId(buildIsolationScope(isolation), type, filename);
+  try {
+    const [row] = (await store?.queryProfilesByIds?.([id])) ?? [];
+    return row?.version ?? 0;
+  } catch (err) {
+    logger.warn(`${TAG} [profile-sync] could not read the version of ${filename}: ${err instanceof Error ? err.message : String(err)}`);
+    return 0;
+  }
+}
+
 /** Best-effort delete L2 profiles from VDB. */
 async function deleteProfilesFromVdb(
   store: IMemoryStore | undefined,
@@ -1970,7 +1993,7 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
 
   // Sync L2 to VDB profiles + refresh scene index (best-effort)
   const store = deps.getStore();
-  const version = await syncProfileToVdb(store, "l2", path, finalContent, deps.logger, undefined, deps.requestIsolation);
+  const version = await syncWrittenProfile(baseStorage, store, "l2", path, finalContent, deps.logger, deps.requestIsolation);
   await refreshSceneIndex(storage, deps.logger);
 
   // 审计：L2 update — record_id 用 path（L2 主键 = 文件路径）
@@ -2116,7 +2139,7 @@ async function handleCoreWrite(body: unknown, _auth: V2AuthContext, requestId: s
 
   // Sync L3 persona to VDB profiles (best-effort)
   const store = deps.getStore();
-  const version = await syncProfileToVdb(store, "l3", StoragePaths.persona, personaBody, deps.logger, undefined, deps.requestIsolation);
+  const version = await syncWrittenProfile(baseStorage, store, "l3", StoragePaths.persona, personaBody, deps.logger, deps.requestIsolation);
 
   // 审计：L3 update — record_id 用 persona 的 storage path
   await recordAudit(store, {

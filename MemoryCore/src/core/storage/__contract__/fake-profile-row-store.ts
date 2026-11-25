@@ -13,6 +13,7 @@ import type {
   ProfileRowCapableStore,
   ProfileSyncRecord,
 } from "../../store/types.js";
+import { ProfileVersionConflictError } from "../../store/profile-row-store.js";
 
 export class FakeProfileRowStore {
   private rows = new Map<string, ProfileRecord>();
@@ -47,7 +48,7 @@ export class FakeProfileRowStore {
     for (const r of records) {
       const existing = this.rows.get(r.id);
       if (r.baselineVersion !== undefined && existing && existing.version !== r.baselineVersion) {
-        throw new Error(`profile optimistic-lock conflict id=${r.id} baseline=${r.baselineVersion}`);
+        throw new ProfileVersionConflictError(r.id, r.baselineVersion);
       }
       const { baselineVersion: _drop, ...row } = r;
       this.rows.set(r.id, row);

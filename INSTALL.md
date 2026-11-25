@@ -108,6 +108,29 @@ then run `./start-all.sh`.
 
 ---
 
+## Optional: Qdrant storage backend (off by default)
+
+**What it does.** Keeps the memory data plane (L0/L1/L2/L3, memory prompts, audit) in [Qdrant](https://qdrant.tech). Keyword recall uses BM25 sparse vectors with server-side IDF; with an embedding provider configured, dense vectors are added and fused with BM25 via RRF. Skills and metadata stay in sqlite on the container volume.
+
+### Enabling it
+
+Set in `.env`, then run `./start-all.sh`:
+
+```bash
+MEMORY_CORE_STORE_MODE=qdrant
+# External Qdrant (self-hosted or Qdrant Cloud):
+# QDRANT_URL=https://your-cluster.cloud.qdrant.io:6333
+# QDRANT_API_KEY=<YOUR_QDRANT_API_KEY>
+```
+
+If `QDRANT_URL` is unset, the script starts a local `qdrant/qdrant` container on the stack network. Data lands on the `qdrant-local-storage` volume, which `./stop-all.sh --purge` also removes.
+
+### Disabling it
+
+Comment out `MEMORY_CORE_STORE_MODE` in `.env` or set it to `sqlite`, then run `./start-all.sh`. As with MongoDB, **switching backends does not migrate existing data** — back up first. See [`MemoryCore/README.md`](./MemoryCore/README.md#qdrant-storage-backend-optional) for the environment variables and search behaviour.
+
+---
+
 ## After deploy: making it useful
 
 Starting the containers is just half the job. To make coding agents

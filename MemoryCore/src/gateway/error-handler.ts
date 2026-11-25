@@ -20,6 +20,7 @@
 
 import { randomUUID } from "node:crypto";
 import { RecallFailure } from "../core/hooks/recall-errors.js";
+import { ProfileVersionConflictError } from "../core/store/profile-row-store.js";
 
 export interface ClientFacingError {
   /** Stable business code: HTTP status (4xx/5xx) for unknown errors, RecallError.code for recall failures. */
@@ -82,6 +83,14 @@ export function classifyError(err: unknown): ClassifiedError {
       status: 409,
       client: { code: 409, message: "Concurrent write conflict, please retry", trace_id, retryable: true },
       logLine: `[${trace_id}] CosAppendConflict: ${err.message}`,
+    };
+  }
+
+  if (err instanceof ProfileVersionConflictError) {
+    return {
+      status: 409,
+      client: { code: 409, message: "Concurrent write conflict, please retry", trace_id, retryable: true },
+      logLine: `[${trace_id}] ProfileVersionConflict: ${err.message}`,
     };
   }
 

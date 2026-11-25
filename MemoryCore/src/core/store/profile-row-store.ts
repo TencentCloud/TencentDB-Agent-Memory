@@ -55,12 +55,24 @@ export class BackendCapabilityError extends Error {
         `the data plane does not provide profile rows ` +
         `(missing: ${missing.join(", ") || "none"}). ` +
         `Either switch the file plane to a non-row backend (FILE_STORE_MODE=local), ` +
-        `or switch the data plane to one that stores profile rows (STORE_MODE=mongodb).`,
+        `or switch the data plane to one that stores profile rows (STORE_MODE=mongodb or qdrant).`,
     );
     this.name = "BackendCapabilityError";
     this.dbKind = dbKind;
     this.fsKind = fsKind;
     this.missing = missing;
+  }
+}
+
+export class ProfileVersionConflictError extends Error {
+  readonly profileId: string;
+  readonly baselineVersion: number;
+
+  constructor(profileId: string, baselineVersion: number, tag = "") {
+    super(`${tag ? `${tag} ` : ""}profile optimistic-lock conflict id=${profileId} baseline=${baselineVersion}`);
+    this.name = "ProfileVersionConflictError";
+    this.profileId = profileId;
+    this.baselineVersion = baselineVersion;
   }
 }
 

@@ -111,6 +111,7 @@
     "@opentelemetry/sdk-node": "^0.218.0",
     "@opentelemetry/sdk-trace-base": "^2.7.1",
     "@opentelemetry/semantic-conventions": "^1.41.1",
+    "@qdrant/js-client-rest": "^1.19.0",
     "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1",
     "@tencentdb-agent-memory/tcvdb-text": "^0.1.1",
     "ai": "^6.0.164",

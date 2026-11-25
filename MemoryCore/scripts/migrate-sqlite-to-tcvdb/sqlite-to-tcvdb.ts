@@ -7,7 +7,7 @@ import { createBM25Encoder } from "../../src/core/store/bm25-local.js";
 import { VectorStore, type L0RecordRow } from "../../src/core/store/sqlite/memory-store.js";
 import { TcvdbMemoryStore } from "../../src/core/store/tcvdb/memory-store.js";
 import type { L0Record, L1RecordRow, ProfileRecord, ProfileSyncRecord, StoreInitResult } from "../../src/core/store/types.js";
-import { readManifest } from "../../src/utils/manifest.js";
+import { readManifest, type ManifestStoreInfo } from "../../src/utils/manifest.js";
 import {
   rewriteMigrationManifest as rewriteMigrationManifestDefault,
   type RewriteMigrationManifestResult,
@@ -75,7 +75,7 @@ export interface MigrationPreflightSummary {
     l1Count: number;
     profileCount: number;
     manifestExists: boolean;
-    manifestStoreType: "sqlite" | "tcvdb" | "mongodb" | null;
+    manifestStoreType: ManifestStoreInfo["type"] | null;
   };
   target: {
     url: string;
