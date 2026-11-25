@@ -666,7 +666,7 @@ export async function runOpenaiChatPipeline(
 
   // ── Request kind classification (auxiliary detection for OpenAI-chat clients) ──
   // dsh (deepseek-harness) 会在 compaction 请求带 `x-deepseek-harness-compact: 1`
-  // header,title-gen 靠 body 特征三合一。这类请求**不能**走 session-init form,
+  // header,title-gen 靠固定 system prompt 和空 tools。这类请求**不能**走 session-init form,
   // 也不能触发 mem 拦截 / L0 写入 / skill 提取 —— 应该直接透传上游。
   // codebuddy / claude-code 客户端 adapter classifyRequest 恒返 "main",行为无变。
   const { resolveAgentAdapter } = await import("../../agent-adapters/index.js");
