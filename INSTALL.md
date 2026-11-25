@@ -26,13 +26,23 @@ cd TencentDB-Agent-Memory/deploy/global-images
 ./start-all.sh
 ```
 
-`start-all.sh` is **interactive**. When run, it automatically:
+The scripts provide an interactive configuration flow.
+
+**Windows 10/11**: start Docker Desktop in Linux containers mode, then run
+`.\start-all.ps1` in PowerShell 5.1 or 7+ from the same directory. Git Bash/WSL
+is not required. If execution policy blocks it, run
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-all.ps1` for this
+process only. Use `.\verify.ps1` for preflight and `.\stop-all.ps1` to stop while
+keeping data. See the [Windows deployment notes](./deploy/global-images/README.md#windows-原生-powershell)
+for non-interactive mode and configuration details.
+
+Both `start-all.sh` and `start-all.ps1` follow this interactive flow:
 
 1. Copies `.env.example` to `.env` if `.env` doesn't exist
 2. Walks you through both LLM groups (press Enter to keep the current default):
    - `memory` group: `MEMORY_LLM_BASE_URL` / `MEMORY_LLM_API_KEY` / `MEMORY_LLM_MODEL` (used internally by memory + hub)
    - `proxy` group: `PROXY_UPSTREAM_URL` / `PROXY_UPSTREAM_API_KEY` / `PROXY_UPSTREAM_MODEL` (upstream the proxy forwards to; can reuse the memory group)
-3. **Immediately probes the LLM connectivity** after each group — if it fails, you're prompted to re-enter until it passes (or you abort)
+3. **Probes LLM connectivity** before starting containers. Bash offers retries; PowerShell stops on failure so you can correct the configuration and rerun.
 4. Writes the values back to `.env` for persistence
 5. Boots the three containers once everything passes
 
