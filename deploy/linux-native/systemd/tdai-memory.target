@@ -1,0 +1,7 @@
+[Unit]
+Description=TencentDB Agent Memory
+Requires=tdai-memory-core.service tdai-memory-knowledge.service tdai-memory-panel.service tdai-memory-proxy.service
+After=tdai-memory-proxy.service
+
+[Install]
+WantedBy=multi-user.target

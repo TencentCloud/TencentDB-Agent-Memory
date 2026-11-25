@@ -1,0 +1,11 @@
+Package: tdai-memory
+Version: 1.0.2
+Section: database
+Priority: optional
+Architecture: amd64
+Maintainer: TencentDB Agent Memory Team
+Depends: bash, ca-certificates, curl, libstdc++6, systemd
+Description: TencentDB Agent Memory native services
+ Four-process local deployment of MemoryCore, MemoryKnowledge,
+ MemoryPanel and MemoryProxy with a bundled Node.js 22 runtime.
+ Configuration, SQLite data and logs are stored under /opt/tdai-memory.

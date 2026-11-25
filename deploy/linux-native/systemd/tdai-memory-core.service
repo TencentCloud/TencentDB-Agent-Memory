@@ -1,0 +1,21 @@
+[Unit]
+Description=TencentDB Agent Memory Core
+After=network.target
+PartOf=tdai-memory.target
+
+[Service]
+Type=simple
+User=tdai-memory
+Group=tdai-memory
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/scripts/run-component.sh core
+ExecStartPost=@ROOT@/scripts/wait-health.sh core
+ExecStartPost=@ROOT@/scripts/initialize-admin.sh
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=120s
+TimeoutStopSec=30s
+UMask=0077
+
+[Install]
+WantedBy=tdai-memory.target

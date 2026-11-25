@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/opt/tdai-memory
+if [[ "${1:-}" == "remove" || "${1:-}" == "deconfigure" ]]; then
+  "$ROOT/scripts/install-systemd.sh" --remove
+fi
