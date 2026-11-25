@@ -427,7 +427,7 @@ memory:
 | POST | `/v2/conversation/query` | L0 查询对话 |
 | POST | `/v2/conversation/search` | L0 搜索对话 |
 | POST | `/v2/conversation/delete` | L0 删除对话 |
-| POST | `/v2/atomic/add` | L1 添加记忆 |
+| POST | `/v2/atomic/update` | L1 更新已有记忆 |
 | POST | `/v2/atomic/query` | L1 查询记忆 |
 | POST | `/v2/atomic/search` | L1 搜索记忆 |
 | POST | `/v2/atomic/delete` | L1 删除记忆 |
@@ -437,6 +437,8 @@ memory:
 | POST | `/v2/scenario/rm` | L2 删除场景 |
 | POST | `/v2/persona/read` | L3 读取画像 |
 | POST | `/v2/persona/write` | L3 写入画像 |
+
+> 当前 Gateway 没有 `/v2/atomic/add` 或 create-only L1 接口。`/v2/atomic/update` 只更新已有 ID；ID 不存在时会返回 404。通过 `/v2/conversation/add` 写入对话会触发提取流程，不等同于保存调用方已审核的 L1 原子记忆。关于 create-only API 的讨论见 [#1596](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1596)。
 
 ---
 
@@ -541,67 +543,6 @@ export TDAI_MEMORY_SERVICE_ID="agent-customer-support"
 
 ---
 
-## 端到端验证（E2E）
+## E2E 验证状态
 
-仓库提供两份开箱即用的 E2E 脚本，分别覆盖两种部署形态。它们都基于真实的 Hermes API Server + 真实 LLM + 真实 Gateway 进程，跑通整条链路。
-
-### Standalone E2E：`__tests__/e2e/test_hermes_standalone_e2e.py`
-
-验证开源单机部署链路：
-
-```
-Hermes API Server → memory_tencentdb (v1 plugin) → 自管理 Gateway 子进程 → SQLite + 本地 FS
-```
-
-覆盖项：
-- Hermes API Server 启动、`/health` 通过
-- 首次 chat 触发 v1 插件 `initialize()`，自动 `pnpm exec tsx src/gateway/server.ts` 拉起 Node 子进程
-- Gateway `/health` 报告 `vectorStore: true`
-- 3 轮对话：植入 marker → 模型回忆并回显 → 跨 session 通过 v1 plugin prefetch 召回
-- Side-channel：直连 Gateway `/search/conversations` 查到本次 run 的 marker
-- 工具层：`/search/conversations` / `/search/memories` 正常响应
-
-```bash
-hermes-agent/.venv/bin/python MemoryCore/__tests__/e2e/test_hermes_standalone_e2e.py
-```
-
-实测结果：**16 / 16 passed**。
-
-### Service E2E：`MemoryCore/__tests__/e2e/test_hermes_service_e2e.py`
-
-验证云服务化多副本部署链路：
-
-```
-mock-shark (Shark stub: 提供 VDB/COS 配置)
-2 个 Gateway 进程（service mode，共享 TCVDB）
-Hermes → memory_tencentdb_v2 (v2 plugin, tdai_memory SDK) → Gateway-1 → TCVDB
-Side-channel 在 Gateway-2 验证 → 证明 TCVDB 真共享
-```
-
-覆盖项：
-- mock-shark + GW1 + GW2 + Hermes 全部就绪
-- 两个 Gateway 都是 service 模式（`stateBackend=connected` + `timerScanner` 运行中）
-- Hermes `/v1/models` 返回 200，v2 plugin 加载成功
-- 3 轮对话通过 v2 plugin 写入 GW1 → 真实 TCVDB
-- **跨 Gateway 一致性**：GW2 search 能找到 GW1 写入的 marker
-- GW2 `/conversation/query` 拉到主 session 的全部消息
-- 跨 session prefetch：模型在新 session 中通过 v2 plugin 召回 marker
-- L1 add on GW1 → GW2 `/atomic/query` 立即可见（证明 TCVDB 共享读写）
-- 自动备份/还原 `~/.hermes/config.yaml` 的 `memory.provider` 字段
-
-```bash
-# 前置：安装 SDK 到 Hermes venv（一次性）
-hermes-agent/.venv/bin/python -m pip install -e sdk/memory-core/python/
-
-# 运行
-hermes-agent/.venv/bin/python __tests__/e2e/test_hermes_service_e2e.py
-```
-
-实测结果：**23 / 23 passed**（跨 Gateway 一致性、跨 session 召回、L1 跨 GW 共享全部通过）。
-
-### 两个脚本的共同前置条件
-
-1. `hermes` CLI 已安装（默认路径 `~/.hermes/bin/hermes`）
-2. `~/.hermes/config.yaml` 中 `model.api_key` / `model.base_url` / `model.default` 配置了可用的 LLM
-3. v1 / v2 插件已链接到 `hermes-agent/plugins/memory/`（默认已安装）
-4. Service 模式额外需要：`pnpm add cos-nodejs-sdk-v5`（Gateway 依赖）+ `pip install -e sdk/memory-core/python/`（Hermes 用 SDK）
+本分支当前未包含旧版文档提到的 Hermes standalone/service E2E 脚本（包括 `test_hermes_standalone_e2e.py` 和 `test_hermes_service_e2e.py`），因此这里不再列出无法从仓库复现的运行命令、覆盖项或通过数量。请以仓库中实际存在的测试脚本和 CI 结果为准。
