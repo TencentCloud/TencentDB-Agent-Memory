@@ -8,6 +8,41 @@
 
 import { resolve, sep } from "node:path";
 
+const STRUCTURAL_WIKI_FILES = new Set([
+  "wiki/index.md",
+  "wiki/schema.md",
+  "wiki/purpose.md",
+  "wiki/log.md",
+  "wiki/overview.md",
+]);
+
+/**
+ * Whether a Wiki path names a top-level structural file.
+ *
+ * Structural file protection must be portable across case-sensitive and
+ * case-insensitive volumes. Accept both `wiki/x.md` and `x.md` callers.
+ */
+export function isStructuralWikiFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+  const wikiPath = normalized.startsWith("wiki/") ? normalized : `wiki/${normalized}`;
+  return STRUCTURAL_WIKI_FILES.has(wikiPath);
+}
+
+/** Markdown file extensions are case-insensitive on supported client volumes. */
+export function isMarkdownFileName(fileName: string): boolean {
+  return /\.md$/i.test(fileName);
+}
+
+/** Remove one trailing `.md` extension regardless of ASCII case. */
+export function stripMarkdownExtension(fileName: string): string {
+  return fileName.replace(/\.md$/i, "");
+}
+
+/** Append the canonical extension only when one is not already present. */
+export function ensureMarkdownExtension(fileName: string): string {
+  return isMarkdownFileName(fileName) ? fileName : `${fileName}.md`;
+}
+
 /**
  * candidate 解析后是否仍落在 root 之内（root 自身算在内）。
  *

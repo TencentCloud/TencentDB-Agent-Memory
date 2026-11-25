@@ -13,6 +13,11 @@ import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync 
 import { join, basename, relative } from "node:path";
 import { parseFrontmatter, buildPage } from "./frontmatter.js";
 import { slugify } from "./slug.js";
+import {
+  isMarkdownFileName,
+  isStructuralWikiFile,
+  stripMarkdownExtension,
+} from "./safe-path.js";
 
 export interface DeleteSourceFilesResult {
   /** 被级联删除的 wiki page 绝对路径。 */
@@ -46,18 +51,13 @@ function collectWikiPages(wikiDir: string): string[] {
       }
       if (st.isDirectory()) {
         if (entry !== "media") walk(full);
-      } else if (entry.endsWith(".md")) {
+      } else if (isMarkdownFileName(entry)) {
         out.push(full);
       }
     }
   };
   if (existsSync(wikiDir)) walk(wikiDir);
   return out;
-}
-
-/** 结构性文件不参与级联删除/重写。 */
-function isStructural(relFromWiki: string): boolean {
-  return relFromWiki === "index.md" || relFromWiki === "schema.md" || relFromWiki === "purpose.md";
 }
 
 /**
@@ -88,7 +88,7 @@ export async function deleteSourceFiles(
 
   for (const pagePath of collectWikiPages(wikiDir)) {
     const relFromWiki = relative(wikiDir, pagePath).replace(/\\/g, "/");
-    if (isStructural(relFromWiki)) continue;
+    if (isStructuralWikiFile(relFromWiki)) continue;
 
     let content: string;
     try {
@@ -138,7 +138,7 @@ export interface CascadeDeletePagesResult {
 /** 从一个页路径与内容推导出它可能被 [[wikilink]] 引用的标识符（小写归一）。 */
 function linkAliasesFor(pagePath: string, content: string): Set<string> {
   const aliases = new Set<string>();
-  const base = basename(pagePath, ".md");
+  const base = stripMarkdownExtension(basename(pagePath));
   aliases.add(base.toLowerCase());
   aliases.add(slugify(base).toLowerCase());
   const { frontmatter } = parseFrontmatter(content);
@@ -169,8 +169,11 @@ export async function cascadeDeleteWikiPagesWithRefs(
 
   // 删除前先收集被删页的 wikilink 别名，用于后续悬空链接清理。
   const deletedAliases = new Set<string>();
-  const toDelete = new Set(pageFullPaths.map((p) => p));
+  const toDelete = new Set<string>();
   for (const p of pageFullPaths) {
+    const relFromWiki = relative(wikiDir, p).replace(/\\/g, "/");
+    if (isStructuralWikiFile(relFromWiki)) continue;
+    toDelete.add(p);
     let content = "";
     try {
       content = readFileSync(p, "utf-8");
@@ -182,7 +185,7 @@ export async function cascadeDeleteWikiPagesWithRefs(
 
   // 执行删除。
   const deletedPaths: string[] = [];
-  for (const p of pageFullPaths) {
+  for (const p of toDelete) {
     try {
       if (existsSync(p)) {
         rmSync(p, { force: true });
@@ -198,6 +201,8 @@ export async function cascadeDeleteWikiPagesWithRefs(
   const linkRe = /\[\[([^\]]+?)\]\]/g;
   for (const pagePath of collectWikiPages(wikiDir)) {
     if (toDelete.has(pagePath)) continue;
+    const relFromWiki = relative(wikiDir, pagePath).replace(/\\/g, "/");
+    if (isStructuralWikiFile(relFromWiki)) continue;
     let content: string;
     try {
       content = readFileSync(pagePath, "utf-8");
