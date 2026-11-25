@@ -152,13 +152,18 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
       contents = await fetchOneByOne(provider, ctx, ids, failed, pageDelayMs);
     }
 
+    const nonEmptyContents: RemotePageContent[] = [];
     for (const c of contents) {
       if (c.fidelity === "lossy") warnings.push(`${c.externalId}: content lossy`);
+      if (!c.markdown.trim()) {
+        failed.push({ id: c.externalId, error: "empty markdown" });
+        continue;
+      }
+      nonEmptyContents.push(c);
     }
 
     // 落盘：文件名用标题（可读），外部 id 仅用于重名兜底
-    const files = contents
-      .filter((c) => c.markdown)
+    const files = nonEmptyContents
       .map((c) => {
         // c.title 可能为空（provider 只回正文），用列表阶段标题兜底
         const title = c.title || titleById.get(c.externalId);
