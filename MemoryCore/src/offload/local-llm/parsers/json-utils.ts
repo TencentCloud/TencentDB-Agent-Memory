@@ -26,26 +26,19 @@ export function extractJson<T = unknown>(raw: string): T | null {
     if (parsed !== null) return parsed;
   }
 
-  // Strategy 3: Find first { to last } (or first [ to last ])
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+  // Strategy 3: Try the outer array/object before its nested values.
+  const candidates = [
+    { start: trimmed.indexOf("{"), end: trimmed.lastIndexOf("}") },
+    { start: trimmed.indexOf("["), end: trimmed.lastIndexOf("]") },
+  ].filter(({ start, end }) => start >= 0 && end > start)
+    .sort((a, b) => a.start - b.start);
+  for (const { start, end } of candidates) {
+    const candidate = trimmed.slice(start, end + 1);
     const parsed = tryParse<T>(candidate);
     if (parsed !== null) return parsed;
 
-    // Try with trailing comma fix
-    const fixed = fixTrailingCommas(candidate);
-    const parsedFixed = tryParse<T>(fixed);
+    const parsedFixed = tryParse<T>(fixTrailingCommas(candidate));
     if (parsedFixed !== null) return parsedFixed;
-  }
-
-  const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  if (firstBracket >= 0 && lastBracket > firstBracket) {
-    const candidate = trimmed.slice(firstBracket, lastBracket + 1);
-    const parsed = tryParse<T>(candidate);
-    if (parsed !== null) return parsed;
   }
 
   // Strategy 4: Try fixing the entire string
