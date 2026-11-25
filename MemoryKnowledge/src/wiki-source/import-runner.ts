@@ -190,13 +190,19 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
 
   // 映射落盘：文件已写完，保存失败不阻断本轮结果（只影响下一轮复用）
   if (canUseMap && nameByExternalId) {
-    p.wikiService.writeImportNameMap!(
-      p.serviceId,
-      p.teamId,
-      p.wikiId,
-      p.providerId,
-      nameByExternalId,
-    );
+    try {
+      p.wikiService.writeImportNameMap!(
+        p.serviceId,
+        p.teamId,
+        p.wikiId,
+        p.providerId,
+        nameByExternalId,
+      );
+    } catch (err) {
+      warnings.push(
+        `import name map save failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   return { imported, skippedDirs, failed, warnings };
