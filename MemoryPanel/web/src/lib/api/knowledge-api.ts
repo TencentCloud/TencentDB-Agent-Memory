@@ -82,6 +82,11 @@ export interface ImportAndIngestResult {
   error_code?: string;
   error_message?: string;
   raw_persisted?: boolean;
+  /** external 模式附带的外部源导入摘要（#1795）；其它 mode 不返回 */
+  imported?: number;
+  skipped_dirs?: number;
+  failed?: Array<{ id: string; error: string }>;
+  warnings?: string[];
 }
 
 export interface WikiDetail {

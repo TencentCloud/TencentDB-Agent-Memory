@@ -424,6 +424,8 @@ export const enUS = {
   'wiki.notify.created': 'Wiki "{{name}}" created',
   'wiki.notify.ingestComplete': 'Wiki ingestion complete, {{count}} pages total',
   'wiki.notify.ingestFailed': 'Wiki ingestion failed',
+  'wiki.notify.sourceImportFailed': 'External source import failed: {{failed}} page(s) not imported; ingestion was not started',
+  'wiki.notify.sourceImportPartial': 'External source partially imported: {{imported}} page(s) imported, {{failed}} failed; ingestion started for the imported pages',
   'wiki.notify.allocated': 'Allocated to Agent',
   'wiki.notify.pageDeleted': 'Page deleted',
   'wiki.notify.pageDeleteFailed': 'Failed to delete page',
