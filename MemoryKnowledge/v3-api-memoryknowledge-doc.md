@@ -290,7 +290,7 @@ POST /v3/wiki/raw/write
 
 **请求体**：`team_id`、`wiki_id`、`pages: [{ ref, content }]`（非空）。
 
-**响应** `data`：`{ items }`。
+**响应** `data`：`{ items, index_status?: "error" }`。页面保存后会刷新搜索索引。如果刷新失败，接口仍返回 HTTP `200` 和 `code: 0`，并返回 `index_status: "error"`。此时直接读取页面可以看到新内容，搜索可能仍返回上一次成功刷新时的结果。刷新成功时不返回 `index_status`。
 
 **错误**：`400`、`404`、`409`(processing)。
 

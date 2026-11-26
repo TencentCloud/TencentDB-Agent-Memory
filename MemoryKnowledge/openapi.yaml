@@ -351,7 +351,32 @@ paths:
               $ref: '#/components/schemas/WikiPageWriteRequest'
       responses:
         '200':
-          description: Success
+          description: Pages were saved. Search may still use the previous index if the refresh failed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              type: object
+                              required: [ref, locked_injected]
+                              properties:
+                                ref:
+                                  type: string
+                                locked_injected:
+                                  type: boolean
+                          index_status:
+                            type: string
+                            enum: [error]
+                            description: Present only when refreshing the search index failed.
         '400':
           description: Invalid path, forbidden path, or too large
         '404':

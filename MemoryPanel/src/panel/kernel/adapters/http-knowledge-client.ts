@@ -25,7 +25,7 @@ import type {
   WikiFileFormat,
   WikiPageReadItem,
   WikiPageWriteItem,
-  WikiPageWriteResultItem,
+  WikiPageWriteResult,
   WikiPageRmResult,
   CodeGraphDetail,
   CodeGraphListResult,
@@ -295,7 +295,7 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
     return this.post('/v3/wiki/page/read', { wiki_id: wikiId, refs });
   }
 
-  async wikiPageWrite(teamId: string, wikiId: string, pages: WikiPageWriteItem[], userId?: string): Promise<{ items: WikiPageWriteResultItem[] }> {
+  async wikiPageWrite(teamId: string, wikiId: string, pages: WikiPageWriteItem[], userId?: string): Promise<WikiPageWriteResult> {
     return this.post('/v3/wiki/page/write', { team_id: teamId, user_id: userId, wiki_id: wikiId, pages });
   }
 

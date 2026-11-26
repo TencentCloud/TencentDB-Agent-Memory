@@ -138,6 +138,11 @@ export interface WikiPageWriteResultItem {
   locked_injected?: boolean;
 }
 
+export interface WikiPageWriteResult {
+  items: WikiPageWriteResultItem[];
+  index_status?: 'error';
+}
+
 export interface WikiPageRmResult {
   deleted_pages: string[];
   rewritten_files: number;
@@ -320,7 +325,7 @@ export interface KnowledgeClientPort {
   // Wiki — page 文件层（ls/read 仅资产 id；write/rm 带 IdFields）
   wikiPageLs(wikiId: string): Promise<{ items: PageEntry[] }>;
   wikiPageRead(wikiId: string, refs: string[]): Promise<{ items: WikiPageReadItem[] }>;
-  wikiPageWrite(teamId: string, wikiId: string, pages: WikiPageWriteItem[], userId?: string): Promise<{ items: WikiPageWriteResultItem[] }>;
+  wikiPageWrite(teamId: string, wikiId: string, pages: WikiPageWriteItem[], userId?: string): Promise<WikiPageWriteResult>;
   wikiPageRm(teamId: string, wikiId: string, refs: string[], userId?: string): Promise<WikiPageRmResult>;
 
   // Wiki — 派生视图（仅资产 id 寻址）

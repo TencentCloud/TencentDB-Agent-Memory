@@ -473,7 +473,15 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       const result = wikiService.pageWriteMany(ids.service_id, ids.team_id, wikiId, validated);
       const err = maybeWriteError(result);
       if (err) return err;
-      try { wikiMgr.sync(wikiId); } catch (e) { console.warn(`[wiki] wikiMgr.sync(${wikiId}) failed after page/write:`, e); }
+      // The pages are already saved, even if search still uses the previous index.
+      try {
+        if (wikiMgr.sync(wikiId).status === "error") {
+          return c.json(wrapOk({ items: result, index_status: "error" }));
+        }
+      } catch (e) {
+        console.warn(`[wiki] wikiMgr.sync(${wikiId}) failed after page/write:`, e);
+        return c.json(wrapOk({ items: result, index_status: "error" }));
+      }
       return c.json(wrapOk({ items: result }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
