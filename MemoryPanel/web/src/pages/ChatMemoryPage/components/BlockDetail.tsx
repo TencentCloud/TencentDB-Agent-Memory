@@ -6,6 +6,7 @@ import { type MemoryLayer, type MemoryBlock, type AtomicItem } from '../constant
 import { useLayers } from '../constants/constants';
 import { getLayerCount, extractRole, formatDisplayTime } from '../utils/utils';
 import { stripScenarioMeta, copyToClipboard } from '../utils/memory-utils';
+import { shouldHandleRowKeydown } from '../utils/atomic-head-keyboard';
 import { useUserDisplayName } from '@/services/user-profile-store';
 import { tea } from '@/lib/tea-bridge';
 import { MarkdownView } from '@/components/MarkdownView';
@@ -85,7 +86,13 @@ function AtomicHead({
         {/* 操作菜单（三个点）置于时间右侧。三个点点击展开，支持编辑 / 复制。
             L2 的 head 是可点击展开区域，需阻止冒泡避免误触发折叠。 */}
         {hasActions && (
-          <span className="_memory-detail-atomic-actions" onClick={(e) => e.stopPropagation()}>
+          // stopPropagation 阻断冒泡：鼠标不触发整行折叠，键盘事件也不落到父级
+          // 行 onKeyDown（父级已有自身焦点守卫，这里是第二道防护，#1708）。
+          <span
+            className="_memory-detail-atomic-actions"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
             <Dropdown
               appearance="pure"
               clickClose
@@ -165,10 +172,13 @@ function AtomicHead({
           if (!loading) onToggle?.();
         }}
         onKeyDown={(e) => {
-          if ((e.key === 'Enter' || e.key === ' ') && !loading) {
-            e.preventDefault();
-            onToggle?.();
-          }
+          // 自身焦点守卫：只有 head 自己持有焦点时才处理 Enter/Space。
+          // 焦点落在内部真实控件（「更多操作」三点按钮、chevron）时，
+          // 事件会冒泡到这里；若父级也 preventDefault + 折叠整行，
+          // 内部按钮的原生键盘激活就被吞掉（#1708）。此时直接放行。
+          if (loading || !shouldHandleRowKeydown(e)) return;
+          e.preventDefault();
+          onToggle?.();
         }}
       >
         {inner}
