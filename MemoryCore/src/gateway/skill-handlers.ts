@@ -300,8 +300,14 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
   }
 
   try {
-    const r = await pre.core.create(pre.data);
-    try { trace.report("skill.create", { skill_id: r.skill_id, team_id: r.team_id, agent_id: r.owner_agent_id, name: r.name }); } catch { /* noop */ }
+    const outcome = await pre.core.createWithOutcome(pre.data);
+    const r = outcome.skill;
+    try {
+      trace.report(outcome.replaced ? "skill.replace" : "skill.create", {
+        skill_id: r.skill_id, team_id: r.team_id, agent_id: r.owner_agent_id, name: r.name,
+        ...(outcome.replaced ? { version: r.version, previous_version: outcome.previous_version } : {}),
+      });
+    } catch { /* noop */ }
 
     // ── 自动登记 skill 资产（asset_id === skill_id）+ 绑定到 owner agent 的 fixed-asset ──
     //
@@ -338,8 +344,14 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
       }
     }
 
-    obsLogger.info("skill.handleCreate.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0, skill_id: r.skill_id, name: r.name, version: r.version });
-    return successEnvelope(toSummary(r), requestId);
+    obsLogger.info("skill.handleCreate.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0, skill_id: r.skill_id, name: r.name, version: r.version, replaced: outcome.replaced });
+    // replaced / previous_version 仅在命中同名替换时附加（增量字段，普通 create 响应不变）
+    return successEnvelope(
+      outcome.replaced
+        ? { ...toSummary(r), replaced: true, previous_version: outcome.previous_version }
+        : toSummary(r),
+      requestId,
+    );
   } catch (e) { obsLogger.error("skill.handleCreate.done", { req_id: requestId, dur_ms: Date.now() - t0 }, e instanceof Error ? e : undefined); return mapCoreError(e, requestId); }
 }
 

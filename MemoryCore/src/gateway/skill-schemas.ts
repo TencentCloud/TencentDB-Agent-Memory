@@ -93,6 +93,11 @@ export const createRequestSchema = z.object({
   content: z.string().min(1),
   resources: z.array(skillResourcePayloadSchema).max(100).optional(),
   metadata: z.record(z.string(), z.any()).optional(),
+  /**
+   * 同名替换（默认 false）。true 且同 team + 同 owner agent 已有同名 active skill 时，
+   * 在原 skill_id 上整体替换 SKILL.md + 资源，version = old + 1；否则按普通 create 处理。
+   */
+  replace: z.boolean().optional(),
 }).superRefine(refineAgentNeedsTeam);
 
 export const updateRequestSchema = z.object({

@@ -147,8 +147,16 @@ export function createSkill(params: {
   content: string;
   resources?: SkillResourcePayload[];
   metadata?: Record<string, unknown>;
-}): Promise<SkillSummary> {
+  /** true：同 agent 下已有同名 skill 时整体替换（SKILL.md + 资源），version = old + 1。 */
+  replace?: boolean;
+}): Promise<CreateSkillResult> {
   return skillCall('create', params as unknown as Record<string, unknown>);
+}
+
+/** create 响应：命中同名替换时额外带 replaced / previous_version。 */
+export interface CreateSkillResult extends SkillSummary {
+  replaced?: boolean;
+  previous_version?: number;
 }
 
 // ---- 3.2 update ----
