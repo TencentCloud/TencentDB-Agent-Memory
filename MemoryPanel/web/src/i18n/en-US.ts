@@ -1799,6 +1799,10 @@ export const enUS = {
   'guide.manual.note.openclaw.0': 'Header preselect required: team-id / agent-id / task-id / conversation-id',
   'guide.manual.note.openclaw.1': 'x-conversation-id identifies the current session — change it for each new conversation',
   'guide.manual.note.openclaw.2': 'x-task-id is required in the current version; use "no-task" when there is none',
+  'guide.manual.pi.extension': 'Extension directory',
+  'guide.manual.note.pi.extension': 'Install Pi, then run the command from the TencentDB Agent Memory repository root. The -e flag loads the Pi extension.',
+  'guide.manual.note.pi.identity': 'Use your team ID, agent ID, and personal API key from the panel. TDAI_TASK_ID is optional.',
+  'guide.manual.note.pi.endpoint': 'Set TDAI_PROXY_URL to the Proxy root URL. The extension builds the default endpoint ending in /pi/<instance ID>/v1. Use a model ID configured in the Proxy upstream.',
 
   // ===== Analytics (Observability) =====
   'menu.analytics': 'Observability',
