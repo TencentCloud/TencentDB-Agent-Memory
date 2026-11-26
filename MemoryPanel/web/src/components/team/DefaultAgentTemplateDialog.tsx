@@ -9,7 +9,7 @@
  * 已配置时打开弹窗会用 get-default-template 的返回值预填。
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Input, Modal, Tag } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { BooksIcon, CodeIcon, ToolsIcon } from 'tea-icons-react';
@@ -62,6 +62,17 @@ export default function DefaultAgentTemplateDialog({
   const [codeGraphs, setCodeGraphs] = useState<string[]>(initial?.asset_ids?.code_graphs ?? []);
   const [llmWikis, setLlmWikis] = useState<string[]>(initial?.asset_ids?.wikis ?? []);
   const [busy, setBusy] = useState(false);
+  const mountedRef = useRef(true);
+  const activeTeamIdRef = useRef(team.team_id);
+
+  activeTeamIdRef.current = team.team_id;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // 团队公共资产（skill / code_graph / wiki，后端 bootstrap 已按 visibility=team 过滤）
   const assets = useTeamAssets(team.team_id);
@@ -75,6 +86,7 @@ export default function DefaultAgentTemplateDialog({
 
   async function handleSave() {
     if (!canSubmit) return;
+    const submitTeamId = team.team_id;
     setBusy(true);
     try {
       const metadataJson = writeAgentUiMeta(undefined, {
@@ -89,9 +101,11 @@ export default function DefaultAgentTemplateDialog({
         metadata_json: metadataJson,
         asset_ids: { skills, code_graphs: codeGraphs, wikis: llmWikis },
       };
-      await agentsApi.setDefaultTemplate(team.team_id, template);
+      await agentsApi.setDefaultTemplate(submitTeamId, template);
+      if (!mountedRef.current || activeTeamIdRef.current !== submitTeamId) return;
       onSaved(template);
     } catch (err) {
+      if (!mountedRef.current || activeTeamIdRef.current !== submitTeamId) return;
       tea.notify.error(getErrorMessage(err));
       setBusy(false);
     }

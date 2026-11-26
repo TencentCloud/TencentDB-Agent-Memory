@@ -9,7 +9,7 @@
  * 仅 system_admin 可调用，因此本组件只在 isAdmin=true 时渲染。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from 'tea-component';
 import { AddIcon, EditIcon } from 'tea-icons-react';
@@ -27,29 +27,69 @@ export default function DefaultAgentTemplateSection({
 }) {
   const { t } = useTranslation();
   const [template, setTemplate] = useState<AgentTemplateConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(teamId));
   const [showDialog, setShowDialog] = useState(false);
+  // 追踪最新请求序号、当前激活团队与挂载态，防止跨团队竞态覆盖
+  const requestIdRef = useRef(0);
+  const activeTeamIdRef = useRef(teamId);
+  const mountedRef = useRef(true);
 
-  const load = useCallback(async () => {
-    if (!teamId) return;
-    setLoading(true);
-    try {
-      const data = await agentsApi.getDefaultTemplate(teamId);
-      // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
-      setTemplate(data && data.name ? data : null);
-    } catch (err) {
-      tea.notify.error(getErrorMessage(err));
-      setTemplate(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [teamId]);
+  activeTeamIdRef.current = teamId;
 
   useEffect(() => {
-    load();
-  }, [load]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  function handleSaved(saved: AgentTemplateConfig) {
+  useEffect(() => {
+    const reqId = ++requestIdRef.current;
+    let cancelled = false;
+
+    setTemplate(null);
+    setShowDialog(false);
+
+    if (!teamId) {
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoading(true);
+    const isCurrent = () =>
+      !cancelled && mountedRef.current && requestIdRef.current === reqId;
+
+    agentsApi
+      .getDefaultTemplate(teamId)
+      .then((data) => {
+        if (!isCurrent()) return;
+        // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
+        setTemplate(data && data.name ? data : null);
+      })
+      .catch((err) => {
+        if (!isCurrent()) return;
+        tea.notify.error(getErrorMessage(err));
+        setTemplate(null);
+      })
+      .finally(() => {
+        if (!isCurrent()) return;
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [teamId]);
+
+  function openDialog() {
+    if (loading) return;
+    setShowDialog(true);
+  }
+
+  function handleSaved(savedTeamId: string, saved: AgentTemplateConfig) {
+    if (!mountedRef.current || activeTeamIdRef.current !== savedTeamId) return;
     setTemplate(saved);
     setShowDialog(false);
     tea.notify.success(t('defaultAgent.notify.saved'));
@@ -57,13 +97,18 @@ export default function DefaultAgentTemplateSection({
 
   const hasTemplate = !!template;
   const actionButton = hasTemplate ? (
-    <Button onClick={() => setShowDialog(true)} title={t('defaultAgent.edit.tooltip')}>
+    <Button
+      disabled={loading}
+      onClick={openDialog}
+      title={t('defaultAgent.edit.tooltip')}
+    >
       <EditIcon size={14} /> {t('defaultAgent.edit')}
     </Button>
   ) : (
     <Button
       type="primary"
-      onClick={() => setShowDialog(true)}
+      disabled={loading}
+      onClick={openDialog}
       title={t('defaultAgent.create.tooltip')}
     >
       <AddIcon size={14} /> {t('defaultAgent.create')}
@@ -106,7 +151,7 @@ export default function DefaultAgentTemplateSection({
           team={{ team_id: teamId, name: teamName }}
           initial={template}
           onClose={() => setShowDialog(false)}
-          onSaved={handleSaved}
+          onSaved={(saved) => handleSaved(teamId, saved)}
         />
       )}
     </div>
