@@ -36,7 +36,7 @@ export interface WireConversationAddDeps {
   /**
    * sink 兜底登记 skill asset 需要的 metadata service（幂等）。
    * 不传时 sink 是 no-op —— skill 已由 extractor 的 tool-call 落库，
-   * 只是前端管控页可能看不到（standalone 模式下无 onSkillCreated 钩子）。
+   * 只是前端管控页可能看不到（例如 host 未提供 metadataService/hook wiring）。
    */
   metadataService?: MetadataServiceLike;
 
