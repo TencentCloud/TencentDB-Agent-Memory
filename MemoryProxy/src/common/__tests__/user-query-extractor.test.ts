@@ -160,6 +160,58 @@ describe("DSH job completion notices", () => {
 });
 
 /**
+ * 同一个生成处还产出两种「不带去取输出终止句」的形态：
+ *   … finished [status: …]. No new output.          ← 空输出，仍可按终止句整句剥
+ *   … finished [status: …]. Output:\n<作业输出>       ← 内联输出，没有终止句
+ *
+ * 后者只能靠 DSH_INJECTION_BLOCK_PATTERNS 按「整条以首行开头 ⇒ 吃到末尾」处理。
+ * 文案取自线上 L0 逐字内容（2026-11-26 那条重复 28 次的记录）。
+ */
+const JOB_NOTICE_INLINE_OUTPUT = [
+  "background job pwsh-52e9f593a21b4c22 (pwsh: cd 'D:\\AI Project\\code\\dsh-acp-broker'; node tools/regression/run.mjs 2>&1 | Select-Object -Last 12) finished [status: completed, exit code: 0]. Output:",
+  'PASS  GET /config reports unknown statuses before any probe  ({"probedAt":null,"installed":[null,null]})',
+  "",
+  "PASS  115/115 checks passed, 0 failed, 1 skipped, 16.3s",
+].join("\n");
+
+describe("DSH job completion notices: inline output variant", () => {
+  it("drops a standalone notice whose output is inlined (no terminator sentence)", () => {
+    expect(extractUserQueryText(JOB_NOTICE_INLINE_OUTPUT)).toBe("");
+  });
+
+  it("drops the empty-output form", () => {
+    const raw =
+      "background job pwsh-77 (pwsh: npm test) finished [status: completed, exit code: 0]. No new output.";
+
+    expect(extractUserQueryText(raw)).toBe("");
+  });
+
+  it("keeps the question when the empty-output notice is merged after it", () => {
+    const raw = [
+      "回归怎么跑？",
+      "background job pwsh-78 (pwsh: npm test) finished [status: completed, exit code: 0]. No new output.",
+    ].join("\n");
+
+    expect(extractUserQueryText(raw)).toBe("回归怎么跑？");
+  });
+
+  it("never eats a question that sits before an inline-output notice", () => {
+    // 内联形态没有终止句，只能整条吃；一旦真问题在前面就不命中，
+    // 结果里必须还留着那句问题（通知会残留，属于已知局限）。
+    const raw = ["回归怎么跑？", JOB_NOTICE_INLINE_OUTPUT].join("\n");
+    const out = extractUserQueryText(raw);
+
+    expect(out).toContain("回归怎么跑？");
+  });
+
+  it("keeps prose that merely borrows the phrase", () => {
+    const raw = "background job 的输出为什么没进 L0？";
+
+    expect(extractUserQueryText(raw)).toBe(raw);
+  });
+});
+
+/**
  * dsh 在普通对话轮里还会以 role=user 注入若干类内容，全部由 harness 生成、
  * 不是人类键入。文案取自 dsh 0.2.2-rc.3 源码（逐字一致）：
  *

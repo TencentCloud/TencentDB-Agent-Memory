@@ -149,7 +149,7 @@ const DSH_RUNTIME_NOTICE_LINE_PATTERNS: RegExp[] = [
 /**
  * 以「首行 + 多行正文」形态出现的注入块，按行剥只能掉首行、续行会留在 L0 里。
  *
- * OpenAI Chat 通道下这两种注入都独立成条（一条 user 消息只有它自己），
+ * OpenAI Chat 通道下这几类注入都独立成条（一条 user 消息只有它自己），
  * 所以「整条以首行开头」时直接吃到末尾；真问题混在前面时不命中，
  * 退回到按行剥（只掉首行，续行仍会残留 —— 已知局限，Anthropic 通道才会遇到）。
  */
@@ -158,6 +158,11 @@ const DSH_INJECTION_BLOCK_PATTERNS: RegExp[] = [
   /^(?:[ \t]*\n)*[ \t]*tmux location \(turn \d+\):[\s\S]*$/,
   // action-cards：固定前言 + 引导语 + `\n` + JSON 快照
   /^(?:[ \t]*\n)*[ \t]*Latest status of action cards from user actions and background work\.[\s\S]*$/,
+  // 后台任务通知的「内联输出」变体：`… finished [status: …]. Output:\n<作业输出>`。
+  // 输出正文后面没有终止句（生成处 inlineCompletionNotice 直接拼到末尾），
+  // 因此只能按「整条以首行开头 ⇒ 吃到末尾」处理，与上面两类同一取向。
+  // 真问题混在开头前面时不命中，通知会残留（已知局限，与另两类一致）。
+  /^(?:[ \t]*\n)*[ \t]*background job [\w-]+ [\s\S]{0,4000}?finished \[status:[^\]]*\]\. Output:\r?\n[\s\S]*$/,
 ];
 
 /**
@@ -182,9 +187,14 @@ const DSH_INJECTION_BLOCK_PATTERNS: RegExp[] = [
  * 位置不固定：OpenAI Chat 通道下它独立成条（往往正是最后一条 user 消息，
  * 剥完为空 ⇒ 本轮不写 L0）；Anthropic 通道会把连续同 role 的 block 合并，
  * 于是它贴在真问题前面或后面，这时只掉通知段、真问题原样保留。
+ *
+ * 另有两种不带「去取输出」终止句的形态，由同一个生成处产出：
+ *   … finished [status: …]. No new output.        ← 空输出，仍可整句剥
+ *   … finished [status: …]. Output:\n<作业输出>     ← 内联输出，无终止句；
+ *     由 DSH_INJECTION_BLOCK_PATTERNS 按「整条以首行开头」整块吃掉。
  */
 const DSH_JOB_NOTICE_RE =
-  /(?:^|\n)[ \t]*(?:background job [\w-]+(?: \(|\n)[\s\S]{0,20000}?(?:\.\s*Read its output with job_output\.|Done; job_output\.)|background job ended; use job_list for id\.)/g;
+  /(?:^|\n)[ \t]*(?:background job [\w-]+(?: \(|\n)[\s\S]{0,20000}?(?:\.\s*Read its output with job_output\.|Done; job_output\.|\. No new output\.)|background job ended; use job_list for id\.)/g;
 
 function stripDshJobNotices(text: string): string {
   // 绝大多数消息不含这个前缀，先做一次廉价判断再上正则
