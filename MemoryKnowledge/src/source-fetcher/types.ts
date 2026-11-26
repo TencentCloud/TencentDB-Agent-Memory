@@ -8,7 +8,7 @@
 
 import type { SshFetchOptions } from "./ssh-options.js";
 
-export type SourceType = "git" | "local" | "ftp";
+export type SourceType = "git" | "repo-manifest" | "local" | "ftp";
 
 export interface FetchResult {
   /** 源码落盘的本地目录（绝对路径）。 */

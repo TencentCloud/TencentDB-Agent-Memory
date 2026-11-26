@@ -23,6 +23,8 @@ import {
 } from "./store/llm-binding-store.js";
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
 import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
+import { buildRepoWorkspace } from "./engines/code/repo-workspace.js";
+import { isRepoManifestSource } from "./source-fetcher/repo-manifest.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
@@ -78,6 +80,8 @@ export interface KnowledgeModuleConfig {
   wikiWorker?: WikiWorker;
   /** Optional: externally injected code worker (for testing). */
   codeWorker?: CodeGraphWorker;
+  /** Override source transports in integration tests. */
+  sourceFetcherRegistry?: SourceFetcherRegistry;
   /**
    * 本地构建 worker（只建索引、不拉取）。用于 `POST /code-graph/build`。
    * 未注入 → 用模块内 realLocalCodeWorker。测试可注入桩。
@@ -166,7 +170,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   const wikiMgr = createWikiSourceManager(join(dataDir, "_wiki_engines"));
 
   // Source fetcher registry (git/local/ftp routing + security validation)
-  const fetcherRegistry = new SourceFetcherRegistry();
+  const fetcherRegistry = config.sourceFetcherRegistry ?? new SourceFetcherRegistry();
 
   // ── 外部来源凭据存储（base64；无密钥；见 §4.1.3） ──
   const credentialStore = config.credentialStore ?? createCredentialStore({ db });
@@ -268,6 +272,10 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
     const { dir, repoUrl, branch, codeGraphId, serviceId, setInternalStatus } = ctx;
+
+    if (isRepoManifestSource(repoUrl)) {
+      return buildRepoWorkspace(ctx, fetcherRegistry.resolve(repoUrl));
+    }
 
     // 外部来源（工蜂等）→ 注入令牌；无凭据行 → 公开仓。
     const cleanUrl = stripCredentials(repoUrl);
@@ -471,6 +479,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     try {
       const allSynced = store.listSyncedCodeGraphs();
       for (const row of allSynced) {
+        if (isRepoManifestSource(row.repo_url)) continue;
         const dir = join(dataDir, row.service_id, row.team_id, row.code_graph_id);
         try {
           const instance = await openIndex(dir);
@@ -489,7 +498,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
           log.warn(`[code-graph] failed to restore ${row.code_graph_id}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      log.info(`[code-graph] ${allSynced.length} synced instances restored`);
+      log.info(`[code-graph] ${allSynced.length} synced records scanned`);
     } catch (err) {
       log.warn(`[code-graph] restore scan failed: ${err instanceof Error ? err.message : String(err)}`);
     }

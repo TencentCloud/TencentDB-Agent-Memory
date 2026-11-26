@@ -7,12 +7,15 @@
 
 import type { ISourceFetcher, SourceType } from "./types.js";
 import { GitSourceFetcher } from "./git-fetcher.js";
+import { RepoSourceFetcher } from "./repo-fetcher.js";
+import { isRepoManifestSource } from "./repo-manifest.js";
 
 export class SourceFetcherRegistry {
   private readonly fetchers = new Map<SourceType, ISourceFetcher>();
 
   constructor() {
     this.register(new GitSourceFetcher());
+    this.register(new RepoSourceFetcher());
     // 未来：this.register(new LocalSourceFetcher());
     // 未来：this.register(new FtpSourceFetcher());
   }
@@ -32,6 +35,7 @@ export class SourceFetcherRegistry {
   }
 
   private detectType(url: string): SourceType {
+    if (isRepoManifestSource(url)) return "repo-manifest";
     if (
       url.startsWith("git@") ||
       url.startsWith("ssh://") ||

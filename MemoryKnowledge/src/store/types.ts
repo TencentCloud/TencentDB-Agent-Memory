@@ -188,6 +188,7 @@ export interface CountOpts {
 /** Restart-recovery projection — carries service_id so dirs can be rebuilt per-tenant. */
 export interface SyncedCodeGraphRef {
   code_graph_id: string;
+  repo_url: string;
   service_id: string;
   team_id: string;
 }

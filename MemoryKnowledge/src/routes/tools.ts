@@ -16,7 +16,8 @@ import { Hono } from "hono";
 import type { WikiService, CodeGraphService } from "../store/index.js";
 import type { CodeGraphInstancePool } from "../module.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
-import { executeTool as executeCodeTool } from "../engines/code/index.js";
+import { queryCodeGraph } from "./code-graph-query.js";
+import type { CodeGraphRow } from "../store/types.js";
 import { wrapOk, wrapError, isValidIdSegment } from "../api-helpers.js";
 import { isWikiId, isCodeGraphId } from "../store/ids.js";
 
@@ -397,7 +398,7 @@ export function toCodeGraphToolName(externalName: string): string | undefined {
 async function executeCodeGraphTool(
   serviceId: string,
   toolName: string,
-  row: { code_graph_id: string; team_id: string; status: string },
+  row: CodeGraphRow,
   params: Record<string, unknown>,
   cgService: CodeGraphService,
   instancePool: CodeGraphInstancePool,
@@ -409,11 +410,6 @@ async function executeCodeGraphTool(
     const detail = cgService.get(serviceId, team_id, code_graph_id);
     if (!detail) return Response.json(wrapError(404, "code graph not found"), { status: 404 });
     return Response.json(wrapOk(detail));
-  }
-
-  // All other tools require synced status
-  if (row.status !== "ready") {
-    return Response.json(wrapOk({ text: "", isError: false }));
   }
 
   // Map tool name to internal codegraph action
@@ -428,15 +424,11 @@ async function executeCodeGraphTool(
     toolParams[k] = v;
   }
 
-  let instance = instancePool.get(code_graph_id);
-  if (!instance && instancePool.loadIfMissing) {
-    const dir = cgService.dirFor(serviceId, team_id, code_graph_id);
-    instance = await instancePool.loadIfMissing(code_graph_id, dir);
-  }
-  if (!instance) {
+  const dir = cgService.dirFor(serviceId, team_id, code_graph_id);
+  const result = await queryCodeGraph(row, dir, instancePool, cgToolName, toolParams);
+  if (!result) {
     return Response.json(wrapError(503, "code graph instance not loaded"), { status: 503 });
   }
 
-  const result = await executeCodeTool(instance, cgToolName, toolParams);
   return Response.json(wrapOk(result), { status: result.isError ? 500 : 200 });
 }

@@ -496,17 +496,16 @@ export const zhCN = {
   'code.table.selected': '已选中',
   'code.register.caption': '注册代码仓库',
   'code.register.gitUrl': 'Git URL',
-  'code.register.gitUrlExtra': '注册后将自动 clone 并建立代码索引。',
-  // Git URL 输入框示例：按「来源」切换（SSH 来源显示 git@，其余保持 https://）。
+  'code.register.gitUrlExtra': '多仓工程请输入 repo+https://host/team/manifests#product.xml。省略文件名时使用 default.xml，manifest 与子仓需用公开 HTTPS 地址。',
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
   'code.register.gitUrlPlaceholderSsh': 'git@github.com:namespace/repo.git 或 ssh://git@host:2222/namespace/repo.git',
+  'code.register.manifestRevision': 'Manifest 版本',
   'code.register.branch': '分支',
   'code.register.sshHint':
     '已识别为 SSH 仓库。点击「注册」后会先为你生成 SSH 公钥，请把公钥添加到代码平台后再继续。',
   'code.register.urlError':
     '请输入合法的 Git 仓库地址（HTTPS 或 SSH），且必须以 .git 结尾，不能含空格。',
-  'code.register.invalidUrl':
-    '请输入合法的 Git 仓库地址：HTTPS 形如 https://gitlab.example.com/namespace/repo.git，SSH 形如 git@github.com:namespace/repo.git 或 ssh://git@host:2222/namespace/repo.git。',
+  'code.register.invalidUrl': '请输入以 .git 结尾的 Git 地址，或 repo+https 格式的 manifest 地址。',
   'code.register.submitting': '注册中…',
   'code.register.submit': '注册',
   'code.register.source': '来源',

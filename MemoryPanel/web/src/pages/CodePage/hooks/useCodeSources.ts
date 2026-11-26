@@ -20,7 +20,7 @@ import {
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
-import { isValidGitUrl, isSshGitUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
+import { isValidCodeSourceUrl, isSshGitUrl, isRepoManifestUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
 export function useCodeSources() {
   const { t } = useTranslation();
@@ -319,14 +319,14 @@ export function useCodeSources() {
   const submitCreate = async (): Promise<void> => {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
-    if (!isValidGitUrl(repo)) {
+    if (!isValidCodeSourceUrl(repo)) {
       tea.notify.error(t('code.register.invalidUrl'));
       return;
     }
     const isSsh = isSshGitUrl(repo);
     // 私有仓（HTTPS 平台）：按 provider.form_fields 校验必填字段。
     // SSH 来源 form_fields 为空数组 → 天然跳过令牌校验。
-    const provider = sourceProviders.find((p) => p.id === formSourceType);
+    const provider = isRepoManifestUrl(repo) ? undefined : sourceProviders.find((p) => p.id === formSourceType);
     if (provider && !isSsh) {
       for (const f of provider.form_fields) {
         if (f.required && !(formCredential[f.name] ?? '').trim()) {
@@ -382,7 +382,7 @@ export function useCodeSources() {
   const handleRegister = async () => {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
-    if (!isValidGitUrl(repo)) {
+    if (!isValidCodeSourceUrl(repo)) {
       tea.notify.error(t('code.register.invalidUrl'));
       return;
     }
