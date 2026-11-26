@@ -259,6 +259,15 @@ $DOCKER run -d --name "$CONTAINER" \
 wait_healthy "$CONTAINER" 90
 ok "memory-core 已启动 → http://localhost:${MEMORY_CORE_PORT}/"
 
+# 数据分析（可选）：Core 的 analytics 查询模块读 ANALYTICS_CLICKHOUSE_*，
+# 但本脚本没有透传这些变量 —— 只在 .env 里写不会进容器，入口会一直隐藏。
+# 这里只提示，不改变默认行为、不额外透传（CH 配置见 INSTALL 数据分析章节）。
+if [[ "${ANALYTICS_CLICKHOUSE_ENABLED:-false}" == "true" ]]; then
+  warn "ANALYTICS_CLICKHOUSE_ENABLED=true 写在 .env 不会生效：start-memory-core.sh 未透传 ANALYTICS_CLICKHOUSE_*"
+  warn "  → 改 $CORE_CONFIG_FILE 里的 analytics.clickhouse 段，或自行 docker run 时 -e 注入；"
+  warn "    且预置 memory-core 镜像不含 @clickhouse/client，需自建镜像（见 INSTALL 数据分析章节）"
+fi
+
 # ── Admin user 生命周期 ─────────────────────────────────────────
 # 首次启动：init-admin 时**传入我们生成的随机 user_key**，返回体里读回来存文件。
 # 重启且已初始化（409）：优先读 .admin-key；若 volume 是新造的但 .admin-key 是

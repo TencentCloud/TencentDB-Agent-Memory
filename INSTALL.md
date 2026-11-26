@@ -740,18 +740,20 @@ KNOWLEDGE_CLICKHOUSE_FLUSH_THRESHOLD=50
 KNOWLEDGE_CLICKHOUSE_TTL_DAYS=90
 
 # ═══ /v3/analytics/* query API auth ═══
-# Query endpoints require x-tdai-user-key to match this admin key.
-# Panel uses the admin user_key by default.
-KNOWLEDGE_ANALYTICS_ADMIN_KEY=<admin sk-mem-... or any stable string>
+# No separate analytics key: these routes share KNOWLEDGE_SERVICE_KEY like every
+# other /v3 route. The one-click launcher generates it and hands the same value to
+# Panel as KNOWLEDGE_AUTH_TOKEN (calling side).
 ```
 
-Leaving `KNOWLEDGE_ANALYTICS_ADMIN_KEY` empty makes the
-`/v3/analytics/*` data endpoints return `503` (the `/config` probe
-still works, and Panel just marks Wiki / Code-Graph charts as
-"Not enabled"). Once set, Panel can pull data. The simplest value is
-the admin `user_key` (the `sk-mem-...` in `.admin-key`); any stable
-string works — the frontend sends this key as `x-tdai-user-key` when
-hitting Knowledge's analytics endpoints.
+There is **no** `KNOWLEDGE_ANALYTICS_ADMIN_KEY` variable — that name in earlier
+guides was wrong and using it silently leaves the service unauthenticated. When
+`KNOWLEDGE_SERVICE_KEY` is non-empty, `/v3/analytics/*` must carry
+`Authorization: Bearer $KNOWLEDGE_SERVICE_KEY` like any other non-read-only `/v3`
+route (analytics is not on the read-only allowlist, so a missing header is a
+`401`). Leave `KNOWLEDGE_SERVICE_KEY` empty only for a local single-user setup.
+Either way `/config` still requires `x-tdai-service-id`, and while
+`KNOWLEDGE_CLICKHOUSE_ENABLED` is not `true` the `/config` probe reports
+`configured: false` and the data endpoints return `503`.
 
 ### Step 4: Turn on the analytics query API in Core
 
@@ -760,6 +762,7 @@ that Proxy is writing to. Edit `MemoryCore/tdai-gateway.yaml` (or
 whichever yaml `start-memory-core.sh` uses):
 
 ```yaml
+# MemoryCore/tdai-gateway.yaml (ships with analytics.clickhouse.enabled: false)
 analytics:
   clickhouse:
     enabled: true
@@ -769,6 +772,15 @@ analytics:
     database: "context_proxy"           # match Proxy's database
 ```
 
+> 💡 If you rely on `deploy/global-images/start-memory-core.sh`, that file is
+> **regenerated on every start** (default `.memory-core-config/tdai-gateway.yaml`,
+> override the directory with `MEMORY_CORE_CONFIG_DIR`), so add the block to the
+> script's YAML template to make it stick. Alternatively inject
+> `ANALYTICS_CLICKHOUSE_ENABLED` / `_ENDPOINT` / `_DATABASE` / `_USERNAME` /
+> `_PASSWORD` in your own `docker run` (environment wins over yaml). The launcher
+> itself does **not** forward these variables — putting them in `.env` has no
+> effect.
+
 This is **entirely separate** from Core's existing
 `observability.clickhouse` (which exports OTel traces to `tdai_eval`) —
 that one pushes Core's own traces outward, this one reads back the
@@ -776,9 +788,33 @@ telemetry Proxy already persisted.
 
 Once configured, Core exposes 16 additional read-only
 `/v3/analytics/*` endpoints, and Panel uses them to render session-init
-/ tool-call / usage charts.
+/ tool-call / usage charts. Every endpoint except `config` also requires
+`x-tdai-user-key` to belong to a `system_admin`, and returns `503` while CH is
+not configured.
 
-### Step 5: Restart the stack and verify
+> ⚠️ With the prebuilt `memory-core` image from `deploy/global-images` there is
+> one more prerequisite: that image is built with `--omit=optional`, so
+> `@clickhouse/client` (an `optionalDependencies` entry) is **not** shipped and
+> Core cannot query CH (`[analytics-ch] init failed` in the log) even though
+> `/config` reports `configured: true`. Build your own image from
+> `MemoryCore/Dockerfile` with `@clickhouse/client` promoted to a regular
+> dependency.
+
+### Step 5: Turn the Panel entry on, restart and verify
+
+The Panel entry is gated by a **Panel-side switch** that is off by default. For
+the one-click deploy it lives in `deploy/global-images/.env`; `start-memory-hub.sh`
+forwards it into the memory-hub container:
+
+```bash
+# deploy/global-images/.env
+PANEL_FEATURE_ANALYTICS_ENABLED=true
+```
+
+The menu item only appears when all three hold: ① this switch is `true`
+(otherwise the Panel never even probes CH), ② you are signed in as
+`system_admin`, ③ Core's `/v3/analytics/config` reports `configured: true` and
+`reachable: true`.
 
 ```bash
 # Restart (if using the one-shot deploy)
@@ -786,34 +822,50 @@ Once configured, Core exposes 16 additional read-only
 ./start-all.sh
 ```
 
-Sanity checks:
+Sanity checks (run from `deploy/global-images`; read ports and the secret from
+`.env` so nothing lands in your shell history):
 
 ```bash
-# Core probe: configured=true means analytics is on
-curl -s http://localhost:8420/v3/analytics/config \
-  -H "x-tdai-service-id: default" \
-  -H "x-tdai-user-key: <admin sk-mem-...>" | jq
+set -a; . ./.env; set +a
 
-# Knowledge probe (no user_key needed for /config)
-curl -s http://localhost:8424/v3/analytics/config \
-  -H "x-tdai-service-id: default" | jq
+# Core probe: configured=true means the analytics module is on.
+# reachable=false means Core cannot reach ClickHouse.
+curl -s "http://localhost:${MEMORY_CORE_PORT:-8420}/v3/analytics/config" \
+  -H "x-tdai-service-id: default" | jq '.data'
+
+# Knowledge probe: /config needs no x-tdai-user-key, but it does need the service Bearer.
+curl -s "http://localhost:${KNOWLEDGE_PORT:-8424}/v3/analytics/config" \
+  -H "x-tdai-service-id: default" \
+  -H "Authorization: Bearer ${KNOWLEDGE_SERVICE_KEY}" | jq '.data'
 ```
 
-Both should return `{"configured": true, ...}`. Then open the Panel
-"Analytics" page — you'll see rollups of Proxy / Knowledge tool calls.
-If either side returns `configured: false`, Panel simply marks those
-charts as "Not enabled" without erroring out.
+Both should return `"configured": true` (with `code: 0`). Then sign in to the
+Panel as `system_admin` and open the "Analytics" page — you'll see rollups of
+Proxy / Knowledge tool calls. If either side returns `configured: false`, Panel
+simply marks those charts as "Not enabled" without erroring out.
 
 **Cheat sheet for common problems.**
 
+- `PANEL_FEATURE_ANALYTICS_ENABLED=true` but the menu is still missing → check
+  in order: the variable actually reached the container (`docker exec
+  tdai-memory-hub printenv PANEL_FEATURE_ANALYTICS_ENABLED` — an already-running
+  container must be recreated), you are signed in as `system_admin`, and Core's
+  `/config` reports `configured: true` **and** `reachable: true` (the Panel hides
+  the entry unless all three hold).
 - Panel says "Not enabled" or "No data" → `curl` both `/config`
   endpoints first; fix the ClickHouse config of whichever side reports
   `configured: false`.
 - Proxy is receiving requests but Core can't see data → the most
   likely cause is Core's `analytics.clickhouse.database` / `endpoint`
   not matching Proxy's `clickhouse.database` / `url`.
-- Knowledge `/v3/analytics/*` returns 401 → `KNOWLEDGE_ANALYTICS_ADMIN_KEY`
-  is unset, or doesn't match the `x-tdai-user-key` Panel is sending.
+- Core `/config` reports `configured: true` but `reachable: false` → wrong CH
+  endpoint / database / credentials, or the `memory-core` image is missing
+  `@clickhouse/client` (see the note in Step 4;
+  `docker logs tdai-memory-core | grep analytics-ch`).
+- Knowledge `/v3/analytics/*` returns 401 → the request is missing
+  `Authorization`, or `KNOWLEDGE_SERVICE_KEY` (Knowledge verifying side) and
+  `KNOWLEDGE_AUTH_TOKEN` (Panel calling side) differ. `KNOWLEDGE_ANALYTICS_ADMIN_KEY`
+  is not a real variable — don't set it.
 
 ## Stop / cleanup
 
