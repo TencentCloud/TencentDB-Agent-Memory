@@ -59,15 +59,19 @@ describe('AssetListPanel', () => {
   });
 
   it('传 toolbar 时渲染在标题行之后、列表之前', () => {
-    const { container, getByPlaceholderText } = renderPanel({
+    const { container, getByPlaceholderText, getByText } = renderPanel({
       toolbar: <input placeholder="搜索" />,
     });
 
     const header = container.querySelector('._alp-header');
     const toolbar = container.querySelector('._alp-toolbar');
     expect(header?.nextElementSibling).toBe(toolbar);
-    expect(toolbar?.nextElementSibling?.tagName).toBe('UL');
     expect(getByPlaceholderText('搜索')).toBeTruthy();
+    if (!toolbar) throw new Error('toolbar 未渲染');
+    // 用文档顺序而不是 tagName 断言：内部容器换成 div/ul 都不该让用例失效。
+    expect(
+      toolbar.compareDocumentPosition(getByText('Alpha')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('默认渲染全部条目且展示计数', () => {

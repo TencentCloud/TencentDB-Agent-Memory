@@ -606,6 +606,7 @@ export const enUS = {
   'skills.count.filtered': '{{filtered}} / {{total}} items',
   'skills.searchPlaceholder': 'Search name / ID / desc',
   'skills.empty.filtered': 'No matching skills. Try a different keyword.',
+  'skills.notify.truncated': 'Too many skills: loaded the first {{shown}} of {{total}}.',
   'skills.noAgent': 'No Agent Available',
   'skills.fork': 'Fork (writable)',
   'skills.fork.tooltip.fixed': 'Please select a skill in the "Team" or "My Assets" view',
@@ -894,7 +895,8 @@ export const enUS = {
   'memory.detail.searchPlaceholderL0': 'Semantically search the L0 messages of this memory…',
   'memory.detail.searchPlaceholderL1': 'Semantically search the L1 atoms of this memory…',
   'memory.detail.clearSearch': 'Clear',
-  'memory.detail.searchResultCount': '{{count}} related results',
+  // 避免 i18next 复数后缀（zh 侧无复数，两侧 key 必须一一对应）
+  'memory.detail.searchResultCount': 'Related results: {{count}}',
   'memory.detail.searchEmpty': 'No related memories found. Try another keyword.',
   'memory.detail.searchScore': 'Relevance {{score}}',
   'memory.detail.modeBrowse': 'Browse',

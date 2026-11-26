@@ -50,9 +50,14 @@ export async function listAllSkills(
   const isStale = options.isStale;
 
   const items: SkillSummary[] = [];
-  // offset 分页期间若有新 skill 写入，后一页可能重复返回前页末尾的条目。
+  // offset 分页的两类边界：
+  //   1) 期间有新 skill 写入 → 后一页可能重复返回前页末尾的条目（下面用 seen 去重）；
+  //   2) 期间有更新导致排序变化 → 个别条目可能被跳过（offset 分页固有问题，
+  //      彻底解决要换 cursor / 按 updated_at_ms 做 keyset 分页，暂不在本 PR 范围）。
   const seen = new Set<string>();
   let offset = 0;
+  // 服务端给的 total 只在「明确是数字」时采信，且只增不减：
+  // 若某页漏带 total（代理裁剪 / 接口变体），不能把已知总数覆盖成 0。
   let total = 0;
 
   for (;;) {
@@ -68,8 +73,11 @@ export async function listAllSkills(
 
     if (isStale?.()) return { items: [], total, truncated: false, stale: true };
 
-    total = page.total ?? 0;
     const pageItems = page.items ?? [];
+    if (typeof page.total === 'number' && Number.isFinite(page.total)) {
+      total = Math.max(total, page.total);
+    }
+
     let added = 0;
     for (const item of pageItems) {
       if (seen.has(item.skill_id)) continue;
@@ -84,7 +92,13 @@ export async function listAllSkills(
     // 用实际返回条数推进，不假设后端一定给满页。
     offset += pageItems.length;
 
-    if (items.length >= total) break;
+    // 退出条件二选一：
+    //   - 知道总数：取满 total 即停；
+    //   - 不知道总数（缺失 / 0）：用「短页 = 最后一页」兜底，
+    //     不能直接按 total=0 退出，否则会退化成"只取首页"这个原始 bug。
+    const reachedTotal = total > 0 ? items.length >= total : pageItems.length < pageSize;
+    if (reachedTotal) break;
+
     if (items.length >= maxItems) {
       return { items: items.slice(0, maxItems), total, truncated: true, stale: false };
     }

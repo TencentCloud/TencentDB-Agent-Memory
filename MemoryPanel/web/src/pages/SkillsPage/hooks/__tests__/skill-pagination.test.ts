@@ -112,8 +112,47 @@ describe('listAllSkills', () => {
     expect(result.truncated).toBe(true);
   });
 
-  it('默认上限为 2000 条', () => {
+  it('默认上限 2000 条：超大数据集只翻 10 页并标记 truncated', async () => {
+    const fetchPage = pagedSource(range(5000));
+    const result = await listAllSkills(fetchPage);
+
     expect(SKILL_MAX_ITEMS).toBe(2000);
+    expect(fetchPage).toHaveBeenCalledTimes(10);
+    expect(result.items).toHaveLength(2000);
+    expect(result.total).toBe(5000);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('后续页缺失 total 时继续翻到短页，不退化成只取首页', async () => {
+    const ids = range(450);
+    const fetchPage = vi.fn(
+      async ({ limit, offset }: { limit: number; offset: number }): Promise<ListSkillResult> => {
+        const items = ids.slice(offset, offset + limit).map(makeSkill);
+        // 只有首页带 total，模拟代理/接口变体把 total 裁掉的场景
+        return offset === 0 ? { items, total: ids.length } : ({ items } as ListSkillResult);
+      },
+    );
+    const result = await listAllSkills(fetchPage);
+
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    expect(result.items).toHaveLength(450);
+    expect(result.total).toBe(450);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('total 恒为 0 时按短页收敛，仍能取全', async () => {
+    const ids = range(30);
+    const fetchPage = vi.fn(
+      async ({ limit, offset }: { limit: number; offset: number }): Promise<ListSkillResult> => ({
+        items: ids.slice(offset, offset + limit).map(makeSkill),
+        total: 0,
+      }),
+    );
+    const result = await listAllSkills(fetchPage, { pageSize: 20 });
+
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    expect(result.items).toHaveLength(30);
+    expect(result.truncated).toBe(false);
   });
 
   it('第 2 页失败时保留第 1 页数据并返回 error', async () => {

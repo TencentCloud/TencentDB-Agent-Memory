@@ -13,7 +13,7 @@ import {
   type SkillSummary,
 } from '@/lib/api/skill-api';
 import { getPanelSession } from '@/lib/panelSession';
-import { filterSkillsByKeyword } from '@/lib/asset-common';
+import { filterSkillsByKeyword, normalizeKeyword } from '@/lib/asset-common';
 import { useTeams } from '@/services';
 import { useSkillDetailCache } from '@/services/use-skill-detail-cache';
 import { tea } from '@/lib/tea-bridge';
@@ -115,13 +115,18 @@ export function useSkillsPanel() {
   // 下面的选中清理 effect 与 selectedSkill 必须继续挂在 **skillsWithCache**（全量）上，
   // 这样"选中项被搜索条件隐藏"时右侧详情不会消失、选中也不会被误清空。
   const [keyword, setKeyword] = useState('');
-  const isKeywordActive = keyword.trim().length > 0;
+  // 归一化只做一次（trim + 小写）：既用于判定"是否在过滤"，也直接作为匹配 needle，
+  // 避免每个条目在 matchesSkillKeyword 里再归一化一遍。
+  const normalizedKeyword = normalizeKeyword(keyword);
   const filteredSkills = useMemo(
-    () => (isKeywordActive ? filterSkillsByKeyword(skillsWithCache, keyword) : skillsWithCache),
-    [skillsWithCache, keyword, isKeywordActive],
+    () =>
+      normalizedKeyword
+        ? filterSkillsByKeyword(skillsWithCache, normalizedKeyword)
+        : skillsWithCache,
+    [skillsWithCache, normalizedKeyword],
   );
   // 仅当原列表非空时才算「过滤态」：列表本来就空时应表达"无数据"而不是"没有匹配"。
-  const isFiltering = isKeywordActive && skillsWithCache.length > 0;
+  const isFiltering = normalizedKeyword !== '' && skillsWithCache.length > 0;
 
   // 选中某条 skill 时按需预拉其数据面详情（幂等，已缓存则跳过）。
   // 不做列表级批量预取：有多少 skill 就发多少次 getSkill() 太浪费，
@@ -143,12 +148,16 @@ export function useSkillsPanel() {
   const prevTeamIdRef = useRef(activeTeamId);
 
   const refresh = useCallback(async () => {
+    // 序号必须在任何早退分支之前自增：否则「切到无 team」时上一个 team 的在飞请求
+    // 仍然满足 seq === refreshSeqRef.current，会把旧数据回填回来；它的 finally 也会
+    // 因为序号不匹配而不复位 loading，导致列表永远停在骨架态。
+    const seq = ++refreshSeqRef.current;
     if (!activeTeamId) {
       setSkills([]);
       setVisibilityMap({});
+      setLoading(false);
       return;
     }
-    const seq = ++refreshSeqRef.current;
     const teamChanged = prevTeamIdRef.current !== activeTeamId;
     prevTeamIdRef.current = activeTeamId;
     const silent = teamChanged;
@@ -253,8 +262,11 @@ export function useSkillsPanel() {
           if (page.stale || seq !== refreshSeqRef.current) return; // 已被后续请求取代
           // 分页中途失败时保留已取到的页（函数内部已降级），但仍要让用户知道不完整。
           if (page.error) tea.notify.error(page.error);
+          // 超过聚合上限时不能静默截断：列表条数与实际不符，必须显式告知。
           if (page.truncated) {
-            console.warn(`[skills] list truncated at ${page.items.length}/${page.total}`);
+            tea.notify.warning(
+              t('skills.notify.truncated', { shown: page.items.length, total: page.total }),
+            );
           }
           const vm: Record<string, Asset['visibility']> = {};
           for (const a of ownedAssets) vm[a.asset_id] = a.visibility;
@@ -270,7 +282,9 @@ export function useSkillsPanel() {
     } finally {
       if (seq === refreshSeqRef.current) setLoading(false);
     }
-  }, [tab, selectedAgent, activeTeamId, myUserId]);
+    // t 只用于截断提示文案；切换语言时 refresh 换引用，但下面的 fetchKeyRef
+    // 去重会拦住重复请求，不会因为切语言多打一轮分页。
+  }, [tab, selectedAgent, activeTeamId, myUserId, t]);
 
   // 同步 selectedAgent 到 teamAgents：
   //   - 切换 team 后，老 selectedAgent 可能已不在新 team 内，需要重置；

@@ -210,6 +210,8 @@ export default function SkillsPanel({
                 size="full"
                 value={keyword}
                 onChange={setKeyword}
+                // fixed tab 未选 agent 时列表恒为空，搜索没有意义
+                disabled={tab === 'fixed' && !selectedAgent}
                 placeholder={t('skills.searchPlaceholder')}
               />
             }

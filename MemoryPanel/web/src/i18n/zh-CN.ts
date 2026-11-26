@@ -592,6 +592,7 @@ export const zhCN = {
   'skills.count.filtered': '{{filtered}} / {{total}} 条',
   'skills.searchPlaceholder': '搜索名称 / ID / 描述',
   'skills.empty.filtered': '没有匹配的 Skill，试试调整关键词。',
+  'skills.notify.truncated': 'Skill 过多，仅加载前 {{shown}} 条（共 {{total}} 条）。',
   'skills.noAgent': '无可选 Agent',
   'skills.fork': 'Fork（可写）',
   'skills.fork.tooltip.fixed': '请在「团队」或「我的资产分配」视图选中一条 skill',

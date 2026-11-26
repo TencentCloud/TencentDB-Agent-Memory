@@ -53,11 +53,13 @@ describe('i18n 资源对齐', () => {
   it('同一 key 的插值变量集合一致', () => {
     const mismatched = zhKeys
       .filter((key) => hasOwn(en, key))
-      .filter((key) => placeholders(zh[key]) !== placeholders(en[key]))
+      // 用 ?? '' 兜底：key 只在一侧存在时，第 1 条断言已经报错，
+      // 这里不应再因为对 undefined 调 matchAll 抛 TypeError 而掩盖差集信息。
+      .filter((key) => placeholders(zh[key] ?? '') !== placeholders(en[key] ?? ''))
       .map((key) => ({
         key,
-        zh: placeholders(zh[key]),
-        en: placeholders(en[key]),
+        zh: placeholders(zh[key] ?? ''),
+        en: placeholders(en[key] ?? ''),
       }));
 
     expect(mismatched).toEqual([]);
