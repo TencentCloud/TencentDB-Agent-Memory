@@ -11,8 +11,12 @@
  * 抽取语义（按优先级排列）：
  *
  *   0) CC 客户端内部 prompt / tool_result 伪装 / session-init 回执，
- *      以及 DSH 纯文本 `Current runtime context.` 快照 → 整条丢弃，返回 ""，
- *      调用方据此决定本轮不写 L0 / 不进 skill buffer
+ *      以及 DSH 的 `Current runtime context.` 快照 → 整条丢弃，返回 ""；
+ *      DSH 0.2.1 起的 `Time sampled while…` / `The working directory …` 通知
+ *      则按行剥除（见 2c）—— 独立成条时结果自然为空，与真问题合并时只掉噪声行。
+ *      DSH 后台任务结算通知（`background job <id> …`）因 label 带换行，改按
+ *      「起头 + 终止句」整段剥除（见 2a-0）。
+ *      返回 "" 时调用方据此决定本轮不写 L0 / 不进 skill buffer
  *
  *   1) 显式 `<user_query>...</user_query>` 块（CodeBuddy 标准 + CC 部分模板）
  *      → 只提取块内 join，即便同条消息同时含 session-init 表单也不受影响
@@ -104,6 +108,131 @@ export function isDshRuntimeContextSnapshot(text: string): boolean {
 }
 
 /**
+ * DSH 0.2.1 起新增的两类运行时通知 —— 与上面的 runtime-context 快照同源：
+ * 都由 harness 生成、都以 `role=user` 追加进对话流，不是人类键入。
+ *
+ *   - time-context 插件（0.2.0 只随可选的 experimental-schedule-bundle 挂载，
+ *     0.2.1 起进入 standard / cordis / ptc 预设）每步注入三行：
+ *       `Time sampled while preparing turn 6, step 1: 2026-10-18T16:44:01+08:00[Asia/Shanghai]`
+ *       `Browser time zone for this request: Asia/Shanghai. Interpret …`
+ *       `Elapsed since the preceding model-visible message: 1m 12s.`
+ *   - working-directory 包（0.2.1 新增）在目录切换 / 恢复时注入一行：
+ *       `The working directory changed from "D:\\a" to "D:\\b".`
+ *       `The working directory "D:\\a" is unavailable. The working directory is now "D:\\b".`
+ *
+ * 为什么按「行」而不是按「整条」判定：同一份通知在两条协议通道上的序列化形态
+ * 不同（见 llm adapter：OpenAI Chat 各自成条，Anthropic 会把连续同 role 的
+ * block 合并进同一条 user 消息）。按行剥除对两种形态都成立：
+ *   - 独立成条 → 三行全被剥掉 → 结果为空 → 该轮不写 L0，倒序扫描继续往前找；
+ *   - 与真问题合并 → 只掉通知行，真问题原样保留（整条丢弃会连真问题一起吞掉）。
+ *
+ * 全部锚定行首且句式由 harness 固定生成，用户不会逐行以这些英文句子开头；
+ * 句中出现（引用原话）不受影响。
+ */
+const DSH_RUNTIME_NOTICE_LINE_PATTERNS: RegExp[] = [
+  /^\s*Time sampled while preparing turn \d+, step \d+:/,
+  /^\s*Browser time zone for this request:/,
+  /^\s*Elapsed since the preceding (?:model-visible message|step context):/,
+  /^\s*The working directory changed from "/,
+  /^\s*The working directory ".+" is unavailable\.\s*The working directory is now "/,
+  // model-selection 插件：切换模型路由时在 pre-step 插入的一条通知。
+  // 整行锚定 —— 只在它单独成行时命中，正文引用这句话不受影响。
+  /^\[model changed: [^\]]*\]$/,
+  // repeat-tool-reminder（gentle 变体）：重复调用同一工具的第一档提醒。
+  /^\s*You are repeating the exact same tool call with identical arguments\./,
+  // pi-ai 在 OpenAI Chat 通道上表达「工具结果带图」时凭空造的一条 user 消息：
+  // 协议的 tool 消息 content 只能是字符串，图只能挪到紧跟其后的一条 user 消息里。
+  // 它不含任何用户输入，剥空后才能落回真人那句。
+  /^Attached image\(s\) from tool result:$/,
+];
+
+/**
+ * 以「首行 + 多行正文」形态出现的注入块，按行剥只能掉首行、续行会留在 L0 里。
+ *
+ * OpenAI Chat 通道下这几类注入都独立成条（一条 user 消息只有它自己），
+ * 所以「整条以首行开头」时直接吃到末尾；真问题混在前面时不命中，
+ * 退回到按行剥（只掉首行，续行仍会残留 —— 已知局限，Anthropic 通道才会遇到）。
+ */
+const DSH_INJECTION_BLOCK_PATTERNS: RegExp[] = [
+  // tmux-context：`tmux location (turn N):` + 多行会话状态
+  /^(?:[ \t]*\n)*[ \t]*tmux location \(turn \d+\):[\s\S]*$/,
+  // action-cards：固定前言 + 引导语 + `\n` + JSON 快照
+  /^(?:[ \t]*\n)*[ \t]*Latest status of action cards from user actions and background work\.[\s\S]*$/,
+  // 后台任务通知的「内联输出」变体：`… finished [status: …]. Output:\n<作业输出>`。
+  // 输出正文后面没有终止句（生成处 inlineCompletionNotice 直接拼到末尾），
+  // 因此只能按「整条以首行开头 ⇒ 吃到末尾」处理，与上面两类同一取向。
+  // 真问题混在开头前面时不命中，通知会残留（已知局限，与另两类一致）。
+  /^(?:[ \t]*\n)*[ \t]*background job [\w-]+ [\s\S]{0,4000}?finished \[status:[^\]]*\]\. Output:\r?\n[\s\S]*$/,
+];
+
+/**
+ * DSH 后台任务（jobs 插件）的结算通知 —— 第三类以 role=user 注入的 harness 噪声。
+ *
+ * 生成处：packages/jobs/tool-jobs/src/index.ts::fitCompletionNotice，
+ * 由 createUserMessage 投递（source.kind = 'tool-jobs' / form = 'notice'）：
+ *
+ *   background job <id> (<kind>: <label>) finished [status: <status>, <detail>]. Read its output with job_output.
+ *
+ * <label> 就是命令原文，自带换行 —— 也就是说这条通知本身是多行文本。因此不能
+ * 像 time-context 那样按行剥：只剥掉首行会把剩下的命令片段留在 L0 里，比不剥
+ * 更脏。必须按「起头 + 终止句」整段吃掉。
+ *
+ * 超出 outputLimitBytes 时 fitCompletionNotice 会依次退化成：
+ *   background job <id> (…\n[notice truncated]\nDone; job_output.
+ *   background job <id>\nDone; job_output.
+ *   background job ended; use job_list for id.
+ *   job_list
+ * 前三种由同一组终止句覆盖；最后一种只剩 tool 名本身，不判（避免误伤用户输入）。
+ *
+ * 位置不固定：OpenAI Chat 通道下它独立成条（往往正是最后一条 user 消息，
+ * 剥完为空 ⇒ 本轮不写 L0）；Anthropic 通道会把连续同 role 的 block 合并，
+ * 于是它贴在真问题前面或后面，这时只掉通知段、真问题原样保留。
+ *
+ * 另有两种不带「去取输出」终止句的形态，由同一个生成处产出：
+ *   … finished [status: …]. No new output.        ← 空输出，仍可整句剥
+ *   … finished [status: …]. Output:\n<作业输出>     ← 内联输出，无终止句；
+ *     由 DSH_INJECTION_BLOCK_PATTERNS 按「整条以首行开头」整块吃掉。
+ */
+const DSH_JOB_NOTICE_RE =
+  /(?:^|\n)[ \t]*(?:background job [\w-]+(?: \(|\n)[\s\S]{0,20000}?(?:\.\s*Read its output with job_output\.|Done; job_output\.|\. No new output\.)|background job ended; use job_list for id\.)/g;
+
+function stripDshJobNotices(text: string): string {
+  // 绝大多数消息不含这个前缀，先做一次廉价判断再上正则
+  if (!text.includes("background job ")) return text;
+  return text.replace(DSH_JOB_NOTICE_RE, "");
+}
+
+/**
+ * DSH repeat-tool-reminder 的 detailed 变体 —— 多行片段，首行
+ * `Repeated tool call detected:`，末尾固定以 `evidence has been gathered.` 收束。
+ *
+ * 与 gentle 变体分开处理（gentle 是单段、按行剥即可）：detailed 带
+ * `- tool:` / `- consecutive_calls:` / `- arguments:` 三个字段行，只剥首行会把
+ * 这三行留在 L0 里，比不剥更脏。
+ */
+const DSH_REPEAT_DETAILED_RE =
+  /(?:^|\n)[ \t]*Repeated tool call detected:[\s\S]{0,8000}?evidence has been gathered\./g;
+
+function stripDshRepeatDetailed(text: string): string {
+  if (!text.includes("Repeated tool call detected:")) return text;
+  return text.replace(DSH_REPEAT_DETAILED_RE, "");
+}
+
+/**
+ * DSH session-reference（用户在输入里引用历史会话）—— `## Referenced sessions`
+ * 标题 + 三行说明 + `<referenced-sessions>` 里的 JSON 快照。
+ *
+ * 整段剥而不是只加 XML 标签：标题和说明文字在标签外面，只剥标签会留下它们。
+ */
+const DSH_REFERENCED_SESSIONS_RE =
+  /(?:^|\n)## Referenced sessions[\s\S]*?<\/referenced-sessions>/g;
+
+function stripDshReferencedSessions(text: string): string {
+  if (!text.includes("## Referenced sessions")) return text;
+  return text.replace(DSH_REFERENCED_SESSIONS_RE, "");
+}
+
+/**
  * 从原始 user content 文本抽取用户真实键入。
  *
  * 返回空字符串意味着"这条 user message 全是 harness 噪声"，调用方应据此
@@ -120,6 +249,9 @@ export function extractUserQueryText(raw: string): string {
   // DSH runtime-context 快照：纯文本、无 XML wrapper，必须整条丢弃，
   // 否则 extractLatestUserMessage 从后往前扫会把它当成真实提问写入 L0。
   if (isDshRuntimeContextSnapshot(raw)) return "";
+  // DSH 0.2.1+ 的 time-context / working-directory 通知不在这里整条丢弃 ——
+  // 见 2c 的 DSH_RUNTIME_NOTICE_LINE_PATTERNS：按行剥除才能同时覆盖
+  // “独立成条”和“与真问题合并成一条”两种线上形态。
 
   // 1) 优先：显式 <user_query> 块（即便同一条消息里还夹着 session-init 问答，
   //    也只取真实 query，用户输入完整保留）。
@@ -136,6 +268,16 @@ export function extractUserQueryText(raw: string): string {
   //    用户真实输入。核心原则：只有用户手打的文本值得写 L0；一切 tool 回显
   //    / 系统提醒 / 文件正文 / 表单工件 / CC 本地 memory 内容 —— 全部剥除。
   let text = raw;
+
+  // 2a-0) DSH 后台任务完成通知（jobs 插件）：label 带换行，必须整段剥
+  text = stripDshJobNotices(text);
+  // 2a-0b) 同为多行的三类：repeat-tool-reminder detailed、引用会话快照。
+  text = stripDshRepeatDetailed(text);
+  text = stripDshReferencedSessions(text);
+  // 2a-0c) 「首行 + 多行正文」的注入块，整条吃到末尾。
+  for (const blockRe of DSH_INJECTION_BLOCK_PATTERNS) {
+    if (blockRe.test(text)) text = text.replace(blockRe, "");
+  }
 
   // 2a) session-init 表单回答 <question_answer>...</question_answer>
   text = text.replace(/<question_answer[^>]*>[\s\S]*?<\/question_answer>/gi, "");
@@ -157,6 +299,12 @@ export function extractUserQueryText(raw: string): string {
     "persisted-output", "persisted_output",
     "tool_use_error", "tool-use-error",
     "tool_result", "tool-result",
+    // dsh 的注入容器：技能目录 / 目标收尾 / 引用会话快照。
+    // 它们都是“给模型看的上下文”，不是用户键入的内容。
+    "available_skills",
+    "goal_complete",
+    "goal_blocked",
+    "referenced-sessions",
     // The proxy may prepend L1 recall inside a user-role message. It is
     // context for the model, not text typed by the user.
     "tdai_recalled_l1_memories",
@@ -179,6 +327,10 @@ export function extractUserQueryText(raw: string): string {
     /^\s{0,6}\d+\t/,   // cat -n 用 tab 分隔（Read tool 的标准格式）
     // MEMORY.md 相关：CC session_init/memory 命令产生的输出
     /^\s*File .+ has been (updated|created)/i,
+    // DSH 0.2.1+ harness 注入的运行时通知（time-context / working-directory）。
+    // 整条都是通知时这些行全被删掉 → 结果为空 → 本轮不写 L0；
+    // 与真问题合并在同一条 user 消息里时，只掉通知行，真问题保留。
+    ...DSH_RUNTIME_NOTICE_LINE_PATTERNS,
   ];
   text = text
     .split("\n")
