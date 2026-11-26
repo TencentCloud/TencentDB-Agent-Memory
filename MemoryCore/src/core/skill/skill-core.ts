@@ -9,7 +9,7 @@
  *
  * 6 个写动作：
  *   - create        新建 skill v1
- *   - update        替换 SKILL.md
+ *   - update        替换 SKILL.md（replace_resources=true 时连资源集合一起换）
  *   - patch         单点串替
  *   - delete        head status=archived
  *   - writeFiles    增/改资源
@@ -55,6 +55,7 @@ const TAG = "[skill-core]";
 
 export type SkillCoreErrorCode =
   | "INVALID_FRONTMATTER"
+  | "INVALID_ARGUMENT"
   | "SKILL_FRONTMATTER_INVALID"
   | "SKILL_PATCH_NOT_UNIQUE"
   | "SKILL_NAME_DUPLICATE"
@@ -146,6 +147,14 @@ export interface UpdateInput extends IdFields {
   skill_id: string;
   expected_version: number;
   content: string;
+  /**
+   * 同名替换语义（默认关闭）。为 true 时 `resources` 即新版本的资源全集：
+   * head.manifest 中不在该集合里的 path 会被删除，集合内新增/变更的会被写入，
+   * 新版本的 manifest 恰等于 `resources`。skill_id 不变、版本 +1、旧版本保留。
+   */
+  replace_resources?: boolean;
+  /** 仅与 `replace_resources=true` 成对出现；`[]` 表示清空全部资源。 */
+  resources?: SkillResourcePayload[];
 }
 
 export interface PatchInput extends IdFields {
@@ -320,11 +329,52 @@ export class SkillCore {
       throw new SkillCoreError("INVALID_FRONTMATTER", "name change is not allowed across versions");
     }
 
+    // `replace_resources` 与 `resources` 必须成对出现。
+    // HTTP 层的 updateRequestSchema 已经拦了一次，但 SkillCore 是内部 API
+    // （skill-core-sink / extractor 也在调），只靠 schema 一层的话，任何新调用方
+    // 漏传 `resources` 都会被当成"空集合"→ 静默删光该 skill 的全部资源。
+    if (input.replace_resources === true && input.resources === undefined) {
+      throw new SkillCoreError(
+        "INVALID_ARGUMENT",
+        "resources is required when replace_resources=true (pass [] to clear all resources)",
+      );
+    }
+    if (input.replace_resources !== true && input.resources !== undefined) {
+      throw new SkillCoreError(
+        "INVALID_ARGUMENT",
+        "resources requires replace_resources=true; use writeFiles for incremental upsert",
+      );
+    }
+
     try {
+      // 同名替换（默认关闭）：把资源集合整体换成 input.resources。
+      // 两个细节决定了这段不能省：
+      //   1. 差集必须算 —— 只传 resourcesToWrite 不传 resourcesToRemove 会留下旧文件，
+      //      manifest 就不是"上传集合"而是"并集"。
+      //   2. 只把真正变化的文件交给 versioning —— appendNextVersion 的幂等判据是
+      //      "content_hash 相同 且 write/remove 都为空"，无脑传全量会让"内容完全
+      //      相同的重复导入"也升一版，版本号越堆越高。
+      //
+      // 整段放在 try 里：filterChangedResources 会调 readResource，抛出的
+      // RESOURCE_TOO_LARGE / INVALID_PATH 必须经 toCoreError 归一，否则网关会把
+      // 可操作的业务错误当成 50001 内部错误。
+      let resourcesToWrite: SkillResourcePayload[] | undefined;
+      let resourcesToRemove: string[] | undefined;
+      if (input.replace_resources === true) {
+        const incoming = dedupeByPath(input.resources ?? []);
+        const incomingPaths = new Set(incoming.map((r) => r.path));
+        resourcesToRemove = head.manifest
+          .filter((m) => !incomingPaths.has(m.path))
+          .map((m) => m.path);
+        resourcesToWrite = await this.filterChangedResources(head, incoming);
+      }
+
       const result = await this.versioning.appendNextVersion(head, this.ctxOf(input), {
         content: input.content,
         name: head.name,
         description: file.frontmatter.description,
+        resourcesToWrite,
+        resourcesToRemove,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
         head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
@@ -672,6 +722,45 @@ export class SkillCore {
     return head;
   }
 
+  /**
+   * `replace_resources` 语义下的变更过滤：只保留"新版本需要真正写入"的文件。
+   *
+   * 判定顺序（从便宜到贵）：
+   *   1. head manifest 里没有该 path → 新增，必写；
+   *   2. size_bytes 不同（或可执行位不同）→ 内容必然不同，必写，不读旧字节；
+   *   3. size 相同 → 读旧版本字节按 base64 比对，相同则跳过。
+   *
+   * 代价：最坏 N 次 readResource（N = 上传文件数，网关侧上限 100），且只在
+   * `replace_resources=true` 时发生。换来的是"重复导入同一个包不产生新版本"，
+   * 否则版本号会随每次导入单调增长。
+   */
+  private async filterChangedResources(
+    head: Skill,
+    incoming: SkillResourcePayload[],
+  ): Promise<SkillResourcePayload[]> {
+    const byPath = new Map(head.manifest.map((m) => [m.path, m]));
+    const changed: SkillResourcePayload[] = [];
+    for (const payload of incoming) {
+      const existing = byPath.get(payload.path);
+      const bytes = decodePayload(payload);
+      if (
+        !existing ||
+        existing.size_bytes !== bytes.length ||
+        existing.is_executable !== (payload.is_executable ?? false)
+      ) {
+        changed.push(payload);
+        continue;
+      }
+      const current = await this.resources.readResource(
+        head.skill_id, head.version, payload.path, "base64",
+      );
+      if (!current || !Buffer.from(current.content, "base64").equals(bytes)) {
+        changed.push(payload);
+      }
+    }
+    return changed;
+  }
+
   private ctxOf(input: { user_id?: string; team_id?: string; agent_id?: string; task_id?: string }) {
     return {
       user_id: input.user_id,
@@ -744,6 +833,18 @@ function countOccurrences(haystack: string, needle: string): number {
 
 function splitJoin(s: string, find: string, replace: string): string {
   return s.split(find).join(replace);
+}
+
+/** 资源集合按 path 去重（同 path 后者覆盖），避免同一版本里重复写同一文件。 */
+function dedupeByPath(list: SkillResourcePayload[]): SkillResourcePayload[] {
+  const byPath = new Map<string, SkillResourcePayload>();
+  for (const p of list) byPath.set(p.path, p);
+  return [...byPath.values()];
+}
+
+/** payload 解码后的原始字节，用于与库中已有资源做字节比对。 */
+function decodePayload(p: SkillResourcePayload): Buffer {
+  return p.encoding === "base64" ? Buffer.from(p.content, "base64") : Buffer.from(p.content, "utf-8");
 }
 
 // ═════════════════════════════════════════════════════════════════════

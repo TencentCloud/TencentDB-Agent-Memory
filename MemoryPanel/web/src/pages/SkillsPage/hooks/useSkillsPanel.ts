@@ -99,8 +99,14 @@ export function useSkillsPanel() {
   const {
     applyCachedDetail,
     preload: preloadSkillDetail,
+    invalidate: invalidateSkillDetail,
     cacheVersion,
   } = useSkillDetailCache(activeTeamId);
+
+  // 详情面板只在 skillId 变化时重载（SkillDetailPane 内部 useEffect 依赖
+  // loadDetail → skillId）。同名导入替换后正文/版本都变了但 skillId 没变，
+  // 因此用一个显式 token 触发重挂，避免用户看到替换前的正文。
+  const [detailRefreshToken, setDetailRefreshToken] = useState(0);
 
   // 对 skills 列表应用缓存：已拉过的 skill 更新为真实 version / owner_agent_id。
   const skillsWithCache = useMemo(
@@ -442,6 +448,11 @@ export function useSkillsPanel() {
     preloadSkillDetail,
     applyCachedDetail,
     cacheVersion,
+    /** 同名替换后清掉该 skill 的详情缓存（否则列表版本号被旧缓存覆盖）。 */
+    invalidateSkillDetail,
+    /** 同名替换后递增，用于重挂详情面板拉取新正文。 */
+    detailRefreshToken,
+    setDetailRefreshToken,
     // handlers
     refresh,
     handleDelete,

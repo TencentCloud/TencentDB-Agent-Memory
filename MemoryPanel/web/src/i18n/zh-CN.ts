@@ -712,8 +712,11 @@ export const zhCN = {
   'importSkill.zip.invalid': '结构校验未通过',
   'importSkill.zip.submit': '导入 {{count}} 个 Skill',
   'importSkill.zip.done': '完成',
-  'importSkill.zip.summary': '导入完成：成功 {{ok}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个',
+  'importSkill.zip.summary':
+    '导入完成：新增 {{ok}} 个 / 替换 {{replaced}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个',
   'importSkill.zip.result.ok': '{{count}} 个资源文件',
+  'importSkill.zip.result.replaced': '已替换 v{{from}} → v{{to}} · {{count}} 个资源文件',
+  'importSkill.zip.result.replacedUnchanged': '内容未变化，仍为 v{{version}}',
   'importSkill.zip.result.skipped': '已跳过：{{reason}}',
   'importSkill.zip.result.failed': '导入失败：{{reason}}',
   'importSkill.zip.error.notZip': '不是有效的 .zip 压缩包',
@@ -734,6 +737,8 @@ export const zhCN = {
     '解压后总大小超过 {{size}} 上限（受接口请求体限制）。请精简资源文件后重新打包。',
   'importSkill.zip.error.tooManyEntries': '压缩包内文件数量超过 {{count}} 个上限',
   'importSkill.zip.error.noReady': '没有结构校验通过的压缩包，请检查包内是否包含 SKILL.md。',
+  'importSkill.zip.error.duplicateInBatch':
+    '同一批次内出现多个同名 Skill「{{name}}」，只导入第一个，其余已跳过。',
   'importSkill.session.hintPrefix':
     '粘贴一段与该 agent 的对话，系统会自动从中提炼可复用的 skill 沉淀到该 agent 下。对话 JSON 需包含 ',
   'importSkill.session.hintSuffix': ' 数组。',
@@ -760,6 +765,17 @@ export const zhCN = {
   'importSkill.result.session.accepted':
     '提交成功，提取任务已受理。预计 1-3 分钟后完成，请稍后刷新 skill 列表查看结果。',
   'importSkill.result.directory': '导入成功：{{name}}（{{count}} 个资源文件）',
+  // 同名替换（目录 / 压缩包共用）
+  'importSkill.replace.confirm': '已存在同名 Skill「{{name}}」，继续将替换其内容与资源文件',
+  'importSkill.replace.desc':
+    '归属 Agent：{{agent}}；版本 v{{from}} → v{{to}}；资源文件 {{oldCount}} → {{newCount}} 个。skill_id 与授权/绑定关系保持不变，旧版本仍可在版本历史中查看。内容与资源都没有变化时不会升版。',
+  'importSkill.replace.okText': '替换',
+  'importSkill.replace.cancelText': '取消',
+  'importSkill.replace.zipConfirm': '本次导入有 {{count}} 个同名 Skill 将被替换：{{names}}',
+  'importSkill.replace.zipResourceDelta': '资源 {{oldCount}} → {{newCount}} 个',
+  'importSkill.result.replaced':
+    '已替换「{{name}}」（v{{from}} → v{{to}}，{{count}} 个资源文件）',
+  'importSkill.result.replacedUnchanged': '内容与资源均未变化，「{{name}}」仍为 v{{version}}',
   'importSkill.sample.user': '我们的 PostgreSQL 14 主库今天又卡死了…',
   'importSkill.sample.assistant': '先 ssh 到主库节点，查看慢查询日志…',
   'importSkill.sample.toolCall': '调用 bash 执行: tail -100 /var/log/postgresql/slow.log',
@@ -1450,6 +1466,10 @@ export const zhCN = {
   // 自持 user_key 首次登录（key 不存在 → 自动建号）时建号失败。
   // 与"key 无效"是两回事：这里 key 本身没问题，是服务端建号动作失败了。
   'error.USER_CREATE_FAILED': '使用该 user_key 创建账号失败，请稍后重试或联系管理员。',
+  // skill 数据面：(team, owner_agent, name) 撞唯一索引（42201）。
+  // 正常导入链路会先探测同名并走"确认后替换"，走到这里说明是漏网路径。
+  'error.SKILL_NAME_DUPLICATE':
+    '该 Agent 下已存在同名 Skill。请改用「导入」（同名会走确认后替换），或先在列表中删除旧 Skill。',
   'error.network': '网络请求失败，请检查服务是否可用后重试。',
   'error.timeout': '请求超时，请稍后重试。',
   'error.emptyResponse': '服务返回为空，请稍后重试。',

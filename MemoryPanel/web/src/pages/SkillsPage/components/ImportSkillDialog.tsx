@@ -28,6 +28,19 @@
  * 移除说明：原有的「粘贴 SKILL.md 文本」模式已下线 —— 目录导入已覆盖
  * 该场景，且用户手写 frontmatter 极易踩坑（name/description 缺失、
  * YAML 语法错），改由目录导入引导用户放好 SKILL.md 更稳。
+ *
+ * ── 同名 skill：确认后替换（目录 / 压缩包两条链路都走） ──────────────────
+ * 服务端对 `(team_id, owner_agent_id, name)` 建了唯一索引，撞名时 create 直接
+ * 返回 42201 SKILL_NAME_DUPLICATE。这里在提交前先用 skill/list 探测同名：
+ *
+ *   - 命中 → `tea.confirm` 展示归属 agent / `v旧 → v新` / 资源数变化，用户确认后
+ *     走 `update`（`replace_resources: true`，资源集合整体替换），skill_id 与
+ *     ACL / agent 绑定保持不变，旧版本仍可在版本历史里回滚；
+ *   - 取消 → 不写入任何内容；
+ *   - 内容与资源都没变时服务端**不升版**，返回当前 head，这里提示"内容未变化"。
+ *
+ * 压缩包批量导入对同名包**汇总成一次确认**，结果表用单独的状态展示"已替换"。
+ * 对话导入（mode=session）走 LLM 抽取链路，不参与替换。
  */
 
 import { useMemo, useRef, useState } from 'react';
@@ -36,12 +49,18 @@ import { useTranslation } from 'react-i18next';
 import {
   createSkill,
   extractSkills,
+  getSkill,
+  listSkills,
+  updateSkill,
+  SkillApiError,
   type SkillResourcePayload,
   type ExtractParams,
 } from '@/lib/api/skill-api';
 import { Alert, Button, Form, Input, Modal, Segment, Select } from 'tea-component';
 import { FolderOpenIcon } from 'tea-icons-react';
 import i18n from '@/i18n';
+import { tea } from '@/lib/tea-bridge';
+import { namePrefixOf, pickSameNameSkill } from '@/lib/skill-import';
 import '../styles/import-skill-dialog.css';
 
 type Mode = 'directory' | 'zip' | 'session';
@@ -202,11 +221,45 @@ async function resolveSkillContent(plan: SkillPlan): Promise<{ name: string; con
   return { name, content };
 }
 
-/** 按 plan 落库一个 skill（v3 create 一次性带资源，新建即 v1）。 */
-async function importPlan(
-  plan: SkillPlan,
-  ctx: { userId: string; teamId: string; agentId: string },
-): Promise<{ name: string; count: number }> {
+/** 一个 skill 的待落库内容（目录 / 压缩包共用）。 */
+interface PlanPayload {
+  name: string;
+  content: string;
+  resources: SkillResourcePayload[];
+}
+
+/** 导入身份三件套（create / update 入参一致）。 */
+interface ImportCtx {
+  userId: string;
+  teamId: string;
+  agentId: string;
+}
+
+/** 探测到的同名 skill。 */
+interface ReplaceTarget {
+  skillId: string;
+  version: number;
+  resourceCount: number;
+}
+
+type ImportStatus = 'ok' | 'replaced' | 'replaced-unchanged';
+
+interface ImportOutcome {
+  name: string;
+  count: number;
+  status: ImportStatus;
+  version: number;
+  /** 替换前的版本（status 为 replaced* 时才有）。 */
+  previousVersion?: number;
+  /** 被替换的 skill_id（父组件要据此清详情缓存）。 */
+  skillId?: string;
+}
+
+/** 同名探测单页条数。前缀已收窄，200 足够覆盖单 agent 全部同前缀 skill。 */
+const SAME_NAME_LIST_LIMIT = 200;
+
+/** plan → 待提交 payload（解析 SKILL.md、读资源、按 gateway body 上限预检）。 */
+async function buildPayload(plan: SkillPlan): Promise<PlanPayload> {
   const { name, content } = await resolveSkillContent(plan);
 
   // 资源文件随 create 一次性落库（单版本 v1）。
@@ -235,15 +288,144 @@ async function importPlan(
     );
   }
 
-  await createSkill({
-    user_id: ctx.userId,
+  return { name, content, resources };
+}
+
+/**
+ * 探测同名 skill。
+ *
+ * 作用域是 `(team_id, owner_agent_id, name)` —— 与后端唯一索引一致，**不是**
+ * 整个 team：同一 team 里别的 agent 有同名 skill 不算冲突，也不该被替换。
+ * `owner_agent_id` 就是本次导入要落到的 agent（team 模式下回落 userId，与
+ * create 的取值完全一致），所以这里与 create 看到的是同一个作用域。
+ *
+ * `skill/list` 的 `name_prefix` 是前缀匹配，必须再用 `pickSameNameSkill` 做全等
+ * 过滤；命中后补一次 `get` 拿资源数量（确认弹窗要展示"资源 2 → 3 个"）。
+ */
+async function findSameName(name: string, ctx: ImportCtx): Promise<ReplaceTarget | null> {
+  if (!ctx.teamId || !ctx.agentId) return null;
+  const list = await listSkills({
     team_id: ctx.teamId,
-    agent_id: ctx.agentId,
-    name,
-    content,
-    resources: resources.length ? resources : undefined,
+    filters: {
+      owner_agent_id: ctx.agentId,
+      name_prefix: namePrefixOf(name),
+      status: ['active'],
+    },
+    pagination: { limit: SAME_NAME_LIST_LIMIT },
   });
-  return { name, count: resources.length };
+  const hit = pickSameNameSkill(list.items, name);
+  if (!hit) return null;
+
+  // list 的 version 已经来自 head 行，这里再 get 一次是为了 manifest 长度；
+  // 探测与真正写入之间的版本漂移由 40901 重试兜（见 replacePayload）。
+  const detail = await getSkill({
+    skill_id: hit.skill_id,
+    team_id: ctx.teamId,
+    include_content: false,
+    include_manifest: true,
+  });
+  return {
+    skillId: hit.skill_id,
+    version: detail.version,
+    resourceCount: detail.manifest?.length ?? 0,
+  };
+}
+
+/**
+ * 落库一个 payload：无同名 → create（v1）；有同名 → 替换（v+1）。
+ *
+ * create 撞 42201 说明探测之后、写入之前出现了同名（并发导入 / 探测被 limit
+ * 截断），此时补探测一次改走替换，避免用户看到裸错误码。
+ */
+async function applyPayload(
+  payload: PlanPayload,
+  ctx: ImportCtx,
+  existing: ReplaceTarget | null,
+): Promise<ImportOutcome> {
+  const identity = { user_id: ctx.userId, team_id: ctx.teamId, agent_id: ctx.agentId };
+
+  if (!existing) {
+    try {
+      const created = await createSkill({
+        ...identity,
+        name: payload.name,
+        content: payload.content,
+        resources: payload.resources.length ? payload.resources : undefined,
+      });
+      return {
+        name: payload.name,
+        count: payload.resources.length,
+        status: 'ok',
+        version: created.version,
+        skillId: created.skill_id,
+      };
+    } catch (e) {
+      if (e instanceof SkillApiError && e.code === 42201) {
+        const raced = await findSameName(payload.name, ctx);
+        if (raced) return replacePayload(payload, ctx, raced);
+      }
+      throw e;
+    }
+  }
+
+  return replacePayload(payload, ctx, existing);
+}
+
+/**
+ * 同名替换：`replace_resources: true` + 资源全集，服务端保证 skill_id 不变、
+ * version +1、manifest 恰等于上传集合，旧版本保留。
+ *
+ * `expected_version` 用**探测/确认时拿到的那个版本**，而不是临时再取一次最新版本：
+ * 后者等于让乐观锁永远不生效（40901 变成死代码），而且确认弹窗给用户看的是
+ * `vN → vN+1`，实际写入却可能是别人刚推进的 `v(N+1) → v(N+2)`，用户确认的和
+ * 发生的不是一回事。这里用探测版本发请求，让"期间被人改过"真实暴露出来。
+ *
+ * 重试策略（都只重试一次，第二次失败按失败计）：
+ *   - 40901 SKILL_VERSION_STALE：期间版本被推进 → 重新探测拿新 version 再写；
+ *   - 42201 SKILL_NAME_DUPLICATE：同名作用域在写入前变了 → 同样重新探测。
+ * 两个码都走"重新探测"这一条路：它同时刷新 skill_id 与 version。
+ */
+async function replacePayload(
+  payload: PlanPayload,
+  ctx: ImportCtx,
+  target: ReplaceTarget,
+): Promise<ImportOutcome> {
+  const identity = { user_id: ctx.userId, team_id: ctx.teamId, agent_id: ctx.agentId };
+  let current = target;
+  let attempt = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      const updated = await updateSkill({
+        ...identity,
+        skill_id: current.skillId,
+        expected_version: current.version,
+        content: payload.content,
+        replace_resources: true,
+        resources: payload.resources,
+      });
+      return {
+        name: payload.name,
+        count: payload.resources.length,
+        // 版本没变 = 服务端判定"内容与资源都没变"，没有产生新版本
+        status: updated.version === current.version ? 'replaced-unchanged' : 'replaced',
+        version: updated.version,
+        previousVersion: current.version,
+        skillId: current.skillId,
+      };
+    } catch (e) {
+      if (attempt === 0 && e instanceof SkillApiError && (e.code === 40901 || e.code === 42201)) {
+        attempt += 1;
+        const reProbed = await findSameName(payload.name, ctx);
+        if (reProbed) {
+          current = reProbed;
+          continue;
+        }
+      }
+      throw e;
+    }
+  }
 }
 
 /**
@@ -424,15 +606,24 @@ interface ZipItem {
 interface ZipResult {
   key: string;
   label: string;
-  status: 'ok' | 'skipped' | 'failed';
+  /** replaced = 命中同名并已替换（版本没变则 version === previousVersion，即"内容未变化"）。 */
+  status: 'ok' | 'replaced' | 'skipped' | 'failed';
   name?: string;
   count?: number;
   reason?: string;
+  version?: number;
+  previousVersion?: number;
+}
+
+/** 导入成功时回给父组件的信息：被替换的 skill 需要清详情缓存、重挂详情面板。 */
+export interface ImportedInfo {
+  replacedSkillIds: string[];
 }
 
 export default function ImportSkillDialog(props: {
+  /** 导入完成：replacedSkillIds 非空表示本轮有同名替换，父组件需清缓存并刷新详情。 */
   onClose: () => void;
-  onImported: () => void;
+  onImported: (info?: ImportedInfo) => void;
   /** 当前激活 team（skill 归属，create 必填） */
   teamId: string;
   /** Import target: 'team' = team pool (default), 'fixed' = agent fixed assets. */
@@ -464,7 +655,45 @@ export default function ImportSkillDialog(props: {
   const zipInputRef = useRef<HTMLInputElement>(null);
   // 解压是异步的（多个包串行），用户中途重选时用递增 token 取消上一批。
   const zipParseTokenRef = useRef(0);
+  // 本轮被替换过的 skill_id：关弹窗时要回给父组件（清详情缓存 + 重挂详情面板），
+  // 否则列表版本号会被旧缓存覆盖、详情面板仍停留在替换前的正文。
+  const replacedIdsRef = useRef<Set<string>>(new Set());
   const { t } = useTranslation();
+
+  /** 归属 agent 的展示名（确认弹窗里给用户看，只有 id 太抽象）。 */
+  function agentLabel(agentId: string): string {
+    const found = props.agents?.find((a) => a.id === agentId);
+    return found ? `${found.name}（${agentId}）` : agentId;
+  }
+
+  function rememberReplaced(outcome: ImportOutcome): void {
+    if (outcome.status !== 'ok' && outcome.skillId) replacedIdsRef.current.add(outcome.skillId);
+  }
+
+  function importedInfo(): ImportedInfo {
+    return { replacedSkillIds: [...replacedIdsRef.current] };
+  }
+
+  /** 单条同名替换的确认弹窗。返回 false = 用户取消，调用方必须中止写入。 */
+  async function confirmReplace(
+    name: string,
+    agentId: string,
+    target: ReplaceTarget,
+    newCount: number,
+  ): Promise<boolean> {
+    return tea.confirm({
+      message: t('importSkill.replace.confirm', { name }),
+      description: t('importSkill.replace.desc', {
+        agent: agentLabel(agentId),
+        from: target.version,
+        to: target.version + 1,
+        oldCount: target.resourceCount,
+        newCount,
+      }),
+      okText: t('importSkill.replace.okText'),
+      cancelText: t('importSkill.replace.cancelText'),
+    });
+  }
 
   const directoryPlan = useMemo(
     () =>
@@ -621,16 +850,81 @@ export default function ImportSkillDialog(props: {
         // 结果按用户选择顺序输出（结果表与清单顺序一致，便于对照）。
         const resultByKey = new Map<string, ZipResult>();
 
+        // 第一轮：解析 payload + 探测同名（不写库）。先全量探测再统一确认，
+        // 避免"导到一半才弹确认"的割裂感，也让用户一次看清哪些包会被替换。
+        const prepared: Array<{
+          item: ZipItem;
+          payload?: PlanPayload;
+          existing?: ReplaceTarget | null;
+          /** 解析/探测失败 → 计入「失败」。 */
+          error?: string;
+          /** 结构性跳过（批内重名）→ 计入「跳过」。 */
+          skipReason?: string;
+        }> = [];
+        // 同一批次里两个包解析出同一个 skill 名：只导第一个，其余跳过。
+        // 若放任第二个去 create，它会撞 42201 然后被兜底逻辑改成"静默替换掉
+        // 刚刚导入的那一个"，用户完全看不到发生了什么。
+        const seenNames = new Set<string>();
         for (const item of zipItems) {
-          if (item.status === 'ready' && item.plan) {
+          if (item.status !== 'ready' || !item.plan) {
+            prepared.push({ item }); // 结构不合规 → 计入「跳过」，不带 error
+            continue;
+          }
+          try {
+            const payload = await buildPayload(item.plan);
+            if (seenNames.has(payload.name)) {
+              prepared.push({
+                item,
+                skipReason: t('importSkill.zip.error.duplicateInBatch', { name: payload.name }),
+              });
+              continue;
+            }
+            seenNames.add(payload.name);
+            const existing = await findSameName(payload.name, ctx);
+            prepared.push({ item, payload, existing });
+          } catch (e) {
+            prepared.push({ item, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+
+        // 同名包汇总成一次确认；取消则整批中止（一个都不写）。
+        const collisions = prepared.filter((p) => p.payload && p.existing);
+        if (collisions.length > 0) {
+          const ok = await tea.confirm({
+            message: t('importSkill.replace.zipConfirm', {
+              count: collisions.length,
+              names: collisions.map((c) => c.payload!.name).join('、'),
+            }),
+            description: collisions
+              .map((c) =>
+                `${c.payload!.name}：v${c.existing!.version} → v${c.existing!.version + 1}`
+                + `（${t('importSkill.replace.zipResourceDelta', {
+                  oldCount: c.existing!.resourceCount,
+                  newCount: c.payload!.resources.length,
+                })}）`,
+              )
+              .join('；'),
+            okText: t('importSkill.replace.okText'),
+            cancelText: t('importSkill.replace.cancelText'),
+          });
+          if (!ok) return;
+        }
+
+        // 第二轮：逐包落库（create 或替换），任一失败不影响其他。
+        for (const p of prepared) {
+          const { item } = p;
+          if (p.payload) {
             try {
-              const r = await importPlan(item.plan, ctx);
+              const outcome = await applyPayload(p.payload, ctx, p.existing ?? null);
+              rememberReplaced(outcome);
               resultByKey.set(item.key, {
                 key: item.key,
                 label: item.file.name,
-                status: 'ok',
-                name: r.name,
-                count: r.count,
+                status: outcome.status === 'ok' ? 'ok' : 'replaced',
+                name: outcome.name,
+                count: outcome.count,
+                version: outcome.version,
+                previousVersion: outcome.previousVersion,
               });
             } catch (e) {
               resultByKey.set(item.key, {
@@ -640,12 +934,19 @@ export default function ImportSkillDialog(props: {
                 reason: e instanceof Error ? e.message : String(e),
               });
             }
+          } else if (p.error) {
+            resultByKey.set(item.key, {
+              key: item.key,
+              label: item.file.name,
+              status: 'failed',
+              reason: p.error,
+            });
           } else {
             resultByKey.set(item.key, {
               key: item.key,
               label: item.file.name,
               status: 'skipped',
-              reason: item.error ?? t('importSkill.zip.error.noSkillMd'),
+              reason: p.skipReason ?? item.error ?? t('importSkill.zip.error.noSkillMd'),
             });
           }
         }
@@ -659,18 +960,42 @@ export default function ImportSkillDialog(props: {
         return;
       }
 
-      // ==== 目录导入：走 v3 create（资源随 create 一次落库，新建即 v1）====
+      // ==== 目录导入：create（新建即 v1）/ 同名则确认后替换 ====
       if (!directoryPlan.mainFile) {
         throw new Error(directoryPlan.warning ?? t('importSkill.error.noMainFile'));
       }
-      const imported = await importPlan(directoryPlan, {
+      const dirCtx: ImportCtx = {
         userId: props.userId,
         teamId: props.teamId,
         agentId: agentId || props.userId, // v3 要求 agent_id，固定模式用选中的，否则用 userId 兜底
-      });
+      };
+      const payload = await buildPayload(directoryPlan);
+      const existing = await findSameName(payload.name, dirCtx);
+      if (existing) {
+        // 取消 = 中止，不写入任何内容（用户可能只是想看看有没有同名）
+        const ok = await confirmReplace(payload.name, dirCtx.agentId, existing, payload.resources.length);
+        if (!ok) return;
+      }
+      const outcome = await applyPayload(payload, dirCtx, existing);
+      rememberReplaced(outcome);
 
-      setResult(t('importSkill.result.directory', { name: imported.name, count: imported.count }));
-      setTimeout(() => props.onImported(), 800);
+      if (outcome.status === 'ok') {
+        setResult(t('importSkill.result.directory', { name: outcome.name, count: outcome.count }));
+      } else if (outcome.status === 'replaced') {
+        setResult(
+          t('importSkill.result.replaced', {
+            name: outcome.name,
+            from: outcome.previousVersion,
+            to: outcome.version,
+            count: outcome.count,
+          }),
+        );
+      } else {
+        setResult(
+          t('importSkill.result.replacedUnchanged', { name: outcome.name, version: outcome.version }),
+        );
+      }
+      setTimeout(() => props.onImported(importedInfo()), 800);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -684,6 +1009,7 @@ export default function ImportSkillDialog(props: {
   const showAgentPicker = props.target === 'fixed' && !!props.agents;
 
   const zipOkCount = zipResults.filter((r) => r.status === 'ok').length;
+  const zipReplacedCount = zipResults.filter((r) => r.status === 'replaced').length;
   const zipSkippedCount = zipResults.filter((r) => r.status === 'skipped').length;
   const zipFailedCount = zipResults.filter((r) => r.status === 'failed').length;
 
@@ -898,6 +1224,7 @@ export default function ImportSkillDialog(props: {
               <div className="_memory-isd-zip-summary">
                 {t('importSkill.zip.summary', {
                   ok: zipOkCount,
+                  replaced: zipReplacedCount,
                   skipped: zipSkippedCount,
                   failed: zipFailedCount,
                 })}
@@ -911,6 +1238,18 @@ export default function ImportSkillDialog(props: {
                     {r.status === 'ok' && (
                       <div className="_memory-isd-zip-meta _memory-isd-ok-text">
                         ✓ {r.name} · {t('importSkill.zip.result.ok', { count: r.count ?? 0 })}
+                      </div>
+                    )}
+                    {r.status === 'replaced' && (
+                      <div className="_memory-isd-zip-meta _memory-isd-ok-text">
+                        ✓ {r.name} ·{' '}
+                        {r.version !== r.previousVersion
+                          ? t('importSkill.zip.result.replaced', {
+                              from: r.previousVersion,
+                              to: r.version,
+                              count: r.count ?? 0,
+                            })
+                          : t('importSkill.zip.result.replacedUnchanged', { version: r.version })}
                       </div>
                     )}
                     {r.status === 'skipped' && (
@@ -973,7 +1312,7 @@ export default function ImportSkillDialog(props: {
       <Modal.Footer>
         {mode === 'zip' && batchDone ? (
           <>
-            <Button type="primary" onClick={() => props.onImported()}>
+            <Button type="primary" onClick={() => props.onImported(importedInfo())}>
               {t('importSkill.zip.done')}
             </Button>
             <Button onClick={props.onClose}>{t('importSkill.cancel')}</Button>

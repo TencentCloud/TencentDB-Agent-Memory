@@ -95,12 +95,46 @@ export const createRequestSchema = z.object({
   metadata: z.record(z.string(), z.any()).optional(),
 }).superRefine(refineAgentNeedsTeam);
 
+/**
+ * `/v3/skill/update` —— 全量替换 SKILL.md（乐观锁）。
+ *
+ * `replace_resources` + `resources`（同名替换语义，默认关闭）：
+ *   导入同名 skill 时前端需要"确认后替换"。已有的 update 只能换 SKILL.md，
+ *   把资源集合整体替换要额外调 files/write + files/remove 两次，中间态还会
+ *   各升一版；`delete + create` 则会换掉 skill_id（= asset_id）并级联清 ACL /
+ *   agent 绑定，绝不可用。因此这里把"资源集合整体替换"下推到同一次 update：
+ *
+ *   - `replace_resources: true` → `resources` 即新版本的**资源全集**：
+ *     head.manifest 里不在该集合中的 path 被删除，集合内的新增/变更被写入。
+ *   - 两者必须成对出现（`resources` 可传 `[]` 表示清空资源），避免漏字段
+ *     导致资源被静默清空。
+ *   - 不传 `replace_resources` 时行为与历史完全一致，`resources` 也不接受
+ *     （增量写在 `/v3/skill/files/write`）。
+ */
 export const updateRequestSchema = z.object({
   ...idFieldsShape,
   skill_id: z.string().min(1),
   expected_version: z.number().int().min(1),
   content: z.string().min(1),
-}).superRefine(refineAgentNeedsTeam);
+  replace_resources: z.boolean().optional(),
+  resources: z.array(skillResourcePayloadSchema).max(100).optional(),
+}).superRefine((data, ctx) => {
+  refineAgentNeedsTeam(data, ctx);
+  if (data.replace_resources === true && data.resources === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["resources"],
+      message: "resources is required when replace_resources=true (pass [] to clear all resources)",
+    });
+  }
+  if (data.replace_resources !== true && data.resources !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["resources"],
+      message: "resources requires replace_resources=true; use /v3/skill/files/write for incremental upsert",
+    });
+  }
+});
 
 export const patchRequestSchema = z.object({
   ...idFieldsShape,

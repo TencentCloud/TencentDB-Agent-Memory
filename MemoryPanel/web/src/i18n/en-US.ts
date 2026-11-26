@@ -729,8 +729,11 @@ export const enUS = {
   'importSkill.zip.invalid': 'Structure validation failed',
   'importSkill.zip.submit': 'Import {{count}} Skills',
   'importSkill.zip.done': 'Done',
-  'importSkill.zip.summary': 'Finished: {{ok}} succeeded / {{skipped}} skipped / {{failed}} failed',
+  'importSkill.zip.summary':
+    'Finished: {{ok}} created / {{replaced}} replaced / {{skipped}} skipped / {{failed}} failed',
   'importSkill.zip.result.ok': '{{count}} resource files',
+  'importSkill.zip.result.replaced': 'Replaced v{{from}} → v{{to}} · {{count}} resource files',
+  'importSkill.zip.result.replacedUnchanged': 'No changes, still v{{version}}',
   'importSkill.zip.result.skipped': 'Skipped: {{reason}}',
   'importSkill.zip.result.failed': 'Import failed: {{reason}}',
   'importSkill.zip.error.notZip': 'Not a valid .zip archive',
@@ -751,6 +754,8 @@ export const enUS = {
     'Uncompressed size exceeds the {{size}} limit (bounded by the API request body size). Please trim resources and repack.',
   'importSkill.zip.error.tooManyEntries': 'Archive contains more than {{count}} files',
   'importSkill.zip.error.noReady': 'No archive passed structure validation. Please check that SKILL.md exists.',
+  'importSkill.zip.error.duplicateInBatch':
+    'Multiple packages in this batch resolve to the same skill "{{name}}". Only the first one is imported; the rest are skipped.',
   'importSkill.session.hintPrefix':
     'Paste a conversation with this agent. The system will automatically extract reusable skills. The conversation JSON must contain a ',
   'importSkill.session.hintSuffix': ' array.',
@@ -777,6 +782,20 @@ export const enUS = {
   'importSkill.result.session.accepted':
     'Submitted successfully. Extraction task accepted. Results expected in 1-3 minutes. Please refresh the skill list later.',
   'importSkill.result.directory': 'Import succeeded: {{name}} ({{count}} resource files)',
+  // Same-name replacement (shared by directory / zip import)
+  'importSkill.replace.confirm':
+    'A skill named "{{name}}" already exists. Continuing will replace its content and resource files',
+  'importSkill.replace.desc':
+    'Owning Agent: {{agent}}; version v{{from}} → v{{to}}; resource files {{oldCount}} → {{newCount}}. The skill_id and its permissions/bindings stay unchanged, and the previous version is still available in version history. No new version is created when both content and resources are unchanged.',
+  'importSkill.replace.okText': 'Replace',
+  'importSkill.replace.cancelText': 'Cancel',
+  'importSkill.replace.zipConfirm':
+    'This import will replace {{count}} same-name skill(s): {{names}}',
+  'importSkill.replace.zipResourceDelta': 'resources {{oldCount}} → {{newCount}}',
+  'importSkill.result.replaced':
+    'Replaced "{{name}}" (v{{from}} → v{{to}}, {{count}} resource files)',
+  'importSkill.result.replacedUnchanged':
+    'Content and resources are unchanged, "{{name}}" stays at v{{version}}',
   'importSkill.sample.user': 'Our PostgreSQL 14 primary database froze again today…',
   'importSkill.sample.assistant': 'Let me SSH to the primary node and check the slow query log…',
   'importSkill.sample.toolCall': 'Call bash to run: tail -100 /var/log/postgresql/slow.log',
@@ -1483,6 +1502,11 @@ export const enUS = {
   // failed while creating the account. Distinct from "invalid key": the key itself is
   // fine here; the server-side account creation failed.
   'error.USER_CREATE_FAILED': 'Failed to create an account with this user_key. Please try again later or contact the administrator.',
+  // Skill data plane: (team, owner_agent, name) hit the unique index (42201).
+  // The import flow probes for a same-name skill and replaces after confirmation,
+  // so reaching this message means an uncovered path.
+  'error.SKILL_NAME_DUPLICATE':
+    'This Agent already has a skill with the same name. Use Import (same-name imports are replaced after confirmation) or delete the old skill first.',
   'error.network': 'Network request failed. Please check if the service is available and try again.',
   'error.timeout': 'Request timed out. Please try again later.',
   'error.emptyResponse': 'The server returned an empty response. Please try again later.',
