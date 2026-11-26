@@ -16,7 +16,7 @@ import {
   type SessionTrendRow,
 } from '@/lib/api/analytics';
 import { getErrorMessage } from '@/lib/error-message';
-import { usePageActive } from '@/layouts/KeepAlivePages';
+import { usePageActive } from '@/lib/page-active';
 
 export type ChState = 'probing' | 'ready' | 'not-configured' | 'unreachable' | 'probe-failed';
 

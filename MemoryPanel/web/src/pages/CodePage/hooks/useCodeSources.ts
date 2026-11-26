@@ -18,7 +18,7 @@ import {
   reconcileTracked,
 } from '@/lib/codeGraphPolling';
 import { useTeams, useAgents } from '@/services';
-import { usePageActive } from '@/layouts/KeepAlivePages';
+import { usePageActive } from '@/lib/page-active';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
 import { isValidGitUrl, isSshGitUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';

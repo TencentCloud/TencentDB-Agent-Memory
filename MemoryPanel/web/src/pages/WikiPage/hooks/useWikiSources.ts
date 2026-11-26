@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type WikiDetail, type WikiPage, type SourceProviderMeta, type WikiCrawlOptions, type WikiSourceListResult } from '@/lib/api/knowledge-api';
 import { useTeams, useAgents } from '@/services';
-import { usePageActive } from '@/layouts/KeepAlivePages';
+import { usePageActive } from '@/lib/page-active';
 import { readAuth } from '@/components/LoginGate';
 import { tea, confirmThenRun } from '@/lib/tea-bridge';
 import {
