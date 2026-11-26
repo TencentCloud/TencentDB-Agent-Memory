@@ -916,6 +916,16 @@
   cursor: pointer;
 }
 
+/* 该整行是 div[role=button]，会命中全局 `[role='button']:not(:disabled):active { transform: scale(0.97) }`。
+   这里是一整行宽的容器而非小按钮：按下时缩放 3% 会把右侧的「更多操作(⋯)」和 chevron
+   一起向左带约 10px，mouseup 时指针已不在原元素上，浏览器判定 click 不成立，
+   点击 ⋯ 中间/右侧时菜单打不开（#1708）。故此处关闭整行的 active 缩放。
+   内部真实的 tea Button / chevron 仍是独立按钮，鼠标点按时各自保留原有 :active 缩放反馈。
+   选择器特异性必须高于全局规则（0,3,0），否则不生效：这里是 0,4,0。 */
+._memory-detail-atomic-head--btn[role='button']:not(:disabled):active {
+  transform: none;
+}
+
 ._memory-detail-atomic-head--btn:disabled {
   cursor: default;
 }
