@@ -150,7 +150,7 @@ function collectV3Missing(
 }
 
 /** /v3 强 isolation 覆盖的 L0–L3 子路径（去掉前缀后的 path）。 */
-const V3_ALLOWED_SUBPATHS = new Set<string>([
+export const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/conversation/add",
   "/conversation/query",
   "/conversation/search",
@@ -467,6 +467,9 @@ const routeTable: Record<string, RouteHandler> = {
   // ── end @deprecated v2 entity 路由 ──
   [`${V2_PREFIX}/pipeline/status`]: handlePipelineStatus,
 };
+
+/** Public v2/v3 routes owned by this router (excluding extra module routes). */
+export const V2_V3_PUBLIC_ROUTES = Object.freeze(Object.keys(routeTable));
 
 export async function handleV2Route(
   req: http.IncomingMessage,

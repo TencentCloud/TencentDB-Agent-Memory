@@ -11,6 +11,7 @@ import { handleIngest } from "./ingest-handler.js";
 import { handleMmdQuery } from "./mmd-handler.js";
 import { handleCompaction } from "./compact/compaction-handler.js";
 import { MmdQuerySchema } from "./schemas.js";
+import { GATEWAY_ROUTE_KEYS } from "../gateway/public-routes.js";
 
 export interface OffloadV2Deps {
   resolveStorage?: (instanceId: string) => Promise<StorageAdapter | undefined>;
@@ -54,7 +55,7 @@ export async function handleOffloadV2Route(
   const route = `${method} ${normalizedPath}`;
 
   switch (route) {
-    case "POST /v2/offload/ingest":
+    case GATEWAY_ROUTE_KEYS.offloadIngest:
       await handleIngest(req, res, auth, {
         storage,
         stateBackend: deps.stateBackend,
@@ -63,7 +64,7 @@ export async function handleOffloadV2Route(
       }, requestId, parseJsonBody, sendJson, successEnvelope, errorEnvelope);
       return true;
 
-    case "POST /v2/offload/query-mmd": {
+    case GATEWAY_ROUTE_KEYS.offloadQueryMmd: {
       const body = await parseJsonBody<{ session_id?: string; limit?: number }>(req);
       const parsed = MmdQuerySchema.safeParse(body);
       if (!parsed.success) {
@@ -74,7 +75,7 @@ export async function handleOffloadV2Route(
       return true;
     }
 
-    case "POST /v2/offload/compact":
+    case GATEWAY_ROUTE_KEYS.offloadCompact:
       await handleCompaction(req, res, auth, {
         storage,
         config,
