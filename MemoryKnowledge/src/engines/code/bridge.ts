@@ -86,10 +86,10 @@ export interface CodeGraphInstance {
 /**
  * 打开一个已存在的 codegraph 索引。
  */
-export async function openIndex(projectPath: string): Promise<CodeGraphInstance> {
+export async function openIndex(projectPath: string, options?: { readOnly?: boolean }): Promise<CodeGraphInstance> {
   log.info("openIndex", { projectPath });
   const { CodeGraph, ToolHandler } = await loadModules();
-  const cg = await CodeGraph.open(projectPath);
+  const cg = await CodeGraph.open(projectPath, options);
   const stats = cg.getStats();
   log.info("openIndex complete", { projectPath, stats });
   const handler = new ToolHandler(cg);

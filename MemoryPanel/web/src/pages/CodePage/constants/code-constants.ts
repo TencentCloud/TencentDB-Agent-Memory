@@ -13,7 +13,7 @@ export { formatShortTime } from '@/lib/asset-common';
  * 要求：http/https 协议、host 含点（真实域名）、路径不含空格且以 .git 结尾。
  * 用正则而非 URL 解析 —— new URL() 会接受路径中的空格（如 /a b/repo.git），
  * 且不强制 .git 后缀，均不符合 code graph 注册的严格约束。
- * SSH（git@...）不在此判定为 true —— SSH 由 isSshGitUrl / isValidGitUrl 判定。
+ * SSH（git@...）不在此判定为 true —— SSH 由 isSshGitUrl / isValidCodeSourceUrl 判定。
  */
 const GIT_HTTP_URL_RE = /^https?:\/\/[^\s/]+\.[^\s/]+\/[^\s]+\.git$/i;
 export function isValidGitHttpUrl(raw: string): boolean {
@@ -36,9 +36,23 @@ export function isSshGitUrl(raw: string): boolean {
   return GIT_SSH_SCP_RE.test(v) || GIT_SSH_URL_RE.test(v);
 }
 
-/** 注册表单的统一地址校验：HTTP(S) 或 SSH 任一合法即通过。 */
-export function isValidGitUrl(raw: string): boolean {
-  return isValidGitHttpUrl(raw) || isSshGitUrl(raw);
+export function isRepoManifestUrl(raw: string): boolean {
+  return raw.trim().startsWith('repo+https://');
+}
+
+export function isValidCodeSourceUrl(raw: string): boolean {
+  if (!isRepoManifestUrl(raw)) return isValidGitHttpUrl(raw) || isSshGitUrl(raw);
+
+  const value = raw.trim();
+  if (/\s/.test(value)) return false;
+  try {
+    const url = new URL(value.slice('repo+'.length));
+    const manifest = decodeURIComponent(url.hash.slice(1));
+    return url.pathname !== '/' && !url.username && !url.password && !url.search &&
+      (!manifest || manifest.endsWith('.xml'));
+  } catch {
+    return false;
+  }
 }
 
 /** SSH 来源在「来源」下拉里的 id（与 KS 的 SSH_PROVIDER_ID 保持一致）。 */
@@ -56,14 +70,17 @@ export const SSH_SOURCE_ID = 'ssh';
  * 解析失败时返回原始 URL（保底）。
  */
 export function formatRepoName(repoName: string, repoUrl: string): string {
-  if (repoName && !repoName.startsWith('http')) return repoName;
+  if (repoName && !repoName.startsWith('http') && !isRepoManifestUrl(repoName)) return repoName;
   const url = repoName || repoUrl;
   if (!url) return '';
   try {
     const parsed = new URL(url);
     const segments = parsed.pathname.replace(/\.git$/, '').split('/').filter(Boolean);
-    if (segments.length >= 2) return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
-    if (segments.length === 1) return segments[0];
+    const name = segments.slice(-2).join('/');
+    if (name) {
+      const manifest = isRepoManifestUrl(url) ? decodeURIComponent(parsed.hash.slice(1)) || 'default.xml' : '';
+      return manifest ? `${name} · ${manifest}` : name;
+    }
   } catch {
     // fallback
   }

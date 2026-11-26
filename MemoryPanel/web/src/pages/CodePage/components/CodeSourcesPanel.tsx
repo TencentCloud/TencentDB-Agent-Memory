@@ -11,7 +11,7 @@ import { isTerminalFailure } from '@/lib/codeGraphPolling';
 import { tea } from '@/lib/tea-bridge';
 import AllocateAssetDialog from '@/components/asset/AllocateAssetDialog';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
-import { formatRepoName, formatShortTime, isSshGitUrl, isValidGitUrl, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type ViewMode } from '../constants/code-constants';
+import { formatRepoName, formatShortTime, isSshGitUrl, isRepoManifestUrl, isValidCodeSourceUrl, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type ViewMode } from '../constants/code-constants';
 import { CodeOwnerLabel, statusLabel } from './code-ui';
 import { useCodeSources } from '../hooks/useCodeSources';
 import { CodeDetailView } from './code-detail-view';
@@ -461,13 +461,13 @@ export default function CodeSourcesPanel() {
       {showRegister &&
         (() => {
           const trimmedRepo = formRepo.trim();
-          // SSH 与 HTTPS 都算合法地址（SSH 走「取公钥 → 配置 → 建图」两段式）。
           const isSsh = isSshGitUrl(trimmedRepo);
-          const validUrl = isValidGitUrl(trimmedRepo);
+          const isManifest = isRepoManifestUrl(trimmedRepo);
+          const validUrl = isValidCodeSourceUrl(trimmedRepo);
           // 已输入内容但又不是合法地址 → 提示格式错误。
           const showUrlError = !!trimmedRepo && !validUrl;
           // SSH 地址下来源固定为 SSH，不渲染令牌输入框（ssh provider 的 form_fields 为空）。
-          const effectiveSourceType = isSsh ? SSH_SOURCE_ID : formSourceType;
+          const effectiveSourceType = isManifest ? '' : isSsh ? SSH_SOURCE_ID : formSourceType;
           return (
             <Modal
               visible
@@ -507,7 +507,7 @@ export default function CodeSourcesPanel() {
                       <Alert type="error">{t('code.register.invalidUrl')}</Alert>
                     </Form.Item>
                   )}
-                  <Form.Item label={t('code.register.branch')} required>
+                  <Form.Item label={t(isManifest ? 'code.register.manifestRevision' : 'code.register.branch')} required>
                     <Input
                       size="full"
                       value={formBranch}
@@ -517,7 +517,7 @@ export default function CodeSourcesPanel() {
                   </Form.Item>
 
                   {/* 外部来源：选了才需要令牌；来源清单来自 KS，为空则不显示该行 */}
-                  {sourceProviders.length > 0 && (
+                  {!isManifest && sourceProviders.length > 0 && (
                     <Form.Item
                       label={t('code.register.source')}
                       extra={isSsh ? t('code.register.sourceSshExtra') : t('code.register.sourceExtra')}

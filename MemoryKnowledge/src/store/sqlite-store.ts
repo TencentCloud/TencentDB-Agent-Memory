@@ -564,6 +564,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
     return this.db
       .select({
         code_graph_id: knowledgeCodeGraph.codeGraphId,
+        repo_url: knowledgeCodeGraph.repoUrl,
         service_id: knowledgeCodeGraph.serviceId,
         team_id: knowledgeCodeGraph.teamId,
       })

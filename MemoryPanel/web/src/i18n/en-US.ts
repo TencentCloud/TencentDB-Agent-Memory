@@ -508,18 +508,16 @@ export const enUS = {
   'code.table.selected': 'Selected',
   'code.register.caption': 'Register Repository',
   'code.register.gitUrl': 'Git URL',
-  'code.register.gitUrlExtra':
-    'After registration, it will automatically clone and build a code index.',
-  // Git URL placeholder switches by source (SSH source shows git@ form).
+  'code.register.gitUrlExtra': 'Public multi-repo manifests use repo+https://host/team/manifests#product.xml. Omit the fragment to use default.xml.',
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
   'code.register.gitUrlPlaceholderSsh': 'git@github.com:namespace/repo.git or ssh://git@host:2222/namespace/repo.git',
+  'code.register.manifestRevision': 'Manifest revision',
   'code.register.branch': 'Branch',
   'code.register.sshHint':
     'Detected an SSH repository. Clicking Register will first generate an SSH public key for you; add it to your git platform before continuing.',
   'code.register.urlError':
     'Please enter a valid Git repository URL (HTTPS or SSH) ending with .git. No spaces allowed.',
-  'code.register.invalidUrl':
-    'Please enter a valid Git repository URL: HTTPS like https://gitlab.example.com/namespace/repo.git, or SSH like git@github.com:namespace/repo.git / ssh://git@host:2222/namespace/repo.git.',
+  'code.register.invalidUrl': 'Enter a Git URL ending in .git or a repo+https manifest URL.',
   'code.register.submitting': 'Registering…',
   'code.register.submit': 'Register',
   'code.register.source': 'Source',

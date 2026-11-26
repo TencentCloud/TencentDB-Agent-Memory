@@ -18,6 +18,7 @@
  */
 
 import { join } from "node:path";
+import { isRepoManifestSource } from "../source-fetcher/repo-manifest.js";
 import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 
 import type {
@@ -39,6 +40,7 @@ export interface CodeGraphBuildContext {
   teamId: string;
   repoUrl: string;
   branch: string;
+  previousCommitHash?: string;
   /** 该资产的本地工作目录（checkout + 索引落此）。 */
   dir: string;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
@@ -87,7 +89,7 @@ export interface BuildOptions {
  * 单独成成员而不是复用 not_found —— 两者的处置完全不同：
  * not_found 是资源不存在（404），empty_dir 是资源存在但没内容可建（400）。
  */
-export type BuildResult = SyncResult | { kind: "empty_dir" };
+export type BuildResult = SyncResult | { kind: "empty_dir" } | { kind: "manifest_source" };
 
 export interface CodeGraphServiceLogger {
   info?: (msg: string) => void;
@@ -278,6 +280,7 @@ export class CodeGraphService {
     if (row.status === "pending" || row.status === "processing") {
       return { kind: "busy", status: row.status, step: row.internal_status };
     }
+    if (isRepoManifestSource(row.repo_url)) return { kind: "manifest_source" };
     // 目录校验前置：不存在/为空直接返回，避免入队后必然 failed 的难排查结果。
     if (!this.isNonEmptyDir(this.dirFor(serviceId, teamId, codeGraphId))) {
       return { kind: "empty_dir" };
@@ -402,28 +405,12 @@ export class CodeGraphService {
   }
 
   private enqueueBuild(row: CodeGraphRow, opts?: BuildOptions): void {
-    this.queue.enqueue(row.code_graph_id, () =>
-      this.runBuild(
-        row.service_id,
-        row.code_graph_id,
-        row.team_id,
-        row.repo_url,
-        row.branch,
-        row.owner_user_id ?? row.user_id ?? undefined,
-        opts,
-      ),
-    );
+    this.queue.enqueue(row.code_graph_id, () => this.runBuild(row, opts));
   }
 
-  private async runBuild(
-    serviceId: string,
-    codeGraphId: string,
-    teamId: string,
-    repoUrl: string,
-    branch: string,
-    ownerUserId?: string,
-    opts?: BuildOptions,
-  ): Promise<void> {
+  private async runBuild(row: CodeGraphRow, opts?: BuildOptions): Promise<void> {
+    const { service_id: serviceId, code_graph_id: codeGraphId, team_id: teamId, repo_url: repoUrl, branch } = row;
+    const ownerUserId = row.owner_user_id ?? row.user_id ?? undefined;
     // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
     if (this.isDeleted(serviceId, codeGraphId)) {
       this.finishCancelled(serviceId, teamId, codeGraphId);
@@ -445,6 +432,7 @@ export class CodeGraphService {
         teamId,
         repoUrl,
         branch,
+        previousCommitHash: row.commit_hash ?? undefined,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),

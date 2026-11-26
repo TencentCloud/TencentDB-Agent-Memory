@@ -17,7 +17,7 @@ import { Hono } from "hono";
 
 import type { CodeGraphService } from "../store/index.js";
 import type { SyncStatus } from "../store/index.js";
-import { executeTool as executeCodeTool } from "../engines/code/index.js";
+import { queryCodeGraph } from "./code-graph-query.js";
 import { toCodeGraphToolName, CODEGRAPH_QUERY_TOOL_NAMES } from "./tools.js";
 import {
   extractIdFields,
@@ -28,6 +28,7 @@ import {
   type BatchDeleteResult,
 } from "../api-helpers.js";
 import type { CodeGraphInstancePool } from "../module.js";
+import { isRepoManifestSource, parseRepoManifestSource, validateManifestRevision } from "../source-fetcher/repo-manifest.js";
 import { SSH_PROVIDER_ID } from "../code-source/providers/ssh.js";
 
 export interface CodeGraphRouteDeps {
@@ -186,8 +187,8 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const idFields = extractIdFields(c.req.header("x-tdai-service-id"), body);
     if (!idFields) return c.json(wrapError(400, "x-tdai-service-id header and team_id are required"), 400);
 
-    const repoUrl = body.repo_url;
-    if (typeof repoUrl !== "string" || !repoUrl) return c.json(wrapError(400, "repo_url is required"), 400);
+    if (typeof body.repo_url !== "string" || !body.repo_url) return c.json(wrapError(400, "repo_url is required"), 400);
+    let repoUrl = body.repo_url;
 
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
@@ -200,6 +201,17 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const providerId = typeof body.provider_id === "string" ? body.provider_id : undefined;
     const secret = typeof body.secret === "string" ? body.secret : undefined;
     const username = typeof body.username === "string" ? body.username : undefined;
+    if (isRepoManifestSource(repoUrl)) {
+      if (providerId || secret || username) {
+        return c.json(wrapError(400, "Repo manifest sources require public HTTPS repositories"), 400);
+      }
+      try {
+        repoUrl = parseRepoManifestSource(repoUrl).sourceUrl;
+        validateManifestRevision(branch);
+      } catch (error) {
+        return c.json(wrapError(400, error instanceof Error ? error.message : "Invalid repo manifest source"), 400);
+      }
+    }
     if (providerId && providerId !== SSH_PROVIDER_ID && !secret) {
       return c.json(wrapError(400, "secret is required when provider_id is set"), 400);
     }
@@ -324,6 +336,9 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       // 并发拒绝：与 /sync 同口径的 409（调用方用 code 判断，不 parse message）。
       return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
     }
+    if (result.kind === "manifest_source") {
+      return c.json(wrapError(400, "Use /sync to rebuild a repo manifest source"), 400);
+    }
     if (result.kind === "empty_dir") {
       // 目录缺失或为空：入队前就拒绝，避免产生一条必然 failed 的记录。
       return c.json(
@@ -383,17 +398,8 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       const row = cgService.getById(serviceId, cgId);
       if (!row) return c.json(wrapError(404, "code graph not found"), 404);
 
-      if (row.status !== "ready") {
+      if (row.status !== "ready" && !isRepoManifestSource(row.repo_url)) {
         return c.json(wrapOk({ text: "", isError: false }));
-      }
-
-      let instance = instancePool.get(cgId);
-      if (!instance && instancePool.loadIfMissing) {
-        const dir = cgService.dirFor(serviceId, row.team_id, cgId);
-        instance = await instancePool.loadIfMissing(cgId, dir);
-      }
-      if (!instance) {
-        return c.json(wrapError(503, "code graph instance not loaded"), 503);
       }
 
       const built = buildToolParams(action, body);
@@ -405,7 +411,9 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       if (!toolName) {
         return c.json(wrapError(403, `unknown tool: ${action}`), 403);
       }
-      const result = await executeCodeTool(instance, toolName, built.params);
+      const dir = cgService.dirFor(serviceId, row.team_id, cgId);
+      const result = await queryCodeGraph(row, dir, instancePool, toolName, built.params);
+      if (!result) return c.json(wrapError(503, "code graph instance not loaded"), 503);
       return c.json(wrapOk(result), result.isError ? 500 : 200);
     });
   }

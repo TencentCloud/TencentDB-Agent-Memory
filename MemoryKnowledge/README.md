@@ -86,6 +86,29 @@ KNOWLEDGE_SERVICE_URL=http://127.0.0.1:8421
 `LLM_MODE=proxy`（默认）：Wiki 用 Panel 按 `x-tdai-service-id` 推送的 `llm_binding`，本地不必起 Proxy。  
 `LLM_MODE=custom`：在 `.env` 设 `LLM_API_KEY` / `LLM_BASE_URL`（及可选 `LLM_PROTOCOL=anthropic`）。
 
+## 注册 Google repo 多仓代码图谱
+
+在 Panel 的代码资产注册表单中输入 `repo+https://git.example.com/team/manifests#product.xml`，
+版本栏填写 manifest 仓的分支、标签或提交。地址无需以 `.git` 结尾，省略
+`#product.xml` 时使用 `default.xml`。也可以向 `POST /v3/code-graph/create` 提交：
+
+```json
+{
+  "team_id": "team-example",
+  "repo_url": "repo+https://git.example.com/team/manifests#product.xml",
+  "branch": "main"
+}
+```
+
+需要 Git 2.37 或更新版本。Manifest 仓与子仓均使用公开 HTTPS 地址。服务读取固定版本的
+manifest，解析项目路径及其分支、标签或提交，把所有子仓建成一张图，查询路径以多仓工作区
+为根。刷新调用 `/v3/code-graph/sync`。如果某个子仓拉取失败，状态记录失败原因，
+查询继续使用上次成功发布的图谱，直到下一次刷新成功。
+
+当前覆盖常用的 `remote`、`default`、`project`、`include`、`remove-project`、
+`extend-project`、`copyfile` 和 `linkfile`。子仓工作区路径必须互不重叠。
+`repo-hooks`、`submanifest`、`manifest-server` 和 `superproject` 会返回不支持的错误。
+
 ## 常用命令
 
 ```bash
