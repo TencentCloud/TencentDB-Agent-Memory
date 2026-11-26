@@ -65,6 +65,11 @@ export default function (pi: ExtensionAPI) {
         name: model,
         input: ["text", "image"],
         reasoning: true,
+        // #1422: the baseUrl points at MemoryProxy, not the real upstream, so Pi
+        // cannot probe whether the upstream accepts role:"developer". Strict
+        // OpenAI-compatible upstreams (e.g. DeepSeek) reject it with HTTP 400.
+        // Pin the system prompt to the classic "system" role.
+        compat: { supportsDeveloperRole: false },
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 524288,
         maxTokens: 16384,
