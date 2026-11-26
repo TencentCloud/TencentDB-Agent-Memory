@@ -1,6 +1,6 @@
 # Agents
 
-Memory Proxy 目前适配了 7 类 AI Agent 客户端，各自协议、会话初始化方式、注入逻辑差异显著。
+Memory Proxy 目前适配了 8 类 AI Agent 客户端，各自协议、会话初始化方式、注入逻辑差异显著。
 
 > 🛠 **想接入一个新的 AI Agent 客户端（未在下表中）？**
 > 阅读 [**新客户端二开适配指南 →**](./adapter-agent-development.md)
@@ -87,6 +87,7 @@ cp -r agents ~/agents
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
 | [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
 | [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
+| [Pi](./pi/) | OpenAI Chat Completions | 交互式 Form（TUI 菜单） | TUI picker (`↑↓`+`Enter`) | ❌ (无上限) | ❌ | ❌ |
 
 ---
 
@@ -112,6 +113,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | dsh | [asset-import.md](./dsh/asset-import.md) |
 | Hermes | [asset-import.md](./hermes/asset-import.md) |
 | OpenClaw | [asset-import.md](./openclaw/asset-import.md) |
+| Pi | [asset-import.md](./pi/asset-import.md) |
 
 ---
 
