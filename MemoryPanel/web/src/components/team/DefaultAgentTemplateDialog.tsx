@@ -9,7 +9,7 @@
  * 已配置时打开弹窗会用 get-default-template 的返回值预填。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Button, Input, Modal, Tag } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { BooksIcon, CodeIcon, ToolsIcon } from 'tea-icons-react';
@@ -62,17 +62,16 @@ export default function DefaultAgentTemplateDialog({
   const [codeGraphs, setCodeGraphs] = useState<string[]>(initial?.asset_ids?.code_graphs ?? []);
   const [llmWikis, setLlmWikis] = useState<string[]>(initial?.asset_ids?.wikis ?? []);
   const [busy, setBusy] = useState(false);
-  const mountedRef = useRef(true);
+  const mountedRef = useRef(false);
   const activeTeamIdRef = useRef(team.team_id);
 
-  activeTeamIdRef.current = team.team_id;
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     mountedRef.current = true;
+    activeTeamIdRef.current = team.team_id;
     return () => {
       mountedRef.current = false;
     };
-  }, []);
+  }, [team.team_id]);
 
   // 团队公共资产（skill / code_graph / wiki，后端 bootstrap 已按 visibility=team 过滤）
   const assets = useTeamAssets(team.team_id);
@@ -102,12 +101,17 @@ export default function DefaultAgentTemplateDialog({
         asset_ids: { skills, code_graphs: codeGraphs, wikis: llmWikis },
       };
       await agentsApi.setDefaultTemplate(submitTeamId, template);
-      if (!mountedRef.current || activeTeamIdRef.current !== submitTeamId) return;
+      if (!mountedRef.current) return;
+      if (activeTeamIdRef.current !== submitTeamId) {
+        setBusy(false);
+        return;
+      }
       onSaved(template);
     } catch (err) {
-      if (!mountedRef.current || activeTeamIdRef.current !== submitTeamId) return;
-      tea.notify.error(getErrorMessage(err));
+      if (!mountedRef.current) return;
       setBusy(false);
+      if (activeTeamIdRef.current !== submitTeamId) return;
+      tea.notify.error(getErrorMessage(err));
     }
   }
 
@@ -116,8 +120,11 @@ export default function DefaultAgentTemplateDialog({
       visible
       caption={initial ? t('defaultAgent.edit.caption') : t('defaultAgent.create.caption')}
       size="l"
-      onClose={onClose}
+      onClose={() => {
+        if (!busy) onClose();
+      }}
       disableEscape={busy}
+      disableCloseIcon={busy}
     >
       <Modal.Body>
         <div className="_memory-form-stack">

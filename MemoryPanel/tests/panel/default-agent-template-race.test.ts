@@ -1,5 +1,4 @@
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +16,11 @@ interface TemplateConfig {
   visibility?: string;
   metadata_json?: string;
   asset_ids?: { skills?: string[]; code_graphs?: string[]; wikis?: string[] };
+}
+
+interface TeamSummary {
+  team_id: string;
+  name: string;
 }
 
 interface Deferred<T> {
@@ -40,6 +44,10 @@ type ReactModule = {
   act: (cb: () => void | Promise<void>) => Promise<void>;
 };
 
+type ReactDomModule = {
+  flushSync: (cb: () => void) => void;
+};
+
 type ReactDomClientModule = {
   createRoot: (container: Element) => {
     render: (el: unknown) => void;
@@ -47,35 +55,61 @@ type ReactDomClientModule = {
   };
 };
 
-type JsdomConstructor = new (html: string, opts?: Record<string, unknown>) => {
-  window: Window & typeof globalThis;
+type JsdomInstance = {
+  window: Window & typeof globalThis & { close: () => void };
 };
+
+type JsdomConstructor = new (html: string, opts?: Record<string, unknown>) => JsdomInstance;
 
 type SectionProps = { teamId: string; teamName: string };
 type DialogProps = {
-  team: { team_id: string; name: string };
+  team: TeamSummary;
   initial: TemplateConfig | null;
   onClose: () => void;
   onSaved: (tpl: TemplateConfig) => void;
 };
+type PanelProps = {
+  currentUser: string;
+  instanceId: string;
+  isAdmin: boolean;
+  section?: 'members' | 'agents' | 'all';
+};
 
 let React: ReactModule;
+let ReactDOM: ReactDomModule;
 let ReactDOMClient: ReactDomClientModule;
 let JSDOM: JsdomConstructor;
 let DefaultAgentTemplateSection: (props: SectionProps) => unknown;
 let DefaultAgentTemplateDialog: (props: DialogProps) => unknown;
+let TeamManagementPanel: (props: PanelProps) => unknown;
 
 const getDefaultTemplateMock = vi.fn<(teamId: string) => Promise<TemplateConfig>>();
 const setDefaultTemplateMock = vi.fn<(teamId: string, tpl: TemplateConfig) => Promise<{ ok: boolean }>>();
 const notifyErrorMock = vi.fn<(msg: unknown) => void>();
 const notifySuccessMock = vi.fn<(msg: string) => void>();
 
-// 最小测试替身：将外部 UI 库与 API 绑定到可观测 spy，保留被测 TSX 组件真实逻辑
+let currentActiveTeam: TeamSummary | null = null;
+let currentTeamsLoading = false;
+
+const GLOBAL_KEYS = [
+  'window',
+  'document',
+  'HTMLElement',
+  'HTMLButtonElement',
+  'HTMLInputElement',
+  'Node',
+  'Event',
+  'MouseEvent',
+  'IS_REACT_ACT_ENVIRONMENT',
+] as const;
+
 function loadRealComponents() {
-  const esbuild = webRequire('esbuild') as {
+  const viteRequire = createRequire(webRequire.resolve('vite'));
+  const esbuild = viteRequire('esbuild') as {
     buildSync: (opts: Record<string, unknown>) => { outputFiles: Array<{ text: string }> };
   };
   React = webRequire('react') as ReactModule;
+  ReactDOM = webRequire('react-dom') as ReactDomModule;
   ReactDOMClient = webRequire('react-dom/client') as ReactDomClientModule;
   const jsxRuntime = webRequire('react/jsx-runtime');
   JSDOM = (webRequire('jsdom') as { JSDOM: JsdomConstructor }).JSDOM;
@@ -88,12 +122,16 @@ function loadRealComponents() {
     title?: string;
     type?: string;
   }) {
+    let loadingAttr = 'false';
+    if (props.loading) {
+      loadingAttr = 'true';
+    }
     return React.createElement(
       'button',
       {
         type: 'button',
         disabled: Boolean(props.disabled),
-        'data-loading': props.loading ? 'true' : 'false',
+        'data-loading': loadingAttr,
         title: props.title,
         onClick: props.onClick,
       },
@@ -124,12 +162,35 @@ function loadRealComponents() {
     });
   };
 
-  function ModalStub(props: { caption?: string; visible?: boolean; children?: unknown }) {
+  function ModalStub(props: {
+    caption?: string;
+    visible?: boolean;
+    disableCloseIcon?: boolean;
+    onClose?: () => void;
+    children?: unknown;
+  }) {
     if (!props.visible) return null;
+    let closeBtn: unknown = null;
+    if (!props.disableCloseIcon) {
+      closeBtn = React.createElement(
+        'button',
+        {
+          type: 'button',
+          'aria-label': 'close',
+          onClick: props.onClose,
+        },
+        '×',
+      );
+    }
     return React.createElement(
       'div',
       { role: 'dialog', 'data-testid': 'default-agent-dialog' },
-      React.createElement('div', { className: 'dialog-caption' }, props.caption),
+      React.createElement(
+        'div',
+        { className: 'dialog-header' },
+        React.createElement('div', { className: 'dialog-caption' }, props.caption),
+        closeBtn,
+      ),
       props.children,
     );
   }
@@ -166,16 +227,32 @@ function loadRealComponents() {
       CodeIcon: IconStub,
       ToolsIcon: IconStub,
       ChevronRightIcon: IconStub,
+      UsergroupIcon: IconStub,
     },
     '@/lib/teamApi': {
+      teamsApi: { create: vi.fn() },
+      skillApi: { forkToAgent: vi.fn() },
       agentsApi: {
+        create: vi.fn(),
+        update: vi.fn(),
+        delete: vi.fn(),
         getDefaultTemplate: (teamId: string) => getDefaultTemplateMock(teamId),
         setDefaultTemplate: (teamId: string, tpl: TemplateConfig) =>
           setDefaultTemplateMock(teamId, tpl),
       },
     },
+    '@/lib/api/knowledge-api': {
+      knowledgeApi: {
+        code: { allocate: vi.fn() },
+        wiki: { allocate: vi.fn() },
+      },
+    },
+    '@/services/user-profile-store': {
+      useDisplayNameResolver: () => (id: string) => id,
+    },
     '@/lib/tea-bridge': {
       tea: {
+        confirm: vi.fn(),
         notify: {
           error: (msg: unknown) => notifyErrorMock(msg),
           success: (msg: string) => notifySuccessMock(msg),
@@ -183,13 +260,38 @@ function loadRealComponents() {
       },
     },
     '@/lib/error-message': {
-      getErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+      getErrorMessage: (err: unknown) => {
+        if (err instanceof Error) return err.message;
+        return String(err);
+      },
     },
     '@/services': {
+      useTeams: () => {
+        let activeTeamId: string | null = null;
+        if (currentActiveTeam) {
+          activeTeamId = currentActiveTeam.team_id;
+        }
+        return {
+          activeTeamId,
+          activeTeam: currentActiveTeam,
+          loading: currentTeamsLoading,
+        };
+      },
+      useAgents: () => ({ agents: [], loading: false }),
+      isTeamAdmin: () => true,
+      canManageAsset: () => true,
+      invalidateBackendCache: vi.fn(),
       writeAgentUiMeta: (_base: unknown, ui: Record<string, unknown>) => JSON.stringify({ ui }),
+    },
+    './team-management-panel.css': {},
+    './types': {
+      MAX_IMPORTED_CHAT_MEMORIES: 5,
+      importedChatMemoryIds: () => [],
     },
     './useAgentAssets': {
       useTeamAssets: () => ({ loading: false, skills: [], codeGraphs: [], wikis: [], chatMemories: [] }),
+      useAgentMountedCounts: () => ({ counts: {}, countsLoading: false }),
+      syncChatMemoryBindings: vi.fn(),
     },
     './shared': {
       LightField: (props: { label: string; children?: unknown }) =>
@@ -199,11 +301,26 @@ function loadRealComponents() {
       AssetCheckList: () => null,
       selectableAssetKeys: () => [],
     },
+    './AgentGrid': () => null,
+    './TeamHeaderCard': {
+      TeamHeaderCard: (props: { team: TeamSummary }) =>
+        React.createElement('div', { 'data-testid': 'team-header' }, props.team.name),
+    },
+    './MemberSection': {
+      MemberSection: () => null,
+      AddMemberDialog: () => null,
+      CreatedUserKeyModal: () => null,
+    },
+    './CreateTeamDialog': () => null,
+    './CreateAgentDialog': () => null,
+    './AgentEditDialog': () => null,
+    './SessionDefaultSection': () => null,
   };
 
   const entrySource = `
     export { default as DefaultAgentTemplateSection } from './components/team/DefaultAgentTemplateSection.tsx';
     export { default as DefaultAgentTemplateDialog } from './components/team/DefaultAgentTemplateDialog.tsx';
+    export { default as TeamManagementPanel } from './components/team/TeamManagementPanel.tsx';
   `;
 
   const built = esbuild.buildSync({
@@ -231,19 +348,28 @@ function loadRealComponents() {
 
   DefaultAgentTemplateSection = moduleObj.exports.DefaultAgentTemplateSection as typeof DefaultAgentTemplateSection;
   DefaultAgentTemplateDialog = moduleObj.exports.DefaultAgentTemplateDialog as typeof DefaultAgentTemplateDialog;
+  TeamManagementPanel = moduleObj.exports.TeamManagementPanel as typeof TeamManagementPanel;
 }
 
 describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', () => {
-  let dom: { window: Window & typeof globalThis };
+  let dom: JsdomInstance;
   let container: HTMLDivElement;
   let root: ReturnType<ReactDomClientModule['createRoot']>;
+  let savedGlobals: Map<string, PropertyDescriptor | undefined>;
 
   beforeAll(() => {
     loadRealComponents();
   });
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    currentActiveTeam = null;
+    currentTeamsLoading = false;
+    savedGlobals = new Map();
+    for (const key of GLOBAL_KEYS) {
+      savedGlobals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    }
+
     dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>');
     const win = dom.window;
     Object.assign(globalThis, {
@@ -266,6 +392,15 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
       root.unmount();
     });
     container.remove();
+    dom.window.close();
+    for (const key of GLOBAL_KEYS) {
+      const descriptor = savedGlobals.get(key);
+      if (descriptor) {
+        Object.defineProperty(globalThis, key, descriptor);
+      } else {
+        delete (globalThis as Record<string, unknown>)[key];
+      }
+    }
   });
 
   async function render(element: unknown) {
@@ -281,6 +416,12 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     });
   }
 
+  async function drainMicrotasksRaw() {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   it('1) A->B out-of-order resolve: Team B stays displayed when stale Team A resolves later', async () => {
     const reqA = createDeferred<TemplateConfig>();
     const reqB = createDeferred<TemplateConfig>();
@@ -294,10 +435,8 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     const actionBtnWhileA = container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement;
     expect(actionBtnWhileA.disabled).toBe(true);
 
-    // Switch to Team B before Team A resolves (reusing same component instance)
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-b', teamName: 'Team B' }));
 
-    // Team B resolves first
     await React.act(async () => {
       reqB.resolve({ name: 'Team B Default', description: 'Desc for Team B' });
       await reqB.promise;
@@ -308,7 +447,6 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     const actionBtnAfterB = container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement;
     expect(actionBtnAfterB.disabled).toBe(false);
 
-    // Stale Team A resolves later — must be silently ignored
     await React.act(async () => {
       reqA.resolve({ name: 'Team A Default', description: 'Stale Desc A' });
       await reqA.promise;
@@ -324,7 +462,10 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
   it('2) Stale Team A rejection after Team B resolves keeps Team B intact with no error toast', async () => {
     const reqA = createDeferred<TemplateConfig>();
     const reqB = createDeferred<TemplateConfig>();
-    getDefaultTemplateMock.mockImplementation((teamId) => (teamId === 'team-a' ? reqA.promise : reqB.promise));
+    getDefaultTemplateMock.mockImplementation((teamId) => {
+      if (teamId === 'team-a') return reqA.promise;
+      return reqB.promise;
+    });
 
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-a', teamName: 'Team A' }));
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-b', teamName: 'Team B' }));
@@ -349,7 +490,10 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
   it('3) Switching teams closes open dialog, clears old template, and disables edit while loading', async () => {
     const reqA = createDeferred<TemplateConfig>();
     const reqB = createDeferred<TemplateConfig>();
-    getDefaultTemplateMock.mockImplementation((teamId) => (teamId === 'team-a' ? reqA.promise : reqB.promise));
+    getDefaultTemplateMock.mockImplementation((teamId) => {
+      if (teamId === 'team-a') return reqA.promise;
+      return reqB.promise;
+    });
 
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-a', teamName: 'Team A' }));
     await React.act(async () => {
@@ -357,7 +501,6 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
       await reqA.promise;
     });
 
-    // Open edit dialog for Team A
     const editBtnA = container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement;
     expect(editBtnA.disabled).toBe(false);
     await React.act(async () => {
@@ -365,7 +508,6 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     });
     expect(container.querySelector('[data-testid="default-agent-dialog"]')).not.toBeNull();
 
-    // Switch to Team B: dialog must close, old template must be cleared, button must be disabled during loading
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-b', teamName: 'Team B' }));
 
     expect(container.querySelector('[data-testid="default-agent-dialog"]')).toBeNull();
@@ -376,13 +518,11 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     const btnDuringLoadingB = container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement;
     expect(btnDuringLoadingB.disabled).toBe(true);
 
-    // Attempting to click while loading must not open the dialog
     await React.act(async () => {
       btnDuringLoadingB.click();
     });
     expect(container.querySelector('[data-testid="default-agent-dialog"]')).toBeNull();
 
-    // Finish Team B loading (empty team)
     await React.act(async () => {
       reqB.resolve({} as TemplateConfig);
       await reqB.promise;
@@ -391,54 +531,147 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     expect((container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('4) Unmount before pending request settles: resolve and reject cause no errors or notifications', async () => {
+  it('4) Commit-phase unmount window: settling load/save right after flushSync unmount suppresses all notifications & callbacks', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const reqResolve = createDeferred<TemplateConfig>();
-      getDefaultTemplateMock.mockReturnValueOnce(reqResolve.promise);
+      // Disable act warning only around intentional raw flushSync unmounts (testing pre-passive-effect window)
+      const loadReject = createDeferred<TemplateConfig>();
+      getDefaultTemplateMock.mockReturnValueOnce(loadReject.promise);
 
-      await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-x', teamName: 'Team X' }));
-      await React.act(async () => {
+      await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-u1', teamName: 'Team U1' }));
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = false;
+      ReactDOM.flushSync(() => {
         root.unmount();
       });
+      loadReject.reject(new Error('COMMIT_WINDOW_LOAD_FAIL'));
+      await drainMicrotasksRaw();
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-      await React.act(async () => {
-        reqResolve.resolve({ name: 'Late Resolve', description: 'Should not mount' });
-        await reqResolve.promise;
-      });
-      await flushMicrotasks();
+      expect(notifyErrorMock).not.toHaveBeenCalled();
 
-      // Remount fresh root to test late reject after unmount
+      // Save resolve settled immediately after synchronous unmount commit
       root = ReactDOMClient.createRoot(container);
-      const reqReject = createDeferred<TemplateConfig>();
-      getDefaultTemplateMock.mockReturnValueOnce(reqReject.promise);
+      const saveResolve = createDeferred<{ ok: boolean }>();
+      setDefaultTemplateMock.mockReturnValueOnce(saveResolve.promise);
+      const onSavedResolveSpy = vi.fn();
 
-      await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-y', teamName: 'Team Y' }));
+      await render(
+        React.createElement(DefaultAgentTemplateDialog, {
+          team: { team_id: 'team-u2', name: 'Team U2' },
+          initial: { name: 'U2 Template', description: 'Desc U2' },
+          onClose: vi.fn(),
+          onSaved: onSavedResolveSpy,
+        }),
+      );
       await React.act(async () => {
+        (container.querySelector('.dialog-footer button') as HTMLButtonElement).click();
+      });
+
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = false;
+      ReactDOM.flushSync(() => {
         root.unmount();
       });
+      saveResolve.resolve({ ok: true });
+      await drainMicrotasksRaw();
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
+      expect(onSavedResolveSpy).not.toHaveBeenCalled();
+      expect(notifySuccessMock).not.toHaveBeenCalled();
+
+      // Save rejection settled immediately after synchronous unmount commit
+      root = ReactDOMClient.createRoot(container);
+      const saveReject = createDeferred<{ ok: boolean }>();
+      setDefaultTemplateMock.mockReturnValueOnce(saveReject.promise);
+      const onSavedRejectSpy = vi.fn();
+
+      await render(
+        React.createElement(DefaultAgentTemplateDialog, {
+          team: { team_id: 'team-u3', name: 'Team U3' },
+          initial: { name: 'U3 Template', description: 'Desc U3' },
+          onClose: vi.fn(),
+          onSaved: onSavedRejectSpy,
+        }),
+      );
       await React.act(async () => {
-        reqReject.reject(new Error('LATE_FAILURE_AFTER_UNMOUNT'));
-        await Promise.resolve();
+        (container.querySelector('.dialog-footer button') as HTMLButtonElement).click();
       });
-      await flushMicrotasks();
 
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = false;
+      ReactDOM.flushSync(() => {
+        root.unmount();
+      });
+      saveReject.reject(new Error('COMMIT_WINDOW_SAVE_FAIL'));
+      await drainMicrotasksRaw();
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+
+      expect(onSavedRejectSpy).not.toHaveBeenCalled();
       expect(notifyErrorMock).not.toHaveBeenCalled();
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     } finally {
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
       consoleErrorSpy.mockRestore();
-      // Recreate root for afterEach cleanup
       root = ReactDOMClient.createRoot(container);
     }
   });
 
-  it('5) Dialog async save race: unmounting or switching team before save settles ignores late save callback & error', async () => {
+  it('5) Modal close is blocked while saving, and completes cleanly with onSaved & success toast', async () => {
+    const reqA = createDeferred<TemplateConfig>();
+    const saveA = createDeferred<{ ok: boolean }>();
+    getDefaultTemplateMock.mockReturnValueOnce(reqA.promise);
+    setDefaultTemplateMock.mockReturnValueOnce(saveA.promise);
+
+    await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-a', teamName: 'Team A' }));
+    await React.act(async () => {
+      reqA.resolve({ name: 'Initial A', description: 'Initial desc' });
+      await reqA.promise;
+    });
+
+    await React.act(async () => {
+      (container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).click();
+    });
+
+    expect(container.querySelector('button[aria-label="close"]')).not.toBeNull();
+    const footerBtnsBefore = container.querySelectorAll('.dialog-footer button');
+    const saveBtn = footerBtnsBefore[0] as HTMLButtonElement;
+    const cancelBtn = footerBtnsBefore[1] as HTMLButtonElement;
+    expect(cancelBtn.disabled).toBe(false);
+
+    await React.act(async () => {
+      saveBtn.click();
+    });
+
+    // While busy: close icon button is hidden and cancel button is disabled
+    expect(container.querySelector('button[aria-label="close"]')).toBeNull();
+    expect(cancelBtn.disabled).toBe(true);
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).not.toBeNull();
+
+    await React.act(async () => {
+      cancelBtn.click();
+    });
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).not.toBeNull();
+
+    await React.act(async () => {
+      saveA.resolve({ ok: true });
+      await saveA.promise;
+    });
+    await flushMicrotasks();
+
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).toBeNull();
+    expect(container.querySelector('._memory-default-agent-name')?.textContent).toBe('Initial A');
+    expect(notifySuccessMock).toHaveBeenCalledTimes(1);
+    expect(notifySuccessMock).toHaveBeenCalledWith('defaultAgent.notify.saved');
+    expect(notifyErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('6) Dialog async save race across team switch & empty teamId guard', async () => {
     const reqA = createDeferred<TemplateConfig>();
     const reqB = createDeferred<TemplateConfig>();
     const saveA = createDeferred<{ ok: boolean }>();
 
-    getDefaultTemplateMock.mockImplementation((teamId) => (teamId === 'team-a' ? reqA.promise : reqB.promise));
+    getDefaultTemplateMock.mockImplementation((teamId) => {
+      if (teamId === 'team-a') return reqA.promise;
+      return reqB.promise;
+    });
     setDefaultTemplateMock.mockReturnValueOnce(saveA.promise);
 
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-a', teamName: 'Team A' }));
@@ -447,26 +680,21 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
       await reqA.promise;
     });
 
-    // Open dialog and trigger save on Team A
     await React.act(async () => {
       (container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).click();
     });
-    const saveBtn = container.querySelector('.dialog-footer button') as HTMLButtonElement;
-    expect(saveBtn).not.toBeNull();
     await React.act(async () => {
-      saveBtn.click();
+      (container.querySelector('.dialog-footer button') as HTMLButtonElement).click();
     });
     expect(setDefaultTemplateMock).toHaveBeenCalledTimes(1);
     expect(setDefaultTemplateMock.mock.calls[0]?.[0]).toBe('team-a');
 
-    // Switch to Team B before Team A save resolves — unmounts dialog and loads Team B
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-b', teamName: 'Team B' }));
     await React.act(async () => {
       reqB.resolve({ name: 'Team B Clean', description: 'Clean B' });
       await reqB.promise;
     });
 
-    // Team A save resolves late — must NOT overwrite Team B or trigger saved toast
     await React.act(async () => {
       saveA.resolve({ ok: true });
       await saveA.promise;
@@ -477,54 +705,93 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     expect(notifySuccessMock).not.toHaveBeenCalled();
     expect(notifyErrorMock).not.toHaveBeenCalled();
 
-    // Direct Dialog unmount-on-reject check: rejecting save after unmount must not call notify.error or onSaved
-    const lateRejectSave = createDeferred<{ ok: boolean }>();
-    setDefaultTemplateMock.mockReturnValueOnce(lateRejectSave.promise);
-    const onSavedSpy = vi.fn();
-
-    await render(
-      React.createElement(DefaultAgentTemplateDialog, {
-        team: { team_id: 'team-z', name: 'Team Z' },
-        initial: { name: 'Z Template', description: 'Desc Z' },
-        onClose: vi.fn(),
-        onSaved: onSavedSpy,
-      }),
-    );
-
-    const dialogSaveBtn = container.querySelector('.dialog-footer button') as HTMLButtonElement;
-    await React.act(async () => {
-      dialogSaveBtn.click();
-    });
-
-    await React.act(async () => {
-      root.unmount();
-    });
-
-    await React.act(async () => {
-      lateRejectSave.reject(new Error('SAVE_FAILED_AFTER_UNMOUNT'));
-      await Promise.resolve();
-    });
-    await flushMicrotasks();
-
-    expect(onSavedSpy).not.toHaveBeenCalled();
-    expect(notifyErrorMock).not.toHaveBeenCalled();
-
-    // Recreate root for afterEach
-    root = ReactDOMClient.createRoot(container);
-  });
-
-  it('6) TeamManagementPanel passes key={activeTeam.team_id} to DefaultAgentTemplateSection and handles empty teamId without stuck loading', async () => {
-    const panelSource = readFileSync(
-      path.join(WEB_SRC, 'components/team/TeamManagementPanel.tsx'),
-      'utf8',
-    );
-    expect(panelSource).toMatch(
-      /<DefaultAgentTemplateSection[\s\S]*?key=\{activeTeam\.team_id\}[\s\S]*?\/>/,
-    );
-
+    // Empty teamId renders empty state immediately without triggering API request
+    getDefaultTemplateMock.mockClear();
     await render(React.createElement(DefaultAgentTemplateSection, { teamId: '', teamName: '' }));
     expect(getDefaultTemplateMock).not.toHaveBeenCalled();
     expect(container.textContent).toContain('defaultAgent.empty');
     expect((container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('7) Real TeamManagementPanel DOM integration: switching activeTeam remounts section, unmounts old dialog, and isolates stale requests', async () => {
+    const reqA = createDeferred<TemplateConfig>();
+    const reqB = createDeferred<TemplateConfig>();
+    const saveA = createDeferred<{ ok: boolean }>();
+
+    getDefaultTemplateMock.mockImplementation((teamId) => {
+      if (teamId === 'team-a') return reqA.promise;
+      if (teamId === 'team-b') return reqB.promise;
+      throw new Error(`unexpected team ${teamId}`);
+    });
+    setDefaultTemplateMock.mockReturnValueOnce(saveA.promise);
+
+    currentActiveTeam = { team_id: 'team-a', name: 'Team Alpha' };
+    await render(
+      React.createElement(TeamManagementPanel, {
+        currentUser: 'admin',
+        instanceId: 'inst-1',
+        isAdmin: true,
+        section: 'agents',
+      }),
+    );
+
+    const sectionNodeA = container.querySelector('._memory-default-agent-section');
+    expect(sectionNodeA).not.toBeNull();
+    expect(container.querySelector('[data-testid="team-header"]')?.textContent).toBe('Team Alpha');
+
+    await React.act(async () => {
+      reqA.resolve({ name: 'Alpha Template', description: 'Alpha desc' });
+      await reqA.promise;
+    });
+    expect(container.querySelector('._memory-default-agent-name')?.textContent).toBe('Alpha Template');
+
+    // Open dialog and start saving on Team Alpha
+    await React.act(async () => {
+      (container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).not.toBeNull();
+
+    await React.act(async () => {
+      (container.querySelector('.dialog-footer button') as HTMLButtonElement).click();
+    });
+    expect(setDefaultTemplateMock).toHaveBeenCalledTimes(1);
+
+    // Switch activeTeam to Team Beta in real TeamManagementPanel
+    currentActiveTeam = { team_id: 'team-b', name: 'Team Beta' };
+    await render(
+      React.createElement(TeamManagementPanel, {
+        currentUser: 'admin',
+        instanceId: 'inst-1',
+        isAdmin: true,
+        section: 'agents',
+      }),
+    );
+
+    // Keyed remount produces a brand-new DOM node and automatically unmounts Team Alpha's dialog
+    const sectionNodeB = container.querySelector('._memory-default-agent-section');
+    expect(sectionNodeB).not.toBeNull();
+    expect(sectionNodeB).not.toBe(sectionNodeA);
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).toBeNull();
+    expect(container.textContent).toContain('team.loading');
+
+    // Late Team Alpha save settles while Team Beta is active — must not overwrite or notify
+    await React.act(async () => {
+      saveA.resolve({ ok: true });
+      await saveA.promise;
+    });
+    await flushMicrotasks();
+
+    expect(notifySuccessMock).not.toHaveBeenCalled();
+    expect(notifyErrorMock).not.toHaveBeenCalled();
+
+    // Team Beta load resolves cleanly
+    await React.act(async () => {
+      reqB.resolve({ name: 'Beta Template', description: 'Beta desc' });
+      await reqB.promise;
+    });
+
+    expect(container.querySelector('._memory-default-agent-name')?.textContent).toBe('Beta Template');
+    expect(container.querySelector('._memory-default-agent-detail')?.textContent).toBe('Beta desc');
+    expect(container.textContent).not.toContain('Alpha Template');
   });
 });

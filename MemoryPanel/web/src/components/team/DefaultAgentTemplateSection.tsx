@@ -9,7 +9,7 @@
  * 仅 system_admin 可调用，因此本组件只在 isAdmin=true 时渲染。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from 'tea-component';
 import { AddIcon, EditIcon } from 'tea-icons-react';
@@ -26,72 +26,64 @@ export default function DefaultAgentTemplateSection({
   teamName: string;
 }) {
   const { t } = useTranslation();
-  const [template, setTemplate] = useState<AgentTemplateConfig | null>(null);
-  const [loading, setLoading] = useState(Boolean(teamId));
-  const [showDialog, setShowDialog] = useState(false);
-  // 追踪最新请求序号、当前激活团队与挂载态，防止跨团队竞态覆盖
-  const requestIdRef = useRef(0);
+  const [loaded, setLoaded] = useState<{
+    teamId: string;
+    template: AgentTemplateConfig | null;
+  } | null>(null);
+  const [dialogTeamId, setDialogTeamId] = useState<string | null>(null);
+  const activeRequestRef = useRef(0);
   const activeTeamIdRef = useRef(teamId);
-  const mountedRef = useRef(true);
+  const mountedRef = useRef(false);
 
-  activeTeamIdRef.current = teamId;
+  const loading = Boolean(teamId) && loaded?.teamId !== teamId;
+  const template = loaded?.teamId === teamId ? loaded.template : null;
+  const showDialog = Boolean(teamId) && !loading && dialogTeamId === teamId;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mountedRef.current = true;
+    activeTeamIdRef.current = teamId;
     return () => {
+      activeRequestRef.current += 1;
       mountedRef.current = false;
     };
-  }, []);
+  }, [teamId]);
 
   useEffect(() => {
-    const reqId = ++requestIdRef.current;
-    let cancelled = false;
-
-    setTemplate(null);
-    setShowDialog(false);
+    const reqId = ++activeRequestRef.current;
 
     if (!teamId) {
-      setLoading(false);
-      return () => {
-        cancelled = true;
-      };
+      return;
     }
-
-    setLoading(true);
-    const isCurrent = () =>
-      !cancelled && mountedRef.current && requestIdRef.current === reqId;
 
     agentsApi
       .getDefaultTemplate(teamId)
       .then((data) => {
-        if (!isCurrent()) return;
+        if (activeRequestRef.current !== reqId) return;
         // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
-        setTemplate(data && data.name ? data : null);
+        setLoaded({ teamId, template: data && data.name ? data : null });
       })
       .catch((err) => {
-        if (!isCurrent()) return;
+        if (activeRequestRef.current !== reqId) return;
         tea.notify.error(getErrorMessage(err));
-        setTemplate(null);
-      })
-      .finally(() => {
-        if (!isCurrent()) return;
-        setLoading(false);
+        setLoaded({ teamId, template: null });
       });
 
     return () => {
-      cancelled = true;
+      if (activeRequestRef.current === reqId) {
+        activeRequestRef.current += 1;
+      }
     };
   }, [teamId]);
 
   function openDialog() {
-    if (loading) return;
-    setShowDialog(true);
+    if (loading || !teamId) return;
+    setDialogTeamId(teamId);
   }
 
   function handleSaved(savedTeamId: string, saved: AgentTemplateConfig) {
     if (!mountedRef.current || activeTeamIdRef.current !== savedTeamId) return;
-    setTemplate(saved);
-    setShowDialog(false);
+    setLoaded({ teamId: savedTeamId, template: saved });
+    setDialogTeamId(null);
     tea.notify.success(t('defaultAgent.notify.saved'));
   }
 
@@ -148,9 +140,10 @@ export default function DefaultAgentTemplateSection({
 
       {showDialog && (
         <DefaultAgentTemplateDialog
+          key={teamId}
           team={{ team_id: teamId, name: teamName }}
           initial={template}
-          onClose={() => setShowDialog(false)}
+          onClose={() => setDialogTeamId(null)}
           onSaved={(saved) => handleSaved(teamId, saved)}
         />
       )}
