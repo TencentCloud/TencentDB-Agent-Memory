@@ -72,7 +72,14 @@ API 对接以仓库 `docs/api/` 下的公开契约为准；未列入公开契约
 | 命令 | 说明 |
 |------|------|
 | `npm run dev` | 启动开发服务器 |
+| `npm test` | 统一运行 TS、TSX、MJS 测试，包含组件与语言存储回归 |
+| `npm run test:skill-github` | 兼容旧命令，使用相同的 Vitest 配置 |
+| `npm run test:i18n-storage` | 在同一配置下仅运行语言存储测试 |
 | `npm run build` | 类型检查并构建 |
 | `npm run preview` | 预览构建产物 |
 | `npm run lint:check` | 检查 ESLint |
 | `npm run format:check` | 检查格式 |
+
+`vitest.config.ts` 合并 `vite.config.ts`，复用 React 插件和路径别名。
+默认环境是 jsdom；需要 Node 的测试通过文件头 `@vitest-environment node` 声明。
+新增 `tests/*.test.ts` 与 `tests/*.test.tsx` 都会被 `npm test` 收集。

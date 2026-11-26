@@ -22,7 +22,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import { errorEnvelope, successEnvelope } from "./v2-router.js";
 import {
@@ -155,6 +155,8 @@ const ERROR_CODE_MAP: Record<string, number> = {
   SKILL_ID_COLLISION: 50304,
   SKILL_VERSION_EXPIRED: 41002,
   SKILL_EXPORT_TOO_LARGE: 41301,
+  SKILL_QUOTA_EXCEEDED: 4291,
+  GITHUB_UNAVAILABLE: 50301,
 };
 
 function mapCoreError(e: unknown, requestId: string, deps?: SkillRouterDeps, meta?: Record<string, unknown>): ApiResponseEnvelope {
@@ -1411,8 +1413,58 @@ export type SkillHandler = (
   deps: SkillRouterDeps,
 ) => Promise<ApiResponseEnvelope>;
 
+const githubRequestSchema = z.object({
+  team_id: z.string().trim().min(1), agent_id: z.string().trim().min(1), user_id: z.string().trim().min(1),
+  skill_id: z.string().min(1).optional(), repository: z.string().max(512).optional(),
+  ref: z.string().max(256).optional(), path: z.string().max(1024).optional(),
+});
+const githubApplySchema = githubRequestSchema.extend({
+  expected_version: z.number().int().nonnegative(), commit: z.string().regex(/^[a-f0-9]{40}$/),
+  digest: z.string().regex(/^[a-f0-9]{64}$/), overwrite_local: z.boolean().optional(),
+});
+const githubDetachSchema = githubRequestSchema.extend({ skill_id: z.string().min(1), expected_version: z.number().int().positive() });
+const restorePreviewSchema = githubRequestSchema.extend({ skill_id: z.string().min(1), source_version: z.number().int().positive() });
+const restoreSchema = restorePreviewSchema.extend({ expected_version: z.number().int().positive(), digest: z.string().regex(/^[a-f0-9]{64}$/) });
+function githubHandler(action: "preview" | "apply" | "detach" | "restore-preview" | "restore" | "preview-file" | "restore-file"): SkillHandler {
+  return async (body, auth, requestId, deps) => {
+    try {
+      // Never fall back to the standalone tenant when instance resolution fails.
+      const core = deps.resolveSkillCore ? await deps.resolveSkillCore(auth.serviceId) : deps.getSkillCore();
+      if (!core) return errorEnvelope(40401, "Skill module not enabled", requestId);
+      if (action === "preview-file") return successEnvelope(await core.githubPreviewFile(githubApplySchema.extend({ file_path: z.string().min(1).max(1024) }).parse(body)), requestId);
+      if (action === "restore-file") return successEnvelope(await core.previewRestoreFile(restoreSchema.extend({ file_path: z.string().min(1).max(1024) }).parse(body)), requestId);
+      if (action === "preview") return successEnvelope(await core.githubPreview(githubRequestSchema.parse(body)), requestId);
+      if (action === "restore-preview") return successEnvelope(await core.previewRestore(restorePreviewSchema.parse(body)), requestId);
+      const beforePublish = async () => {
+        if (deps.quotaManager) {
+          const check = await deps.quotaManager.checkMemoryQuota(auth.serviceId, 1);
+          if (!check.allowed) throw new SkillCoreError("SKILL_QUOTA_EXCEEDED", "Memory limit exceeded");
+        }
+      };
+      const row = action === "apply" ? await core.githubApply(githubApplySchema.parse(body), beforePublish)
+        : action === "restore" ? await core.restoreVersion(restoreSchema.parse(body), beforePublish)
+        : await core.githubDetach(githubDetachSchema.parse(body));
+      if (deps.getMetadataService) {
+        const meta = await deps.getMetadataService(auth.serviceId);
+        await meta.ensureSkillAsset({ skill_id: row.skill_id, team_id: row.team_id, agent_id: row.owner_agent_id, name: row.name });
+      }
+      return successEnvelope(toSummary(row), requestId);
+    } catch (error) {
+      if (error instanceof ZodError) return errorEnvelope(40001, formatZodErr(error), requestId);
+      return mapCoreError(error, requestId, deps);
+    }
+  };
+}
+
 export function makeSkillRouteTable(): Record<string, SkillHandler> {
   return {
+    "/v3/skill/github/preview-file": githubHandler("preview-file"),
+    "/v3/skill/versions/restore-file": githubHandler("restore-file"),
+    "/v3/skill/versions/restore-preview": githubHandler("restore-preview"),
+    "/v3/skill/versions/restore": githubHandler("restore"),
+    "/v3/skill/github/preview": githubHandler("preview"),
+    "/v3/skill/github/apply": githubHandler("apply"),
+    "/v3/skill/github/detach": githubHandler("detach"),
     "/v3/skill/create": handleCreate,
     "/v3/skill/update": handleUpdate,
     "/v3/skill/patch": handlePatch,

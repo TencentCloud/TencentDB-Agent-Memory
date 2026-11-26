@@ -173,3 +173,6 @@ textarea._memory-isd-mono-input {
 ._memory-isd-ok-text {
   color: var(--tea-color-text-success-default);
 }
+
+._memory-github-skill { display: grid; gap: 12px; }
+._memory-github-skill dd { overflow-wrap: anywhere; }

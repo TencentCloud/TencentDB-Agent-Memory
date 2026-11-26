@@ -120,6 +120,7 @@
 /* 头部主行：左信息区 + 右操作区 */
 ._memory-skill-detail-head-main {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
@@ -127,12 +128,13 @@
 
 ._memory-skill-detail-head-info {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 240px;
 }
 
-/* 操作栏：编辑 / 新建文件 / 历史版本，靠右不换行 */
+/* 操作栏在空间不足时换行，避免来源检查按钮挤压标题。 */
 ._memory-skill-detail-actions {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 8px;

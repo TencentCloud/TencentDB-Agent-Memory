@@ -1,3 +1,4 @@
+import type { GitHubCheck } from "../../skill/types.js";
 /**
  * MongoSkillStore — MongoDB (mongot `$search` BM25) backend for `ISkillStore`
  * (phase-1). Stores skill **version rows** with inline `SKILL.md` content and
@@ -153,6 +154,13 @@ export class MongoSkillStore implements ISkillStore {
 
   // ── CRUD ────────────────────────────────────────────────
 
+  async recordGitHubCheck(head: Skill, check: GitHubCheck): Promise<boolean> {
+    const coll = await this.coll();
+    const result = await coll.updateOne({ _id: head.row_id, team_id: head.team_id, version: head.version, is_head: true, status: "active" } as never,
+      { $set: { metadata_json: JSON.stringify({ ...JSON.parse(head.metadata_json), github_check: check }) } } as never);
+    return result.matchedCount === 1;
+  }
+
   async appendVersion(input: AppendVersionInput): Promise<Skill> {
     const coll = await this.coll();
     const tid = input.team_id ?? "default";
@@ -167,15 +175,21 @@ export class MongoSkillStore implements ISkillStore {
       throw new SkillStoreError("SKILL_NAME_DUPLICATE", "name change is not allowed across versions");
     }
 
+    if (input.expected_version !== undefined && ((head?.version ?? 0) !== input.expected_version || (head && head.status !== "active"))) {
+      throw new SkillStoreError("SKILL_VERSION_STALE", "head changed during publication");
+    }
     const newVersion = head ? head.version + 1 : 1;
     const existing = await coll.findOne({ skill_id: sid, version: newVersion, team_id: tid } as never);
-    if (existing) return this._docToSkill(existing);
+    if (existing) {
+      if (input.expected_version !== undefined) throw new SkillStoreError("SKILL_VERSION_STALE");
+      return this._docToSkill(existing);
+    }
 
     const ownerForRow = head ? head.owner_agent_id : (input.owner_agent_id ?? "default");
     const userIdForRow = input.user_id ?? "default";
     const ts = this.now();
     const rowId = this.ulid();
-    const storageDir = `skills/${sid}/v${newVersion}`;
+    const storageDir = input.storage_dir;
 
     const doc: Record<string, unknown> = {
       _id: rowId,
@@ -202,7 +216,14 @@ export class MongoSkillStore implements ISkillStore {
 
     // New row first, then flip old head — matches VDB's compensating order so a
     // crash between the two leaves the newest version resolvable by version DESC.
-    await coll.insertOne(doc as never);
+    try {
+      await coll.insertOne(doc as never);
+    } catch (error) {
+      if (input.expected_version !== undefined && (error as { code?: number }).code === 11000) {
+        throw new SkillStoreError("SKILL_VERSION_STALE", "another writer published this version");
+      }
+      throw error;
+    }
     if (activeHead) {
       await coll.updateOne(
         { _id: activeHead.row_id } as never,

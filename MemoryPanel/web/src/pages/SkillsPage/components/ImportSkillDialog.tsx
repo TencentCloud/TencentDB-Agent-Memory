@@ -1,5 +1,5 @@
 /**
- * ImportSkillDialog — 导入 Skill 弹窗。支持三种导入方式：
+ * ImportSkillDialog — 导入 Skill 弹窗。支持四种导入方式：
  *
  *   1. 目录导入（directory）
  *      用户选一个本地目录，前端把里面的 File 拆成「主文件」（SKILL.md，
@@ -25,6 +25,9 @@
  *      提示用户预计出结果时间后关闭弹窗，不在前端阻塞轮询 —— 结果会异步
  *      沉淀到该 agent 的 skill 列表，用户后续手动刷新即可看到）。
  *
+ *   4. GitHub 导入（github）
+ *      预览固定提交下的 Skill 包，确认后导入。
+ *
  * 移除说明：原有的「粘贴 SKILL.md 文本」模式已下线 —— 目录导入已覆盖
  * 该场景，且用户手写 frontmatter 极易踩坑（name/description 缺失、
  * YAML 语法错），改由目录导入引导用户放好 SKILL.md 更稳。
@@ -42,9 +45,10 @@ import {
 import { Alert, Button, Form, Input, Modal, Segment, Select } from 'tea-component';
 import { FolderOpenIcon } from 'tea-icons-react';
 import i18n from '@/i18n';
+import GitHubSkillForm from './GitHubSkillForm';
 import '../styles/import-skill-dialog.css';
 
-type Mode = 'directory' | 'zip' | 'session';
+type Mode = 'directory' | 'zip' | 'session' | 'github';
 
 /** 归一化后的输入文件：path 是相对 skill 根的路径（统一用 '/' 分隔）。 */
 interface SourceEntry {
@@ -459,6 +463,8 @@ export default function ImportSkillDialog(props: {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const [githubReview, setGithubReview] = useState(false);
+  const [githubBusy, setGithubBusy] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>(props.agentId ?? '');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
@@ -681,6 +687,7 @@ export default function ImportSkillDialog(props: {
   // 是否需要在弹窗内显示「归属 Agent」选择器：
   //   - 仅 fixed-target 才有 agent 归属概念
   //   - 必须传了 agents 才能渲染下拉
+  const busy = submitting || githubBusy;
   const showAgentPicker = props.target === 'fixed' && !!props.agents;
 
   const zipOkCount = zipResults.filter((r) => r.status === 'ok').length;
@@ -695,48 +702,71 @@ export default function ImportSkillDialog(props: {
     || (props.target === 'fixed' && !selectedAgentId);
 
   return (
-    <Modal visible caption={t('importSkill.caption')} size="l" onClose={props.onClose} disableEscape={submitting}>
+    <Modal
+      visible
+      caption={t('importSkill.caption')}
+      size="l"
+      className={githubReview ? 'skill-review-modal' : undefined}
+      onClose={props.onClose}
+      disableCloseIcon={busy}
+      disableEscape={busy}
+    >
       <Modal.Body>
-        <Alert type="info">{t('importSkill.hint')}</Alert>
-      {/* 归属 Agent —— 必选项。始终展示在导入方式上方，
-          与 ChatMemoryPanel.ImportBlockDialog 一致：即便外层已经传了 agentId
-          也允许在弹窗里重选。 */}
-      {showAgentPicker && (
-        <Form layout="vertical" style={{ width: '100%' }}>
-          <Form.Item
-            label={t('importSkill.agent')}
-            extra={t('importSkill.agent.extra')}
-          >
-            {props.agents!.length === 0 ? (
-              <Alert type="warning">{t('importSkill.agent.noAgent')}</Alert>
-            ) : (
-              <Select
-                size="full"
-                value={selectedAgentId}
-                onChange={setSelectedAgentId}
-                placeholder={t('importSkill.agent.placeholder')}
-                options={props.agents!.map((a) => ({ value: a.id, text: `${a.name}（${a.id}）` }))}
-              />
+        {!githubReview && (
+          <>
+            <Alert type="info">{t('importSkill.hint')}</Alert>
+            {/* 归属 Agent —— 必选项。始终展示在导入方式上方，
+              与 ChatMemoryPanel.ImportBlockDialog 一致：即便外层已经传了 agentId
+              也允许在弹窗里重选。 */}
+            {showAgentPicker && (
+              <Form layout="vertical" style={{ width: '100%' }}>
+                <Form.Item
+                  label={t('importSkill.agent')}
+                  extra={t('importSkill.agent.extra')}
+                >
+                  {props.agents!.length === 0 ? (
+                    <Alert type="warning">{t('importSkill.agent.noAgent')}</Alert>
+                  ) : (
+                    <Select
+                      size="full"
+                      value={selectedAgentId}
+                      disabled={busy}
+                      onChange={setSelectedAgentId}
+                      placeholder={t('importSkill.agent.placeholder')}
+                      options={props.agents!.map((a) => ({ value: a.id, text: `${a.name}（${a.id}）` }))}
+                    />
+                  )}
+                </Form.Item>
+              </Form>
             )}
-          </Form.Item>
-        </Form>
-      )}
 
-      {/* Mode tabs：directory（目录导入）/ zip（压缩包导入）/ session（对话导入） */}
-      <Segment
-        className="_memory-isd-mode-segment"
-        value={mode}
-        onChange={(v) => {
-          setMode(v as Mode);
-          setError(null);
-          setResult(null);
-        }}
-        options={[
-          { value: 'directory', text: t('importSkill.mode.directory') },
-          { value: 'zip', text: t('importSkill.mode.zip') },
-          { value: 'session', text: t('importSkill.mode.session') },
-        ]}
-      />
+            <Segment
+              className="_memory-isd-mode-segment"
+              value={mode}
+              disabled={busy}
+              onChange={(v) => {
+                setMode(v as Mode);
+                setError(null);
+                setResult(null);
+              }}
+              options={[
+                { value: 'directory', text: t('importSkill.mode.directory') },
+                { value: 'zip', text: t('importSkill.mode.zip') },
+                { value: 'session', text: t('importSkill.mode.session') },
+                { value: 'github', text: 'GitHub' },
+              ]}
+            />
+          </>
+        )}
+        {mode === 'github' && (
+          <GitHubSkillForm
+            key={`${props.teamId}:${selectedAgentId}`}
+            onReviewChange={setGithubReview}
+            onBusyChange={setGithubBusy}
+            context={{ team_id: props.teamId, agent_id: selectedAgentId, user_id: props.userId }}
+            onImported={props.onImported}
+          />
+        )}
 
       {mode === 'directory' && (
         <div className="_memory-isd-section">
@@ -970,37 +1000,43 @@ export default function ImportSkillDialog(props: {
       {error && <Alert type="error">{error}</Alert>}
       {result && <Alert type="success"><span className="_memory-isd-result-text">{result}</span></Alert>}
       </Modal.Body>
-      <Modal.Footer>
-        {mode === 'zip' && batchDone ? (
-          <>
-            <Button type="primary" onClick={() => props.onImported()}>
-              {t('importSkill.zip.done')}
+      {!githubReview && (
+        <Modal.Footer>
+          {mode === 'github' ? (
+            <Button onClick={props.onClose} disabled={busy}>
+              {t('importSkill.cancel')}
             </Button>
-            <Button onClick={props.onClose}>{t('importSkill.cancel')}</Button>
-          </>
-        ) : (
-          <>
-            <Button
-              type="primary"
-              onClick={() => void submit()}
-              disabled={submitDisabled}
-              title={
-                props.target === 'fixed' && !selectedAgentId
-                  ? t('importSkill.error.noAgentHint')
-                  : ''
-              }
-              loading={submitting}
-            >
-              {mode === 'session'
-                ? t('importSkill.session.submit')
-                : mode === 'zip'
-                  ? t('importSkill.zip.submit', { count: zipReadyCount })
-                  : t('importSkill.submit')}
-            </Button>
-            <Button onClick={props.onClose} disabled={submitting}>{t('importSkill.cancel')}</Button>
-          </>
-        )}
-      </Modal.Footer>
+          ) : mode === 'zip' && batchDone ? (
+            <>
+              <Button type="primary" onClick={() => props.onImported()}>
+                {t('importSkill.zip.done')}
+              </Button>
+              <Button onClick={props.onClose}>{t('importSkill.cancel')}</Button>
+            </>
+          ) : (
+            <>
+              <Button
+                type="primary"
+                onClick={() => void submit()}
+                disabled={submitDisabled}
+                title={
+                  props.target === 'fixed' && !selectedAgentId
+                    ? t('importSkill.error.noAgentHint')
+                    : ''
+                }
+                loading={submitting}
+              >
+                {mode === 'session'
+                  ? t('importSkill.session.submit')
+                  : mode === 'zip'
+                    ? t('importSkill.zip.submit', { count: zipReadyCount })
+                    : t('importSkill.submit')}
+              </Button>
+              <Button onClick={props.onClose} disabled={submitting}>{t('importSkill.cancel')}</Button>
+            </>
+          )}
+        </Modal.Footer>
+      )}
     </Modal>
   );
 }

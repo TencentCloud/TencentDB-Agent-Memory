@@ -1,3 +1,4 @@
+import type { GitHubCheck } from "../../skill/types.js";
 /**
  * TcvdbSkillStore — Skill 存储层的 TCVDB (Service 模式) 实现
  *
@@ -172,6 +173,17 @@ export class TcvdbSkillStore implements ISkillStore {
 
   // ── ISkillStore: CRUD ─────────────────────────────────────────────────
 
+  async recordGitHubCheck(head: Skill, check: GitHubCheck): Promise<boolean> {
+    await this._ensureInit();
+    if (this.degraded) throw new Error("TcvdbSkillStore degraded");
+    const count = await this.client.update(this.skillsCollection, {
+      documentIds: [head.row_id],
+      filter: `skill_id="${this._escape(head.skill_id)}" and team_id="${this._escape(head.team_id)}" and version=${head.version} and is_head=1 and status="active"`,
+      update: { metadata_json: JSON.stringify({ ...JSON.parse(head.metadata_json), github_check: check }) },
+    });
+    return count > 0;
+  }
+
   async appendVersion(input: AppendVersionInput): Promise<Skill> {
     await this._ensureInit();
     if (this.degraded) throw new Error("TcvdbSkillStore degraded");
@@ -193,11 +205,15 @@ export class TcvdbSkillStore implements ISkillStore {
     }
 
     // 3. 版本唯一性校验
+    if (input.expected_version !== undefined && ((head?.version ?? 0) !== input.expected_version || (head && head.status !== "active"))) {
+      throw new SkillStoreError("SKILL_VERSION_STALE", "head changed during publication");
+    }
     const newVersion = head ? head.version + 1 : 1;
     const existing = await this._queryOneAsync(
       `skill_id="${this._escape(sid)}" and version=${newVersion} and team_id="${this._escape(tid)}"`,
     );
     if (existing) {
+      if (input.expected_version !== undefined) throw new SkillStoreError("SKILL_VERSION_STALE");
       // 同一版本已存在 → 幂等返回
       return existing;
     }
@@ -206,7 +222,7 @@ export class TcvdbSkillStore implements ISkillStore {
     const userIdForRow = input.user_id ?? "default";
     const ts = this.now();
     const rowId = this.ulid();
-    const storageDir = `skills/${sid}/v${newVersion}`;
+    const storageDir = input.storage_dir;
 
     // 4. 构建新行文档
     const doc: Record<string, unknown> = {
