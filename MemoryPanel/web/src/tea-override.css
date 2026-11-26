@@ -63,7 +63,7 @@
  * 的经典陷阱），一旦某个页面内容变高就会撑破视口高度的容器，
  * 从而在浏览器窗口级别出现一条贯穿全页（包含侧边栏/顶栏）的滚动条。
  * 这里把 html/body/#root 锁死为视口高度 + overflow:hidden，只保留
- * Content.Body（.tea-layout__content-body）作为唯一的滚动容器。 */
+ * 内容区内部的滚动容器（现为每个保活帧 ._memory-keepalive-frame，见下文）。 */
 html,
 body,
 #root {
@@ -112,15 +112,45 @@ body,
 ._memory-content-body {
   max-width: 100%;
   min-height: calc(100% - 34px);
-  padding: 16px;
+  /* 16px 留白已下沉到保活帧（._memory-keepalive-frame），否则会随滚动被一起滚走 */
   background: var(--tea-color-bg-page-default);
+}
+
+/* ===== 页面保活（KeepAlivePages）=====
+ * 已打开的标签页常驻挂载、叠放在同一区域，只切换可见性。若仍由 Content.Body
+ * 统一滚动，各页会共享同一个 scrollTop，因此滚动下沉到每个帧：
+ * Content.Body 只负责提供定高的定位区域，16px 留白与 scrollbar-gutter 随帧下沉。 */
+.tea-layout__content-body._memory-content-body {
+  position: relative;
+  overflow: hidden;
+  /* gutter 已随帧下沉；overflow:hidden 下 stable 仍会预留，这里还原避免双份留白 */
+  scrollbar-gutter: auto;
+  padding: 0;
+}
+
+._memory-keepalive-host {
+  position: absolute;
+  inset: 0;
+}
+
+._memory-keepalive-frame {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding: 16px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 ._memory-page-frame {
   width: 100%;
   min-width: 0;
   min-height: 100%;
-  /* 路由切换连续性：快速淡入 + 轻微上移，仅 transform/opacity，不做加载编排 */
+}
+
+/* 路由切换连续性：帧被激活时（首次打开或切回）快速淡入 + 轻微上移，
+ * 仅 transform/opacity，不做加载编排。隐藏帧不挂动画，切回时重新触发。 */
+._memory-keepalive-frame--active > ._memory-page-frame {
   animation: _page-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 

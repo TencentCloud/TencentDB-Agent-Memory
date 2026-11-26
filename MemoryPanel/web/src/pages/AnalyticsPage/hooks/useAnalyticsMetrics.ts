@@ -16,6 +16,7 @@ import {
   type SessionTrendRow,
 } from '@/lib/api/analytics';
 import { getErrorMessage } from '@/lib/error-message';
+import { usePageActive } from '@/lib/page-active';
 
 export type ChState = 'probing' | 'ready' | 'not-configured' | 'unreachable' | 'probe-failed';
 
@@ -40,6 +41,10 @@ export function useAnalyticsMetrics(params: {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
   const reqSeqRef = useRef(0);
+  /** 最近一次发起加载的时间戳；切回页面时据此判断是否需要立即补拉 */
+  const lastLoadAtRef = useRef(0);
+  // 页面保活：标签页隐藏时暂停 60s 自动刷新，切回时若已过期则立即补拉一次
+  const pageActive = usePageActive();
   const chReady = chState === 'ready';
   const queryBody = useMemo(() => ({ days, space_id: spaceId }), [days, spaceId]);
 
@@ -71,6 +76,7 @@ export function useAnalyticsMetrics(params: {
 
   const load = useCallback(async () => {
     const seq = ++reqSeqRef.current;
+    lastLoadAtRef.current = Date.now();
     setLoading(true);
     setError('');
     try {
@@ -100,12 +106,16 @@ export function useAnalyticsMetrics(params: {
   }, [chReady, load]);
 
   useEffect(() => {
-    if (!chReady) return undefined;
+    if (!chReady || !pageActive) return undefined;
+    // 上面的首载 effect 先于本 effect 执行并刷新 lastLoadAtRef，故首载/切换筛选时不会重复请求
+    if (lastLoadAtRef.current > 0 && Date.now() - lastLoadAtRef.current >= REFRESH_INTERVAL_MS) {
+      void load();
+    }
     const timer = window.setInterval(() => {
       void load();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [chReady, load]);
+  }, [chReady, load, pageActive]);
 
   return {
     chState,

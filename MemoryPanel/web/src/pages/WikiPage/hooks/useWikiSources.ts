@@ -8,6 +8,7 @@ import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea, confirmThenRun } from '@/lib/tea-bridge';
+import { usePageActive } from '@/lib/page-active';
 import {
   findExistingRawFilenames,
   formatOverwriteFilenames,
@@ -36,6 +37,8 @@ import {
 
 export function useWikiSources() {
   const { t } = useTranslation();
+  // 页面保活下标签页是否可见；隐藏时暂停加工进度轮询（见下方 poll effect）
+  const pageActive = usePageActive();
   const [sources, setSources] = useState<WikiDetail[]>([]);
   const [loading, setLoading] = useState(false);
   // 默认展示 Agent 资产（fixed），避免用户误以为自己的资产在「团队资产」里
@@ -656,7 +659,9 @@ export function useWikiSources() {
   );
 
   useEffect(() => {
-    if (pollTargets.length === 0) return;
+    // 页面保活：标签页隐藏时暂停加工进度轮询（预算按尝试次数计，暂停不消耗预算）；
+    // 切回时 effect 重跑，立即补一轮 poll。
+    if (pollTargets.length === 0 || !pageActive) return;
     // 只取 wiki_id：effect 刻意不依赖 sources 的其余字段，避免每轮 setSources
     // 都把定时器重建一次（那会让「预算」跟着抖动，且高频抖动 clearInterval）。
     const targetIds = pollTargets.map((s) => s.wiki_id);
@@ -772,7 +777,7 @@ export function useWikiSources() {
     // 会被每 2 秒重建一次（预算抖动 + 节奏漂移）。key 相同说明参与轮询的成员
     // 与状态完全一致，用旧闭包里的 targetIds 是安全的。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pollTargetsKey, selectedWikiId, fetchDetail]);
+  }, [pollTargetsKey, selectedWikiId, fetchDetail, pageActive]);
 
   /**
    * 详情页进度卡片的会话阶段机（纯派生，不引入独立数据源）。
