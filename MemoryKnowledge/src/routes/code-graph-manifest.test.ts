@@ -125,6 +125,8 @@ it("keeps the last aggregate queryable during a partial refresh failure and afte
     expect((await search("apiEntry")).data.text).toContain("apps/api/api.ts");
     expect((await search("coreFeature")).data.text).toContain("libs/core/core.ts");
     expect((await tool("callers", { symbol: "coreFeature" })).data.text).toContain("apiEntry");
+    const scoped = await tool("search", { query: "coreFeature", projectPath: fixture.dataDir });
+    expect(scoped.data.text).toContain("libs/core/core.ts");
     expect((await app.post("/code-graph/search", { code_graph_id: id, query: "coreFeature" }, "service-b")).status).toBe(404);
 
     commit(fixture.api, "api.ts", "export function apiReplacement() { return 2; }\n");

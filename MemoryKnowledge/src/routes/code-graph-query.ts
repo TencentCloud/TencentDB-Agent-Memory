@@ -13,7 +13,9 @@ export async function queryCodeGraph(
 ): Promise<{ text: string; isError: boolean } | undefined> {
   const version = manifestIndexVersion(row);
   if (version) {
-    return queryRepoWorkspace(dir, version, (instance) => executeTool(instance, toolName, params));
+    // The selected snapshot determines the project for every manifest query.
+    return queryRepoWorkspace(dir, version, (instance) =>
+      executeTool(instance, toolName, { ...params, projectPath: undefined }));
   }
   if (row.status !== "ready" || isRepoManifestSource(row.repo_url)) {
     return { text: "", isError: false };
