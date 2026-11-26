@@ -50,6 +50,45 @@ export interface StandaloneLLMConfig {
   maxTokens?: number;
   /** Request timeout in milliseconds (default: 120_000). */
   timeoutMs?: number;
+  /**
+   * When true, every chat-completions request body is injected with
+   * `thinking: { type: "disabled" }` via a custom fetch wrapper.
+   *
+   * Required for some reasoning models served via OpenAI-compatible
+   * endpoints: without it, reasoning tokens consume the whole max_tokens
+   * budget and structured (JSON) extraction output gets truncated to nothing.
+   *
+   * AI SDK v6 `providerOptions` is NOT forwarded to the OpenAI-compatible
+   * request body by @ai-sdk/openai, hence the fetch-level injection.
+   */
+  disableThinking?: boolean;
+}
+
+// ============================
+// Thinking-suppression fetch wrapper
+// ============================
+
+/**
+ * Wrap global fetch so every chat-completions request body carries
+ * `thinking: { type: "disabled" }`. Some reasoning models otherwise spend
+ * the max_tokens budget on reasoning tokens and truncate structured
+ * extraction output. Non-JSON / non-chat bodies pass through untouched.
+ */
+export function createThinkingDisabledFetch(): typeof fetch {
+  return async (input, init) => {
+    if (init?.body && typeof init.body === "string") {
+      try {
+        const parsed = JSON.parse(init.body);
+        if (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).messages)) {
+          (parsed as Record<string, unknown>).thinking = { type: "disabled" };
+          init = { ...init, body: JSON.stringify(parsed) };
+        }
+      } catch {
+        // Non-JSON body — pass through unchanged.
+      }
+    }
+    return fetch(input, init);
+  };
 }
 
 // ============================
@@ -230,6 +269,9 @@ export class StandaloneLLMRunner implements LLMRunner {
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
       compatibility: "compatible",
+      // Reasoning models need thinking suppressed for structured extraction;
+      // AI SDK doesn't forward providerOptions to the body, so inject at fetch level.
+      ...(this.config.disableThinking ? { fetch: createThinkingDisabledFetch() } : {}),
     });
 
     // Select tools based on mode + storage

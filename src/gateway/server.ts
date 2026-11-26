@@ -1686,6 +1686,9 @@ export class TdaiGateway {
               messages: params.messages,
               temperature: params.temperature,
               max_tokens: params.max_tokens,
+              // Some reasoning models need thinking disabled or reasoning tokens
+              // eat the max_tokens budget (mirrors llm-runner).
+              ...(llmCfg.disableThinking ? { thinking: { type: "disabled" } } : {}),
             }),
             signal: controller.signal,
           });
