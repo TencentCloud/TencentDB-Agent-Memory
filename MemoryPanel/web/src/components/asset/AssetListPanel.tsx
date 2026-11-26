@@ -38,6 +38,16 @@ interface AssetListPanelProps<T> {
   isItemDisabled?: (item: T) => boolean;
   /** 空态文本 */
   emptyText?: ReactNode;
+  /** 标题行与列表之间的工具条插槽（如关键词搜索框）；不传则不渲染，保持既有布局 */
+  toolbar?: ReactNode;
+  /**
+   * 当前列表是否为「关键词过滤后的结果视图」。
+   * 为 true 且列表为空时优先展示 filteredEmptyText。
+   * 调用方须保证：仅在原列表非空时才置 true（空列表优先表达"无数据"）。
+   */
+  isFiltering?: boolean;
+  /** 过滤无命中时的空态文案；缺省回退到 emptyText */
+  filteredEmptyText?: ReactNode;
 }
 
 export function AssetListPanel<T>({
@@ -51,6 +61,9 @@ export function AssetListPanel<T>({
   renderItem,
   isItemDisabled,
   emptyText,
+  toolbar,
+  isFiltering,
+  filteredEmptyText,
 }: AssetListPanelProps<T>) {
   return (
     <div className="_alp">
@@ -58,6 +71,8 @@ export function AssetListPanel<T>({
         <span className="_alp-title">{title}</span>
         {!loading && count != null && <span className="_alp-count">{count}</span>}
       </div>
+
+      {toolbar != null && <div className="_alp-toolbar">{toolbar}</div>}
 
       {loading ? (
         <div className="_alp-items">
@@ -69,7 +84,9 @@ export function AssetListPanel<T>({
           ))}
         </div>
       ) : items.length === 0 ? (
-        <div className="_alp-empty">{emptyText}</div>
+        <div className="_alp-empty">
+          {isFiltering && filteredEmptyText != null ? filteredEmptyText : emptyText}
+        </div>
       ) : (
         <ul className="_alp-items">
           {items.map((item) => {

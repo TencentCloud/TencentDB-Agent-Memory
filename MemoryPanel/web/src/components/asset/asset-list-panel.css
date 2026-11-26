@@ -55,6 +55,26 @@
   flex-shrink: 0;
 }
 
+/* ===== 工具条（可选插槽，位于标题行与列表之间） ===== */
+._alp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 与 header 的间距，同时保证自身高度不被列表挤压 */
+  padding: 8px 0 4px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* 左栏最窄 220px（AssetSplitLayout MIN_SIDEBAR），减去 _alp 的 16px padding
+   与 1px 边框后可用内宽约 186px。tea 的 .tea-form--search 自带
+   min-width: 100px，窄栏下必须允许收缩，不能像 AgentGrid 那样写
+   min-width: 280px，否则会横向撑破、出现横向滚动条。 */
+._alp-toolbar .tea-form--search {
+  width: 100%;
+  min-width: 0;
+}
+
 /* ===== 列表滚动区 ===== */
 ._alp-items {
   list-style: none;
