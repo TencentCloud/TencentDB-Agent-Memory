@@ -603,6 +603,9 @@ export const enUS = {
   'skills.empty.team':
     'No "shared" skills in the team yet. New skills are private by default — only the owner can see them. To make them visible to the whole team, the owner needs to toggle "Share" in the "My Assets" tab.',
   'skills.count': '{{count}} items',
+  'skills.count.filtered': '{{filtered}} / {{total}} items',
+  'skills.searchPlaceholder': 'Search name / ID / desc',
+  'skills.empty.filtered': 'No matching skills. Try a different keyword.',
   'skills.noAgent': 'No Agent Available',
   'skills.fork': 'Fork (writable)',
   'skills.fork.tooltip.fixed': 'Please select a skill in the "Team" or "My Assets" view',

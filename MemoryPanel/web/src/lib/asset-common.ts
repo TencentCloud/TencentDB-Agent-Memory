@@ -30,3 +30,59 @@ export function formatShortTime(iso?: string | null): string {
   const pad = (value: number) => String(value).padStart(2, '0');
   return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
+
+/* ===== 列表关键词过滤 ===== */
+
+/**
+ * 参与关键词匹配的字段。
+ * 全部可选且允许 null —— 列表数据来自不同接口（数据面 / asset 派生），
+ * 缺字段是常态，不能让过滤逻辑因此抛错。
+ */
+export interface SkillKeywordFields {
+  name?: string | null;
+  skill_id?: string | null;
+  description?: string | null;
+  owner_user_id?: string | null;
+}
+
+/**
+ * 关键词归一化：去首尾空白 + 转小写。
+ * null / undefined / 纯空白 → ''（调用方据此判定"未搜索"）。
+ */
+export function normalizeKeyword(keyword?: string | null): string {
+  return typeof keyword === 'string' ? keyword.trim().toLowerCase() : '';
+}
+
+/** 字段取值归一化：非字符串（null / undefined / 异常值）一律视作空串。 */
+function normalizeField(value?: string | null): string {
+  return typeof value === 'string' ? value.toLowerCase() : '';
+}
+
+/**
+ * 单条记录是否命中关键词（多字段 OR、子串、大小写不敏感）。
+ * 关键词为空 / 纯空白时恒为 true —— 「没有关键词」等价于「不过滤」。
+ */
+export function matchesSkillKeyword(skill: SkillKeywordFields, keyword?: string | null): boolean {
+  const needle = normalizeKeyword(keyword);
+  if (!needle) return true;
+  return (
+    normalizeField(skill.name).includes(needle) ||
+    normalizeField(skill.skill_id).includes(needle) ||
+    normalizeField(skill.description).includes(needle) ||
+    normalizeField(skill.owner_user_id).includes(needle)
+  );
+}
+
+/**
+ * 批量过滤，保留原顺序、不修改入参。
+ *
+ * 关键词为空时**返回入参本身**（同一引用），这样 hook 里的 useMemo
+ * 在"未搜索"状态下不会因为每次返回新数组而让下游重新渲染。
+ */
+export function filterSkillsByKeyword<T extends SkillKeywordFields>(
+  skills: T[],
+  keyword?: string | null,
+): T[] {
+  if (!normalizeKeyword(keyword)) return skills;
+  return skills.filter((skill) => matchesSkillKeyword(skill, keyword));
+}

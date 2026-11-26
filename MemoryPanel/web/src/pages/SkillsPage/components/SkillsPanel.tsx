@@ -26,7 +26,7 @@
  *
  */
 import { useTranslation } from 'react-i18next';
-import { Button, Select, Segment, Tag, Tooltip } from 'tea-component';
+import { Button, SearchBox, Select, Segment, Tag, Tooltip } from 'tea-component';
 import { DeleteIcon } from 'tea-icons-react';
 import { tea } from '@/lib/tea-bridge';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
@@ -79,6 +79,11 @@ export default function SkillsPanel({
     exportLoading,
     visibilityMap,
     skills,
+    // 关键词过滤
+    keyword,
+    setKeyword,
+    filteredSkills,
+    isFiltering,
     // cache
     skillsWithCache,
     // handlers
@@ -187,12 +192,29 @@ export default function SkillsPanel({
                 )}
               </>
             }
-            count={t('skills.count', { count: skillsWithCache.length })}
+            count={
+              isFiltering
+                ? t('skills.count.filtered', {
+                    filtered: filteredSkills.length,
+                    total: skillsWithCache.length,
+                  })
+                : t('skills.count', { count: skillsWithCache.length })
+            }
             loading={loading}
-            items={skillsWithCache}
+            items={filteredSkills}
             selectedId={selectedSkillId}
             getItemId={(s) => s.skill_id}
             onSelect={(s) => setSelectedSkillId(s.skill_id)}
+            toolbar={
+              <SearchBox
+                size="full"
+                value={keyword}
+                onChange={setKeyword}
+                placeholder={t('skills.searchPlaceholder')}
+              />
+            }
+            isFiltering={isFiltering}
+            filteredEmptyText={t('skills.empty.filtered')}
             emptyText={
               tab === 'fixed' && !selectedAgent
                 ? t('skills.empty.fixed.noAgent')

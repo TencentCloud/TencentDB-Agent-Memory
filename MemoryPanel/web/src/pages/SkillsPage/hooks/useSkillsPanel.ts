@@ -13,6 +13,7 @@ import {
   type SkillSummary,
 } from '@/lib/api/skill-api';
 import { getPanelSession } from '@/lib/panelSession';
+import { filterSkillsByKeyword } from '@/lib/asset-common';
 import { useTeams } from '@/services';
 import { useSkillDetailCache } from '@/services/use-skill-detail-cache';
 import { tea } from '@/lib/tea-bridge';
@@ -108,6 +109,19 @@ export function useSkillsPanel() {
     () => skills.map((s) => applyCachedDetail(s)),
     [skills, cacheVersion],
   );
+
+  // ── 关键词过滤（纯前端，不发请求）──
+  // 派生链固定为 skills → skillsWithCache → filteredSkills：
+  // 下面的选中清理 effect 与 selectedSkill 必须继续挂在 **skillsWithCache**（全量）上，
+  // 这样"选中项被搜索条件隐藏"时右侧详情不会消失、选中也不会被误清空。
+  const [keyword, setKeyword] = useState('');
+  const isKeywordActive = keyword.trim().length > 0;
+  const filteredSkills = useMemo(
+    () => (isKeywordActive ? filterSkillsByKeyword(skillsWithCache, keyword) : skillsWithCache),
+    [skillsWithCache, keyword, isKeywordActive],
+  );
+  // 仅当原列表非空时才算「过滤态」：列表本来就空时应表达"无数据"而不是"没有匹配"。
+  const isFiltering = isKeywordActive && skillsWithCache.length > 0;
 
   // 选中某条 skill 时按需预拉其数据面详情（幂等，已缓存则跳过）。
   // 不做列表级批量预取：有多少 skill 就发多少次 getSkill() 太浪费，
@@ -449,6 +463,11 @@ export function useSkillsPanel() {
     deleteLoading,
     exportLoading,
     visibilityMap,
+    // 关键词过滤
+    keyword,
+    setKeyword,
+    filteredSkills,
+    isFiltering,
     // cache
     skillsWithCache,
     preloadSkillDetail,

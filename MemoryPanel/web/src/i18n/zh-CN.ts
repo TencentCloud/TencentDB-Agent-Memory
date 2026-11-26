@@ -589,6 +589,9 @@ export const zhCN = {
   'skills.empty.team':
     '团队里还没有任何"共享"skill。skill 新建时默认私密，只有 owner 自己能看到；如需让整个团队看到，需要 owner 在「我的资产分配」tab 里点共享按钮。',
   'skills.count': '{{count}} 条',
+  'skills.count.filtered': '{{filtered}} / {{total}} 条',
+  'skills.searchPlaceholder': '搜索名称 / ID / 描述',
+  'skills.empty.filtered': '没有匹配的 Skill，试试调整关键词。',
   'skills.noAgent': '无可选 Agent',
   'skills.fork': 'Fork（可写）',
   'skills.fork.tooltip.fixed': '请在「团队」或「我的资产分配」视图选中一条 skill',
