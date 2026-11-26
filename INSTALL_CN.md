@@ -605,21 +605,23 @@ KNOWLEDGE_CLICKHOUSE_FLUSH_THRESHOLD=50
 KNOWLEDGE_CLICKHOUSE_TTL_DAYS=90
 
 # ═══ 查询接口鉴权（/v3/analytics/*）═══
-# 需要 x-tdai-user-key 匹配这把 key 才能查询；Panel 用 admin user_key 即可
-KNOWLEDGE_ANALYTICS_ADMIN_KEY=<admin sk-mem-... 或自定义字符串>
+# 与其他 /v3 路由共用 KNOWLEDGE_SERVICE_KEY，没有单独的 analytics key；
+# 一键部署由脚本自动生成，并通过 KNOWLEDGE_AUTH_TOKEN 注入 Panel 调用侧。
 ```
 
-`KNOWLEDGE_ANALYTICS_ADMIN_KEY` 留空时,`/v3/analytics/*` 数据接口会返回
-`503`（`/config` 仍可用，Panel 会把 Wiki / Code-Graph 图表显示为"未启用"）；
-只有配好后 Panel 才拿得到数据。填 admin 的 `user_key`（即
-`.admin-key` 文件里那串 `sk-mem-...`）最省事，也可以是任意稳定字符串
-（前端向 Knowledge `/v3/analytics/*` 发请求时会带这把 key）。
+Knowledge 侧没有 `KNOWLEDGE_ANALYTICS_ADMIN_KEY` 这个变量（早期文档里的写法
+是错的）。当 `KNOWLEDGE_SERVICE_KEY` 非空时，`/v3/analytics/*` 与其它非只读
+`/v3` 路由一样必须携带 `Authorization: Bearer $KNOWLEDGE_SERVICE_KEY`
+（只读白名单不含 analytics，缺失即 401）；`deploy/global-images` 启动脚本会
+生成同一把 key，分别注入 Knowledge 校验侧和 Panel 调用侧。`KNOWLEDGE_SERVICE_KEY`
+留空时 analytics 接口不做服务鉴权（仅本机开发可用），但 `/config` 仍要求
+`x-tdai-service-id`。另外：`/config` 在 `KNOWLEDGE_CLICKHOUSE_ENABLED!=true` 时
+返回 `configured: false`，其余数据接口返回 503。
 
 ### 第 4 步：Core 打开 analytics 查询接口
 
 Core 侧要开一个 **只读** 的 CH 查询模块，指向 Proxy 写入的 CH。改
-`MemoryCore/tdai-gateway.yaml`（或 `start-memory-core.sh` 使用的 yaml
-文件）:
+`MemoryCore/tdai-gateway.yaml`（`analytics.clickhouse`，仓库里默认 `enabled: false`）：
 
 ```yaml
 analytics:
@@ -631,14 +633,43 @@ analytics:
     database: "context_proxy"           # 跟 Proxy 的 database 一致
 ```
 
+> 💡 走 `deploy/global-images/start-memory-core.sh` 时，该文件每次启动都会被
+> **重新生成**（默认在 `.memory-core-config/tdai-gateway.yaml`，可用
+> `MEMORY_CORE_CONFIG_DIR` 改目录），所以要把上面这段加到脚本的 YAML 模板里才
+> 持久；或者在你自己的 `docker run` 里用 `ANALYTICS_CLICKHOUSE_ENABLED` /
+> `ANALYTICS_CLICKHOUSE_ENDPOINT` / `ANALYTICS_CLICKHOUSE_DATABASE` /
+> `ANALYTICS_CLICKHOUSE_USERNAME` / `ANALYTICS_CLICKHOUSE_PASSWORD` 注入
+> （环境变量优先于 yaml）。注意脚本本身**不会**透传这些变量，写进 `.env`
+> 不会生效。
+
 这段跟 Core 原有的 `observability.clickhouse`（OTel 导出到 `tdai_eval`）
 **完全独立**：那个是把 Core 自己产生的 trace 往外发的旁路，这个是让
 Core 反向去查 Proxy 已经写好的埋点库。
 
 配好后 Core 会额外暴露 16 个 `/v3/analytics/*` 只读端点，Panel 拿到数据
-后渲染出 session-init / tool-call / usage 各类图表。
+后渲染出 session-init / tool-call / usage 各类图表。除 `config` 外都要求
+`x-tdai-user-key` 是 `system_admin`，CH 未配置时返回 503。
 
-### 第 5 步：重启三件套并验证
+> ⚠️ 用 `deploy/global-images` 的 `memory-core` 镜像时还有一处前置条件：
+> 该镜像用 `--omit=optional` 构建，`@clickhouse/client`（`optionalDependencies`）
+> 不随镜像发布，Core 读 CH 会失败（日志 `[analytics-ch] init failed`,
+> `/config` 仍报 `configured: true`）。需要按 `MemoryCore/Dockerfile`
+> 自建镜像并把 `@clickhouse/client` 移入正式依赖。
+
+### 第 5 步：一键部署打开 Panel 入口，重启并验证
+
+Panel 的「数据分析」入口由 **Panel 侧开关** 控制，默认关闭；一键部署时写在
+`deploy/global-images/.env`，`start-memory-hub.sh` 会把它透传进 memory-hub 容器：
+
+```bash
+# deploy/global-images/.env
+PANEL_FEATURE_ANALYTICS_ENABLED=true
+```
+
+入口可见需要同时满足三层（缺一即隐藏）：
+① 该开关为 `true`（否则前端根本不发 CH 探测）；
+② 以 `system_admin` 登录；
+③ Core 的 `/v3/analytics/config` 返回 `configured: true` 且 `reachable: true`。
 
 ```bash
 # 重启（如果走一键部署）
@@ -646,32 +677,44 @@ Core 反向去查 Proxy 已经写好的埋点库。
 ./start-all.sh
 ```
 
-验证顺序：
+验证顺序（在 `deploy/global-images` 目录下执行，从 `.env` 读端口与密钥，
+不把 key 写进命令行历史）：
 
 ```bash
-# Core 探针：configured=true 表示 analytics 模块已启用
-curl -s http://localhost:8420/v3/analytics/config \
-  -H "x-tdai-service-id: default" \
-  -H "x-tdai-user-key: <admin sk-mem-...>" | jq
+set -a; . ./.env; set +a
 
-# Knowledge 探针（无需 user_key）
-curl -s http://localhost:8424/v3/analytics/config \
-  -H "x-tdai-service-id: default" | jq
+# Core 探针：configured=true 表示 analytics 模块已启用；reachable=false 表示 CH 连不上
+curl -s "http://localhost:${MEMORY_CORE_PORT:-8420}/v3/analytics/config" \
+  -H "x-tdai-service-id: default" | jq '.data'
+
+# Knowledge 探针：/config 不需要 x-tdai-user-key，但需要服务 Bearer
+curl -s "http://localhost:${KNOWLEDGE_PORT:-8424}/v3/analytics/config" \
+  -H "x-tdai-service-id: default" \
+  -H "Authorization: Bearer ${KNOWLEDGE_SERVICE_KEY}" | jq '.data'
 ```
 
-两条都返回 `{"configured": true, ...}` 才算通。之后打开 Panel
-「数据分析」页，就能看到 Proxy / Knowledge 各类工具调用汇总；如果任一端
-返回 `configured: false`，Panel 会把对应图表显示为"未启用",不会报错。
+两条都返回 `"configured": true` 才算通（`code` 为 `0`）。之后用 system_admin
+打开 Panel「数据分析」页就能看到汇总；如果任一端返回 `configured: false`，
+Panel 会把对应图表显示为"未启用",不会报错。
 
 **排查小抄。**
 
+- 开了 `PANEL_FEATURE_ANALYTICS_ENABLED=true` 仍看不到菜单 → 依次检查：
+  容器内是否真的拿到该变量（`docker exec tdai-memory-hub printenv
+  PANEL_FEATURE_ANALYTICS_ENABLED`；老容器要重启才会生效）、是否 system_admin
+  登录、Core `/config` 是否 `configured: true` 且 `reachable: true`（任一项
+  不满足前端都会隐藏入口）
 - Panel 显示"未启用"或"暂无数据" → 先 `curl` 两个 `/config`,
   哪端 `configured: false` 就先修哪端的 CH 配置
 - Proxy 有请求但 Core 查不到 → 十有八九 Core 的
   `analytics.clickhouse.database` / `endpoint` 跟 Proxy 的
   `clickhouse.database` / `url` 不一致
-- Knowledge `/v3/analytics/*` 401 → `KNOWLEDGE_ANALYTICS_ADMIN_KEY`
-  没配或者跟 Panel 传的 `x-tdai-user-key` 对不上
+- Core `/config` 返回 `configured: true` 但 `reachable: false` → CH 端点/库/用户名
+  密码不对，或 core 镜像缺 `@clickhouse/client`（见第 4 步说明，
+  `docker logs tdai-memory-core | grep analytics-ch`）
+- Knowledge `/v3/analytics/*` 401 → 请求缺少 `Authorization`，或
+  `KNOWLEDGE_SERVICE_KEY`（Knowledge 校验侧）与 `KNOWLEDGE_AUTH_TOKEN`
+  （Panel 调用侧）不一致；`KNOWLEDGE_ANALYTICS_ADMIN_KEY` 不是真实变量，不要配
 
 ## 停止 / 清理
 

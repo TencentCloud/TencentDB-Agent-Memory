@@ -242,6 +242,22 @@ gateway_endpoint）就把 `MEMORY_HUB_PROXY_PUBLIC_URL` 显式设为空字符串
 
 `proxy` 默认关闭 `auth` / `sessionInit` / `costGuard`（这些依赖内部服务），只做纯转发 + `tdai-memory` 上下文注入（injector 名称，非容器名）。要开启完整流水线，需要另行配置 —— 参见 `context_proxy/config.example.yaml`。
 
+## 数据分析
+
+Panel 的「数据分析」入口**默认关闭**，需要三件事同时成立才显示：
+
+1. `.env` 里 `PANEL_FEATURE_ANALYTICS_ENABLED=true`（本脚本会把它透传进
+   memory-hub 容器；改完必须 `./start-all.sh` 重建容器才生效）；
+2. 用 `system_admin` 账号登录 Panel；
+3. Core 侧 analytics ClickHouse 已配置（core 的 `analytics.clickhouse`）且可达 ——
+   开关只是入口闸，CH 没配好时入口仍然隐藏（`start-memory-core.sh` 不透传
+   `ANALYTICS_CLICKHOUSE_*`，别指望写 `.env` 生效）。
+
+此外 `memory-core` 预置镜像用 `--omit=optional` 构建、不带
+`@clickhouse/client`，需要按 `MemoryCore/Dockerfile` 自建镜像才能读 CH。
+ClickHouse 埋点的完整配置步骤与探针命令见
+[安装手册](../../INSTALL_CN.md#可选能力数据分析与可观测性默认关闭)。
+
 ## 常见问题
 
 **Q: `./start-all.sh` 卡在 wait_healthy？**

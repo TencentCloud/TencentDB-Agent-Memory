@@ -28,6 +28,14 @@ MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 # 确保 Panel ↔ Knowledge 服务间鉴权 key 存在（首次自动生成并回写 .env）
 ensure_knowledge_service_key
 
+# Panel「数据分析」入口开关（默认关闭，保持 Panel 自身默认语义）。
+# Panel 侧 PANEL_FEATURE_ANALYTICS_ENABLED 默认 false：不显式透传的话，.env 里设了
+# 也不会进容器（docker run 不继承宿主机 env），入口永远出不来。
+# 注意：开关只是第一道闸；页面内容还依赖 Core 侧 analytics ClickHouse（由
+# start-memory-core.sh 生成的 yaml 配置，本脚本与 start-memory-core.sh 都不透传
+# ANALYTICS_CLICKHOUSE_*），详见 INSTALL「可选能力：数据分析与可观测性」。
+PANEL_FEATURE_ANALYTICS_ENABLED="${PANEL_FEATURE_ANALYTICS_ENABLED:-false}"
+
 # Panel UI "客户端接入地址"卡片显示的 base URL（供 CodeBuddy / ClaudeCode 拷贝使用）。
 # 开源本地部署 core 和 proxy 分开跑，客户端要接的是 proxy，不是 core/gateway。
 #
@@ -97,6 +105,7 @@ $DOCKER run -d --name "$CONTAINER" \
   -p "${KNOWLEDGE_PORT}:8424" \
   -v "${PANEL_VOLUME}:/data/knowledge" \
   -e PANEL_PORT=8125 \
+  -e PANEL_FEATURE_ANALYTICS_ENABLED="$PANEL_FEATURE_ANALYTICS_ENABLED" \
   -e KNOWLEDGE_PORT=8424 \
   -e KNOWLEDGE_PUBLIC_BASE_URL="$KNOWLEDGE_PUBLIC_BASE_URL" \
   -e KNOWLEDGE_SERVICE_KEY="$KNOWLEDGE_SERVICE_KEY" \
@@ -118,3 +127,11 @@ wait_healthy "$CONTAINER" 120
 ok "memory-hub 已启动"
 ok "  Panel UI  → http://localhost:${PANEL_PORT}/"
 ok "  KS Health → http://localhost:${KNOWLEDGE_PORT}/health"
+
+# 只透传入口开关，不校验 CH：内核 CH 未配置时 Panel 会自行隐藏入口，
+# 这里只提示它还差哪一步，避免「开了开关却看不到页面」的误解。
+if [[ "$PANEL_FEATURE_ANALYTICS_ENABLED" == "true" ]]; then
+  info "Panel「数据分析」入口已开启（PANEL_FEATURE_ANALYTICS_ENABLED=true）"
+  info "  还需内核侧 analytics ClickHouse（core 的 analytics.clickhouse），否则入口仍隐藏"
+  info "  且需以 system_admin 登录；详见 INSTALL「可选能力：数据分析与可观测性」"
+fi
