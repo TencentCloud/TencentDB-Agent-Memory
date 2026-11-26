@@ -8,7 +8,7 @@
  * 后续可在 TABS 数组里追加其他 Tab（如通知、偏好设置等）。
  *
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -25,6 +25,7 @@ import {
 } from 'tea-icons-react';
 import { userConfigApi, type AssetCapabilityKey } from '@/lib/teamApi';
 import { tea } from '@/lib/tea-bridge';
+import { createToggleSaver } from '@/lib/toggle-save-state';
 
 // ===== 资源模块 =====
 
@@ -67,6 +68,10 @@ const RESOURCE_MODULES: ResourceModule[] = [
   },
 ];
 
+function moduleIdOf(key: AssetCapabilityKey): string {
+  return RESOURCE_MODULES.find((m) => m.paramKey === key)?.id ?? key;
+}
+
 type SettingsTab = 'permissions';
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
@@ -80,8 +85,29 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     chat_memory: true,
   }));
   const [loading, setLoading] = useState(true);
-  const [savingKey, setSavingKey] = useState<AssetCapabilityKey | null>(null);
+  const [savingKeys, setSavingKeys] = useState<Partial<Record<AssetCapabilityKey, boolean>>>({});
+  const [toggleErrors, setToggleErrors] = useState<Partial<Record<AssetCapabilityKey, string>>>({});
   const [error, setError] = useState('');
+  // 最新开关值的同步镜像，供保存协调器在请求结束时判断是否过期（避免读到闭包旧值）。
+  const enabledRef = useRef(enabled);
+  const [saver] = useState(() =>
+    createToggleSaver<AssetCapabilityKey>({
+      getValue: (key) => enabledRef.current[moduleIdOf(key)] ?? false,
+      setValue: (key, value) => {
+        const id = moduleIdOf(key);
+        enabledRef.current = { ...enabledRef.current, [id]: value };
+        setEnabled((prev) => ({ ...prev, [id]: value }));
+      },
+      setSaving: (key, saving) => setSavingKeys((prev) => ({ ...prev, [key]: saving })),
+      setError: (key, message) =>
+        setToggleErrors((prev) => {
+          const nextErrors = { ...prev };
+          if (message === null) delete nextErrors[key];
+          else nextErrors[key] = message;
+          return nextErrors;
+        }),
+    }),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -90,12 +116,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     userConfigApi.getAssetCapabilities()
       .then((cfg) => {
         if (cancelled) return;
-        setEnabled({
+        const loaded = {
           wiki: cfg['llm_wiki.enabled'],
           code: cfg['code_graph.enabled'],
           skill: cfg['skill.enabled'],
           chat_memory: cfg['chat_memory.enabled'],
-        });
+        };
+        enabledRef.current = loaded;
+        setEnabled(loaded);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -107,20 +135,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   async function handleToggle(mod: ResourceModule, next: boolean) {
-    const previous = enabled[mod.id];
-    setEnabled((prev) => ({ ...prev, [mod.id]: next }));
-    setSavingKey(mod.paramKey);
-    setError('');
-    try {
-      await userConfigApi.setAssetCapability(mod.paramKey, next);
+    const result = await saver.submit(mod.paramKey, next, () =>
+      userConfigApi.setAssetCapability(mod.paramKey, next),
+    );
+    if (result.status === 'saved') {
       tea.notify.success(t(next ? 'settings.notify.enabled' : 'settings.notify.disabled', { label: t(mod.labelKey) }));
-    } catch (e) {
-      setEnabled((prev) => ({ ...prev, [mod.id]: previous }));
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      tea.notify.error(t('settings.notify.saveFailed', { msg }));
-    } finally {
-      setSavingKey(null);
+    } else if (result.status === 'failed') {
+      tea.notify.error(t('settings.notify.saveFailed', { msg: result.message }));
     }
   }
 
@@ -165,7 +186,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         <Text style={{ fontSize: 13, fontWeight: 500 }}>
                           {t(mod.labelKey)}
                         </Text>
-                        {savingKey === mod.paramKey ? (
+                        {savingKeys[mod.paramKey] ? (
                           <Tag theme="warning" variant="soft" size="sm">{t('settings.tag.saving')}</Tag>
                         ) : enabled[mod.id] ? (
                           <Tag theme="success" variant="soft" size="sm">{t('settings.tag.enabled')}</Tag>
@@ -176,11 +197,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       <Text theme="weak" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
                         {t(mod.descKey)}
                       </Text>
+                      {toggleErrors[mod.paramKey] && (
+                        <Text theme="danger" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
+                          {toggleErrors[mod.paramKey]}
+                        </Text>
+                      )}
                     </div>
                   </div>
                   <Switch
                     value={enabled[mod.id]}
-                    disabled={loading || savingKey === mod.paramKey}
+                    disabled={loading || savingKeys[mod.paramKey]}
                     onChange={(v) => void handleToggle(mod, v)}
                   />
                 </div>
