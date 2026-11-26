@@ -517,161 +517,83 @@ pipeline 时才有意义。
 
 ## 可选能力：数据分析与可观测性（默认关闭）
 
-**做什么用。** Panel 里的「数据分析」页会把这套系统的运行情况汇成看板：
-Skill / 记忆 / Knowledge 各类云端资产工具被调用了多少次、命中率如何、
-LLM 侧的 token 与用量分布、按团队 / Agent 的对比等等，用来评估记忆资产
-到底沉淀出了什么效果、哪些接入姿势有问题。
+Panel 的「数据分析」页展示记忆、Skill、Wiki 和 CodeGraph 的工具调用、模型用量及会话统计。
+Proxy 写入记忆、Skill 和模型用量埋点。Knowledge 写入并查询自己的工具调用埋点。
+Core 查询 Proxy 写入的表。
 
-**默认关闭。** 这套能力**不会自动跑起来** —— 它由三个服务分工完成，
-任何一个没配 ClickHouse 都会让对应数据缺失：
+### 第 1 步：准备 ClickHouse
 
-| 角色 | 服务 | 干什么 |
-|---|---|---|
-| 采集（Memory / Skill 工具调用） | **Proxy** | 每次调用云端 memory / skill 工具时把埋点写到 ClickHouse `usage_logs` / `tool_call_logs` |
-| 采集（Wiki / Code-Graph 工具调用） | **Knowledge** | 每次调用 wiki / code-graph 工具时写到 ClickHouse `tool_call_logs` |
-| 查询接口 | **Core** | 提供 `/v3/analytics/*` 只读接口，从 Proxy 写入的 ClickHouse 库里聚合出各种维度的图表数据 |
-| 查询接口 | **Knowledge** | 提供 `/v3/analytics/*` 只读接口,读自己写入的 `tool_call_logs` |
-| 展示 | **Panel** | 启动时探测 Core / Knowledge 的 `/v3/analytics/config`，任一端返回 `configured: true` 才显示对应图表；否则显示"未启用" |
-
-也就是说：**Proxy + Knowledge 写数据，Core + Knowledge 提供查询接口，Panel 展示**。
-你可以按需只开一部分（比如只想看 Skill / 记忆的调用统计而不管 Wiki，
-那 Knowledge 侧的埋点可以先不开）。
-
-> ⚠️ 三个服务的 ClickHouse 可以是同一实例，也可以拆开；Core 的
-> `analytics.clickhouse.endpoint` 必须指向 **Proxy 写入的那个 CH**，
-> 否则 Core 查不到 Proxy 的埋点数据。
-
-### 第 1 步：准备一个 ClickHouse 实例
-
-自己起一个 ClickHouse（或者复用现有的），确保 HTTP 端口（默认 8123）
-可达。给 Proxy / Knowledge 用到的库最简单可以都用同一个（比如
-`context_proxy`）；也可以拆库。
+可以复用各容器能够访问的 HTTP 端点，也可以在同一 Docker 网络启动 ClickHouse。
+在 `deploy/global-images` 下运行以下示例，并替换密码：
 
 ```bash
-# 举例：一条命令拉一个本地 ClickHouse
-docker run -d --name tdai-clickhouse \
-  -p 8123:8123 -p 9000:9000 \
+docker network inspect tdai-memory-stack >/dev/null 2>&1 ||
+  docker network create tdai-memory-stack
+
+docker run -d --name tdai-clickhouse --network tdai-memory-stack \
   -e CLICKHOUSE_DB=context_proxy \
   -e CLICKHOUSE_USER=default \
-  -e CLICKHOUSE_PASSWORD=<your-ch-password> \
+  -e 'CLICKHOUSE_PASSWORD=replace-with-your-clickhouse-password' \
   clickhouse/clickhouse-server:latest
 ```
 
-表结构由 Proxy / Knowledge 首次写入时自动 `CREATE TABLE IF NOT EXISTS`
-建好，不用手工建表。
+### 第 2 步：在 `.env` 中启用数据分析
 
-### 第 2 步：Proxy 开启 ClickHouse 上报
-
-编辑 proxy 的 `config.yaml`（`start-proxy.sh` 生成的模板里已经有
-`clickhouse:` 段，默认 `enabled: false`），把它改成：
-
-```yaml
-clickhouse:
-  enabled: true
-  url: "http://<ch-host>:8123"       # ClickHouse HTTP endpoint
-  database: context_proxy            # 库名，跟下面 Core 的 database 保持一致
-  table: usage_logs                  # 用量表名
-  rawTable: usage_raw                # 原始用量追溯表
-  user: default
-  password: "<your-ch-password>"
-  flushIntervalMs: 5000
-  flushThreshold: 50
-  ttlDays: 30
-```
-
-Proxy 会把 memory / skill 相关工具调用与 LLM token 用量按 turn 写进
-`usage_logs` 与 `tool_call_logs` 两张表。写入失败静默降级，不影响
-Proxy 转发主链路。
-
-> 💡 走 `deploy/global-images/start-proxy.sh` 时，生成的 `config.yaml`
-> 每次启动都会被覆盖。要么改脚本里 YAML 模板加上 `clickhouse` 段，
-> 要么用 `PROXY_CONFIG_DIR` 指到你自己维护的 `config.yaml` 目录。
-
-### 第 3 步：Knowledge 开启 ClickHouse 上报 + 查询接口
-
-Knowledge 的 CH 配置走 `.env`，改 `MemoryKnowledge/.env`（或
-`start-memory-hub.sh` 使用的 env 文件）：
+一键部署时，将以下配置加入 `deploy/global-images/.env`。请使用包含数据分析
+ClickHouse 客户端的 `memory-core` 镜像。使用外部数据库时，填写容器可访问的端点。
 
 ```bash
-# ═══ 埋点上报（写入 tool_call_logs）═══
-KNOWLEDGE_CLICKHOUSE_ENABLED=true
-KNOWLEDGE_CLICKHOUSE_URL=http://<ch-host>:8123
-KNOWLEDGE_CLICKHOUSE_DATABASE=context_proxy      # 跟 Proxy 保持一致
-KNOWLEDGE_CLICKHOUSE_TABLE=tool_call_logs
-KNOWLEDGE_CLICKHOUSE_USER=default
-KNOWLEDGE_CLICKHOUSE_PASSWORD=<your-ch-password> # 有密码时必填
-KNOWLEDGE_CLICKHOUSE_FLUSH_INTERVAL_MS=5000
-KNOWLEDGE_CLICKHOUSE_FLUSH_THRESHOLD=50
-KNOWLEDGE_CLICKHOUSE_TTL_DAYS=90
-
-# ═══ 查询接口鉴权（/v3/analytics/*）═══
-# 需要 x-tdai-user-key 匹配这把 key 才能查询；Panel 用 admin user_key 即可
-KNOWLEDGE_ANALYTICS_ADMIN_KEY=<admin sk-mem-... 或自定义字符串>
+ANALYTICS_CLICKHOUSE_ENABLED=true
+ANALYTICS_CLICKHOUSE_ENDPOINT=http://tdai-clickhouse:8123
+ANALYTICS_CLICKHOUSE_DATABASE=context_proxy
+ANALYTICS_CLICKHOUSE_USERNAME=default
+ANALYTICS_CLICKHOUSE_PASSWORD='replace-with-your-clickhouse-password'
+PANEL_FEATURE_ANALYTICS_ENABLED=true
 ```
 
-`KNOWLEDGE_ANALYTICS_ADMIN_KEY` 留空时,`/v3/analytics/*` 数据接口会返回
-`503`（`/config` 仍可用，Panel 会把 Wiki / Code-Graph 图表显示为"未启用"）；
-只有配好后 Panel 才拿得到数据。填 admin 的 `user_key`（即
-`.admin-key` 文件里那串 `sk-mem-...`）最省事，也可以是任意稳定字符串
-（前端向 Knowledge `/v3/analytics/*` 发请求时会带这把 key）。
+启动脚本使用这些参数生成 Proxy 的 `clickhouse` 配置，同时通过
+`ANALYTICS_CLICKHOUSE_*` 环境变量让 Core 查询同一端点和数据库。Knowledge
+默认复用该连接。可设置 `KNOWLEDGE_CLICKHOUSE_ENABLED=false` 关闭 Knowledge
+的埋点和查询，或通过 `KNOWLEDGE_CLICKHOUSE_URL`、`KNOWLEDGE_CLICKHOUSE_DATABASE`、
+`KNOWLEDGE_CLICKHOUSE_USER` 和 `KNOWLEDGE_CLICKHOUSE_PASSWORD` 覆盖连接信息。
+要在 Panel 看到 Knowledge 工具调用，Knowledge 须写入 Core 查询的同一数据库，并使用
+默认的 `tool_call_logs` 表。使用独立数据库时，可通过 Knowledge 的分析 API 查询。
 
-### 第 4 步：Core 打开 analytics 查询接口
+如使用自定义部署，分别配置 Proxy 的 `clickhouse`、Core 的 `analytics.clickhouse`
+（或 `ANALYTICS_CLICKHOUSE_*` 环境变量）和 Knowledge 的 `KNOWLEDGE_CLICKHOUSE_*`，
+并在 Panel 环境设置 `PANEL_FEATURE_ANALYTICS_ENABLED=true`。这套配置独立于 Core 的
+`observability.clickhouse` trace 导出。Proxy 和 Knowledge 会自动创建埋点表。
 
-Core 侧要开一个 **只读** 的 CH 查询模块，指向 Proxy 写入的 CH。改
-`MemoryCore/tdai-gateway.yaml`（或 `start-memory-core.sh` 使用的 yaml
-文件）:
+### 第 3 步：重启并验证
 
-```yaml
-analytics:
-  clickhouse:
-    enabled: true
-    endpoint: "http://<ch-host>:8123"   # 必须指向 Proxy 写入的同一个 CH
-    username: "default"
-    password: "<your-ch-password>"      # 通过 Secret / .env 注入
-    database: "context_proxy"           # 跟 Proxy 的 database 一致
-```
-
-这段跟 Core 原有的 `observability.clickhouse`（OTel 导出到 `tdai_eval`）
-**完全独立**：那个是把 Core 自己产生的 trace 往外发的旁路，这个是让
-Core 反向去查 Proxy 已经写好的埋点库。
-
-配好后 Core 会额外暴露 16 个 `/v3/analytics/*` 只读端点，Panel 拿到数据
-后渲染出 session-init / tool-call / usage 各类图表。
-
-### 第 5 步：重启三件套并验证
+在 `deploy/global-images` 下执行 `./start-all.sh`，用新配置重建容器。
+然后在 Bash 中运行以下探针：
 
 ```bash
-# 重启（如果走一键部署）
-./stop-all.sh
-./start-all.sh
+source ./.env
+core_auth=()
+if [[ -n "${MEMORY_CORE_GATEWAY_API_KEY:-}" ]]; then
+  core_auth=(-H "Authorization: Bearer $MEMORY_CORE_GATEWAY_API_KEY")
+fi
+
+curl -fsS "http://localhost:${MEMORY_CORE_PORT:-8420}/v3/analytics/config" \
+  -H 'x-tdai-service-id: default' "${core_auth[@]}" | jq '.data'
+
+curl -fsS "http://localhost:${KNOWLEDGE_PORT:-8424}/v3/analytics/config" \
+  -H 'x-tdai-service-id: default' \
+  -H "Authorization: Bearer $KNOWLEDGE_SERVICE_KEY" | jq '.data'
 ```
 
-验证顺序：
+以系统管理员身份登录 Panel。「数据分析」入口要求
+`PANEL_FEATURE_ANALYTICS_ENABLED=true`，且 Core 探针返回
+`configured: true` 和 `reachable: true`。Panel 通过 Core 读取图表数据，包括写入
+共享数据库的 Knowledge 工具调用。Knowledge 探针用于检查其埋点写入和分析 API 使用
+的连接。记录工具调用或模型请求后，相应数据才会出现在图表中。
 
-```bash
-# Core 探针：configured=true 表示 analytics 模块已启用
-curl -s http://localhost:8420/v3/analytics/config \
-  -H "x-tdai-service-id: default" \
-  -H "x-tdai-user-key: <admin sk-mem-...>" | jq
-
-# Knowledge 探针（无需 user_key）
-curl -s http://localhost:8424/v3/analytics/config \
-  -H "x-tdai-service-id: default" | jq
-```
-
-两条都返回 `{"configured": true, ...}` 才算通。之后打开 Panel
-「数据分析」页，就能看到 Proxy / Knowledge 各类工具调用汇总；如果任一端
-返回 `configured: false`，Panel 会把对应图表显示为"未启用",不会报错。
-
-**排查小抄。**
-
-- Panel 显示"未启用"或"暂无数据" → 先 `curl` 两个 `/config`,
-  哪端 `configured: false` 就先修哪端的 CH 配置
-- Proxy 有请求但 Core 查不到 → 十有八九 Core 的
-  `analytics.clickhouse.database` / `endpoint` 跟 Proxy 的
-  `clickhouse.database` / `url` 不一致
-- Knowledge `/v3/analytics/*` 401 → `KNOWLEDGE_ANALYTICS_ADMIN_KEY`
-  没配或者跟 Panel 传的 `x-tdai-user-key` 对不上
+如果 Knowledge 探针返回 401，请核对 `.env` 中的 Bearer 密钥。启动脚本首次运行时
+会生成 `KNOWLEDGE_SERVICE_KEY`，并将相同的值作为 `KNOWLEDGE_AUTH_TOKEN` 传给 Panel。
+如果已启用的服务返回 `reachable: false`，请从容器网络检查 ClickHouse 的 HTTP 端点、
+数据库和凭据。
 
 ## 停止 / 清理
 

@@ -15,6 +15,7 @@ source "$SCRIPT_DIR/_lib.sh"
 
 load_env
 require_vars MEMORY_CORE_IMAGE MEMORY_CORE_PORT MEMORY_CORE_VOLUME
+check_analytics_clickhouse
 
 # ── Gateway 内部管理凭据 ─────────────────────────────────────────
 # 用 ${VAR-default}（不是 :-default）：允许 .env 里显式设为空字符串来关闭 Bearer gate。
@@ -252,6 +253,11 @@ $DOCKER run -d --name "$CONTAINER" \
   -e TDAI_GATEWAY_API_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
   -e TDAI_DATA_DIR=/data/tdai-memory \
   -e STORE_MODE="$MEMORY_CORE_STORE_MODE" \
+  -e ANALYTICS_CLICKHOUSE_ENABLED \
+  -e ANALYTICS_CLICKHOUSE_ENDPOINT \
+  -e ANALYTICS_CLICKHOUSE_USERNAME \
+  -e ANALYTICS_CLICKHOUSE_PASSWORD \
+  -e ANALYTICS_CLICKHOUSE_DATABASE \
   ${JEV_ENV_ARGS[@]+"${JEV_ENV_ARGS[@]}"} \
   ${MONGO_ENV_ARGS[@]+"${MONGO_ENV_ARGS[@]}"} \
   "$MEMORY_CORE_IMAGE" >/dev/null
