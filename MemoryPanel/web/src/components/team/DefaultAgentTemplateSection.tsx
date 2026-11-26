@@ -9,13 +9,14 @@
  * 仅 system_admin 可调用，因此本组件只在 isAdmin=true 时渲染。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from 'tea-component';
 import { AddIcon, EditIcon } from 'tea-icons-react';
 import { agentsApi, type AgentTemplateConfig } from '@/lib/teamApi';
 import { tea } from '@/lib/tea-bridge';
 import { getErrorMessage } from '@/lib/error-message';
+import { canEditTemplate, createLatestRequestGuard, runLatestRequest } from '@/lib/latest-request';
 import DefaultAgentTemplateDialog from './DefaultAgentTemplateDialog';
 
 export default function DefaultAgentTemplateSection({
@@ -30,40 +31,59 @@ export default function DefaultAgentTemplateSection({
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!teamId) return;
-    setLoading(true);
-    try {
-      const data = await agentsApi.getDefaultTemplate(teamId);
-      // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
-      setTemplate(data && data.name ? data : null);
-    } catch (err) {
-      tea.notify.error(getErrorMessage(err));
-      setTemplate(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [teamId]);
+  // 请求序号保护：仅最新一次请求可写 template / loading / 错误提示；
+  // 团队切换或卸载时 cleanup 使旧请求失效（调用处另有 key={teamId} 强制重挂载）。
+  const [guard] = useState(createLatestRequestGuard);
+  // 当前挂载且生效的团队；切换 / 卸载后置空，用于丢弃旧团队弹窗的保存回调
+  const activeTeamRef = useRef<string | null>(null);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    activeTeamRef.current = teamId;
+    if (!teamId) return;
+    void runLatestRequest(guard, () => agentsApi.getDefaultTemplate(teamId), {
+      onStart: () => {
+        // 清掉上一个团队的模板与编辑状态，避免加载期间展示 / 编辑旧数据
+        setTemplate(null);
+        setShowDialog(false);
+        setLoading(true);
+      },
+      // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
+      onSuccess: (data) => setTemplate(data && data.name ? data : null),
+      onError: (err) => {
+        tea.notify.error(getErrorMessage(err));
+        setTemplate(null);
+      },
+      onSettled: () => setLoading(false),
+    });
+    return () => {
+      activeTeamRef.current = null;
+      guard.cancel();
+    };
+  }, [teamId, guard]);
 
-  function handleSaved(saved: AgentTemplateConfig) {
+  function handleSaved(savedTeamId: string, saved: AgentTemplateConfig) {
+    // 保存进行中切换团队 / 卸载后不再回写状态
+    if (activeTeamRef.current !== savedTeamId) return;
     setTemplate(saved);
     setShowDialog(false);
     tea.notify.success(t('defaultAgent.notify.saved'));
   }
 
   const hasTemplate = !!template;
+  const editable = canEditTemplate(loading);
   const actionButton = hasTemplate ? (
-    <Button onClick={() => setShowDialog(true)} title={t('defaultAgent.edit.tooltip')}>
+    <Button
+      onClick={() => setShowDialog(true)}
+      disabled={!editable}
+      title={t('defaultAgent.edit.tooltip')}
+    >
       <EditIcon size={14} /> {t('defaultAgent.edit')}
     </Button>
   ) : (
     <Button
       type="primary"
       onClick={() => setShowDialog(true)}
+      disabled={!editable}
       title={t('defaultAgent.create.tooltip')}
     >
       <AddIcon size={14} /> {t('defaultAgent.create')}
@@ -101,12 +121,12 @@ export default function DefaultAgentTemplateSection({
         </div>
       )}
 
-      {showDialog && (
+      {showDialog && editable && (
         <DefaultAgentTemplateDialog
           team={{ team_id: teamId, name: teamName }}
           initial={template}
           onClose={() => setShowDialog(false)}
-          onSaved={handleSaved}
+          onSaved={(saved) => handleSaved(teamId, saved)}
         />
       )}
     </div>

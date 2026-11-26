@@ -292,6 +292,7 @@ export default function TeamManagementPanel({
           {/* === 默认 Agent 模板（仅全局 admin 可见）=== */}
           {showAgents && _isAdmin && (
             <DefaultAgentTemplateSection
+              key={activeTeam.team_id}
               teamId={activeTeam.team_id}
               teamName={activeTeam.name}
             />
