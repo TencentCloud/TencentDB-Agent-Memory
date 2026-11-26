@@ -18,6 +18,12 @@ import { resetOnboarding } from '@/layouts/OnboardingGuide';
 import { metaInstancesApi } from '@/lib/teamApi';
 import { getPanelSession } from '@/lib/panelSession';
 import { tea } from '@/lib/tea-bridge';
+import {
+  piSetupSnippet,
+  proxyEndpoint,
+  type ManualIdeId,
+  type ProxyMode,
+} from '@/lib/proxyEndpoint';
 import { CopyButton } from './CopyButton';
 import { MemCommands } from './MemCommands';
 import './style.css';
@@ -25,8 +31,6 @@ import './style.css';
 type MainTab = 'quick' | 'practice' | 'commands';
 type QuickTab = 'download' | 'ide' | 'history';
 type PracticeId = 'team' | 'personal';
-type ManualIdeId = 'claude' | 'codebuddy' | 'codex' | 'workbuddy' | 'dsh' | 'hermes' | 'openclaw';
-type ProxyMode = 'default' | 'analyse';
 
 interface PracticeStep {
   /** i18n key（guide.practice.team.stepN.title 等） */
@@ -49,16 +53,11 @@ const QUICK_SETUP_SKILL_PREP = 'cp -r agents ~/agents';
 const QUICK_SETUP_SKILL_PROMPT =
   '请阅读 ~/agents/skills/setup-proxy/SKILL.md，然后按照里面的步骤引导我完成 Agent 接入 Memory Proxy 的配置。';
 const HISTORY_IMPORT_SCRIPT = 'tsx agents/asset-import.ts --source <agent> --agent-id <id> --team-id <tid>';
+/** 历史导入 source —— 与 agents/asset-import.ts 的 `ADAPTERS` 一致；Pi 无 adapter，不在此列。 */
 const HISTORY_SOURCES = 'claude-code, codebuddy, codex, workbuddy, dsh, hermes, openclaw';
 const KEY_PLACEHOLDER = '<your-team-memory-api-key>';
 
-/** 接入地址：{base}/{agent}/{instanceId}(/analyse)，与 Proxy 白名单形态一致。
- * 注意 Claude Code 的代理路由段是 `claude-code`（见 MemoryProxy whitelist.ts 的
- * AGENT_PREFIX_RE 与 setup-proxy.sh），而本页 IDE 标识为 `claude`，需归一化。 */
-function proxyEndpoint(base: string, agent: ManualIdeId, instanceId: string, mode: ProxyMode) {
-  const pathAgent = agent === 'claude' ? 'claude-code' : agent;
-  return `${base}/${pathAgent}/${instanceId}${mode === 'analyse' ? '/analyse' : ''}`;
-}
+// 接入地址拼装见 @/lib/proxyEndpoint（纯函数，可单测；Pi 的 /v1 规则也在那里）。
 
 interface ManualIde {
   id: ManualIdeId;
@@ -145,6 +144,23 @@ const MANUAL_IDES: ManualIde[] = [
       'guide.manual.note.openclaw.0',
       'guide.manual.note.openclaw.1',
       'guide.manual.note.openclaw.2',
+    ],
+  },
+  {
+    // Pi 不走「配置文件」：Pi 读不到 settings.json 式的模型表，接入方式是
+    // 载入 pi-plugin 扩展（扩展在 load 时读 TDAI_* env 并注册 `tdai` provider），
+    // 再用 `--provider tdai` 启动。file 因此是扩展目录而非配置文件。
+    id: 'pi',
+    name: 'Pi',
+    file: 'MemoryCore/pi-plugin（扩展目录）',
+    protocol: 'OpenAI Chat',
+    config: (base, instanceId, mode, model) =>
+      piSetupSnippet(base, instanceId, model, KEY_PLACEHOLDER, mode),
+    notes: [
+      'guide.manual.note.pi.extension',
+      'guide.manual.note.pi.v1',
+      'guide.manual.note.pi.env',
+      'guide.manual.note.pi.history',
     ],
   },
 ];
@@ -553,9 +569,17 @@ export function GuidePage() {
                       <b>{t('guide.manual.model')}</b>
                       <input
                         value={modelId}
-                        onChange={(event) => setModelId(event.target.value.toLowerCase())}
+                        onChange={(event) =>
+                          // 其它客户端的模型 ID 约定全小写（见 modelHint）；Pi 直接用上游配置的原样 ID
+                          setModelId(
+                            manualIde.id === 'pi' ? event.target.value : event.target.value.toLowerCase(),
+                          )
+                        }
                       />
-                      <small>{t('guide.manual.modelHint')}</small>
+                      {/* Pi 的模型 ID 由 Proxy 上游配置决定，可能含大写 / 斜杠，不能强制小写 */}
+                      <small>
+                        {t(manualIde.id === 'pi' ? 'guide.manual.modelHint.pi' : 'guide.manual.modelHint')}
+                      </small>
                     </label>
                     <div className="guide-command secondary">
                       <code>{proxyEndpoint(proxyBase || proxyFallback, manualIde.id, instanceId, proxyMode)}</code>

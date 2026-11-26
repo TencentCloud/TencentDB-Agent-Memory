@@ -1635,6 +1635,7 @@ export const enUS = {
   'guide.manual.title': 'Manual Configuration',
   'guide.manual.model': 'Model ID',
   'guide.manual.modelHint': 'Must be lowercase',
+  'guide.manual.modelHint.pi': 'Use a model ID configured in the Proxy upstream (as-is, case preserved)',
   'guide.manual.fileHint': 'Write to',
 
   // Best practices
@@ -1799,6 +1800,14 @@ export const enUS = {
   'guide.manual.note.openclaw.0': 'Header preselect required: team-id / agent-id / task-id / conversation-id',
   'guide.manual.note.openclaw.1': 'x-conversation-id identifies the current session — change it for each new conversation',
   'guide.manual.note.openclaw.2': 'x-task-id is required in the current version; use "no-task" when there is none',
+  'guide.manual.note.pi.extension':
+    'The extension must be loaded first, otherwise Pi has no tdai provider: run pi -e ./MemoryCore/pi-plugin from the repository root (or symlink it into ~/.pi/agent/extensions/ for auto-discovery)',
+  'guide.manual.note.pi.v1':
+    'The endpoint must end with /v1 (…/pi/<instance ID>/v1): Pi\'s OpenAI Chat client only appends /chat/completions and never inserts /v1',
+  'guide.manual.note.pi.env':
+    'TDAI_USER_KEY takes your personal key from Panel → API Key (not the admin key); TDAI_TEAM_ID / TDAI_AGENT_ID come from the Panel; TDAI_TASK_ID is optional — omit it for broad recall across the whole Agent',
+  'guide.manual.note.pi.history':
+    'Once connected, Pi conversations are captured into team memory automatically; importing historical Pi sessions with asset-import.ts is not supported yet (no pi adapter)',
 
   // ===== Analytics (Observability) =====
   'menu.analytics': 'Observability',
