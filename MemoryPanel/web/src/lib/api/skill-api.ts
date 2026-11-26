@@ -153,6 +153,15 @@ export function createSkill(params: {
 
 // ---- 3.2 update ----
 
+/**
+ * `/v3/skill/update` 全量替换 SKILL.md（乐观锁）。
+ *
+ * `replace_resources` + `resources` 是**同名替换**语义（默认关闭）：置 `true` 时
+ * `resources` 即新版本的资源全集 —— 旧 manifest 中不在集合里的 path 被删除，
+ * 集合内新增/变更的被写入，`skill_id` 不变、`version + 1`、旧版本仍可回读。
+ * 内容与资源都没变时服务端不升版（返回头版本，`version` 与 `expected_version` 相同），
+ * 调用方据此提示"内容未变化"。
+ */
 export function updateSkill(params: {
   user_id: string;
   team_id: string;
@@ -160,6 +169,8 @@ export function updateSkill(params: {
   skill_id: string;
   expected_version: number;
   content: string;
+  replace_resources?: boolean;
+  resources?: SkillResourcePayload[];
 }): Promise<SkillSummary> {
   return skillCall('update', params as unknown as Record<string, unknown>);
 }

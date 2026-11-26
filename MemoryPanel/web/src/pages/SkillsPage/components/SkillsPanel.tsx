@@ -81,6 +81,9 @@ export default function SkillsPanel({
     skills,
     // cache
     skillsWithCache,
+    invalidateSkillDetail,
+    detailRefreshToken,
+    setDetailRefreshToken,
     // handlers
     refresh,
     handleDelete,
@@ -284,6 +287,8 @@ export default function SkillsPanel({
         }
         detail={
           <SkillDetailPane
+            // 同名替换后 skillId 不变，靠 detailRefreshToken 重挂才能拉到新正文
+            key={`${selectedSkillId ?? ''}:${detailRefreshToken}`}
             skillName={selectedSkill?.name ?? null}
             // 传原始 selectedSkillId（独立 state）而非 selectedSkill?.skill_id（列表派生）：
             // 选中即有值，不受 agent/skill 列表加载或刷新时序影响，避免详情面板先闪空态再变加载态。
@@ -310,11 +315,19 @@ export default function SkillsPanel({
           agents={teamAgents}
           agentId={tab === 'fixed' ? selectedAgent : undefined}
           onClose={() => setShowImport(false)}
-          onImported={() => {
+          onImported={(info) => {
             // skill 建成功后，内核数据面 onSkillCreated 钩子会自动登记 asset
             // + 绑定为 owner agent 的 fixed-asset（visibility 默认 private）。
             // 前端不再需要额外调 localStorage 存"我的资产"—— 数据源已经是真后端。
             setShowImport(false);
+            // 同名替换：skill_id 不变但 version / 正文都变了。
+            //   1) 清掉详情缓存（否则 applyCachedDetail 会用旧 version 覆盖列表）；
+            //   2) 递增 token 重挂详情面板（它只在 skillId 变化时重载）。
+            const replaced = info?.replacedSkillIds ?? [];
+            if (replaced.length > 0) {
+              replaced.forEach((id) => invalidateSkillDetail(id));
+              setDetailRefreshToken((n) => n + 1);
+            }
             void refresh();
           }}
         />

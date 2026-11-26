@@ -30,6 +30,11 @@ const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   // 被 unauthorized: invalid_user_key 模式误配成"key 无效"，与真实原因（建号失败）
   // 完全不符，严重误导排查。
   'USER_CREATE_FAILED',
+  // skill 数据面：(team, owner_agent, name) 撞唯一索引 → 42201，message 形如
+  // `SKILL_NAME_DUPLICATE: name 'x' already exists for agent in team`。
+  // 导入链路现在会先探测同名并走"替换"，这里是任何漏网路径（并发导入、探测失败、
+  // 其它调用方）的兜底，避免把英文裸文案直接甩到界面上。
+  'SKILL_NAME_DUPLICATE',
 ]);
 
 /**

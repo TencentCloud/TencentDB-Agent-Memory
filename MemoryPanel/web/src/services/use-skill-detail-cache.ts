@@ -63,6 +63,18 @@ export function useSkillDetailCache(teamId: string | null | undefined) {
   }, [teamId]);
 
   /**
+   * 丢弃某条 skill 的缓存（下次选中/需要时重新拉取）。
+   *
+   * 场景：同名导入替换后 version 变了，但 fixed tab 的列表数据源 `skill/list`
+   * 虽然自带真实 version，`applyCachedDetail` 会用缓存里的旧 version **覆盖**它，
+   * 于是列表上会看到版本号"退回"旧值。替换成功后必须显式失效。
+   */
+  const invalidate = useCallback((skillId: string) => {
+    if (!skillId || !cacheRef.current.delete(skillId)) return;
+    setCacheVersion((n) => n + 1);
+  }, []);
+
+  /**
    * 用缓存里的最新值覆盖 skill 对象的 version / owner_agent_id 字段。
    * 缓存 miss 则原样返回，不影响渲染。
    */
@@ -74,5 +86,5 @@ export function useSkillDetailCache(teamId: string | null | undefined) {
     return { ...skill, version: cached.version, owner_agent_id: cached.owner_agent_id };
   }, []);
 
-  return { getFromCache, preload, applyCachedDetail, cacheRef, cacheVersion };
+  return { getFromCache, preload, invalidate, applyCachedDetail, cacheRef, cacheVersion };
 }
