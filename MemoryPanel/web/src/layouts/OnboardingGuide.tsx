@@ -77,11 +77,15 @@ interface OnboardingStep {
   descKey: string;
 }
 
-/** 按顺序返回第一个匹配的元素，找不到返回 null */
+/**
+ * 按顺序返回第一个匹配的元素，找不到返回 null。
+ * 页面保活下隐藏的标签页帧仍在 DOM 中，需跳过其中的元素，避免高亮到不可见的位置。
+ */
 function firstMatch(selectors: string[]): Element | null {
   for (const sel of selectors) {
-    const el = document.querySelector(sel);
-    if (el) return el;
+    for (const el of document.querySelectorAll(sel)) {
+      if (!el.closest('[data-keepalive-page][aria-hidden="true"]')) return el;
+    }
   }
   return null;
 }

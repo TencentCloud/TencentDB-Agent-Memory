@@ -20,6 +20,7 @@ import {
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
+import { usePageActive } from '@/lib/page-active';
 import { isValidGitUrl, isSshGitUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
 export function useCodeSources() {
@@ -225,8 +226,11 @@ export function useCodeSources() {
   // 不再每 8 秒发一次注定没有变化的请求（issue #1937）。
   const hasPollable = useMemo(() => pollableItems(inFlight).length > 0, [inFlight]);
 
+  // 页面保活：标签页隐藏时停掉 8s 图谱状态轮询；切回时 poller.start() 立即补一轮。
+  const pageActive = usePageActive();
+
   useEffect(() => {
-    if (!activeTeamId || !hasPollable) return;
+    if (!activeTeamId || !hasPollable || !pageActive) return;
     const poll = async () => {
       const outcome = await pollOnce(pollableItems(inFlightRef.current), {
         get: (codeGraphId) => knowledgeApi.code.get(codeGraphId),
@@ -251,7 +255,7 @@ export function useCodeSources() {
     const poller = createPoller({ intervalMs: 8000, run: poll });
     poller.start();
     return () => poller.stop();
-  }, [hasPollable, activeTeamId, fetchSources, t]);
+  }, [hasPollable, activeTeamId, fetchSources, t, pageActive]);
 
   async function handleUnbindCode(codeGraphId: string) {
     if (!agentFilter) return;
