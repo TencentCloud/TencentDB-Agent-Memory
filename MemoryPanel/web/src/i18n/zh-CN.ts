@@ -1767,6 +1767,10 @@ export const zhCN = {
   'guide.manual.note.openclaw.0': '需 Header 预选：team-id / agent-id / task-id / conversation-id',
   'guide.manual.note.openclaw.1': 'x-conversation-id 标识当前会话，每次新对话需手动更换',
   'guide.manual.note.openclaw.2': 'x-task-id 当前版本必填，无 Task 可填 no-task',
+  'guide.manual.pi.extension': '扩展目录',
+  'guide.manual.note.pi.extension': '安装 Pi 后，在 TencentDB Agent Memory 仓库根目录运行配置中的命令，由 -e 载入 Pi 扩展。',
+  'guide.manual.note.pi.identity': '填写面板中的团队 ID、Agent ID 和个人 API Key。TDAI_TASK_ID 可选。',
+  'guide.manual.note.pi.endpoint': 'TDAI_PROXY_URL 填 Proxy 根地址。扩展会生成以 /pi/<实例 ID>/v1 结尾的默认接入地址，模型 ID 须与 Proxy 的上游配置匹配。',
 
   // ===== Analytics（可观测） =====
   'menu.analytics': '线上调用情况',

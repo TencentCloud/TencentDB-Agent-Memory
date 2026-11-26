@@ -37,6 +37,7 @@ import {
 } from 'tea-component';
 import { AddIcon } from 'tea-icons-react';
 import { userKeysApi, metaInstancesApi, type UserKey } from '@/lib/teamApi';
+import { piProxyEndpoint } from '@/lib/pi-proxy';
 import { useCurrentRole } from '@/services/useCurrentRole';
 import { useAuthStore } from '@/stores/auth';
 import { tea } from '@/lib/tea-bridge';
@@ -331,6 +332,7 @@ export default function ApiKeyPanel() {
                 { label: 'OpenCode', url: `${base}/opencode/${iid}` },
                 { label: 'OpenClaw', url: `${base}/openclaw/${iid}` },
                 { label: 'Hermes', url: `${base}/hermes/${iid}` },
+                { label: 'Pi', url: piProxyEndpoint(base, iid) },
               ];
               return endpoints.map((ep) => (
                 <div className="_memory-apikey-endpoint" key={ep.label}>

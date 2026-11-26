@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth';
 import { resetOnboarding } from '@/layouts/OnboardingGuide';
 import { metaInstancesApi } from '@/lib/teamApi';
 import { getPanelSession } from '@/lib/panelSession';
+import { piProxyEndpoint, piProxySetup } from '@/lib/pi-proxy';
 import { tea } from '@/lib/tea-bridge';
 import { CopyButton } from './CopyButton';
 import { MemCommands } from './MemCommands';
@@ -25,7 +26,7 @@ import './style.css';
 type MainTab = 'quick' | 'practice' | 'commands';
 type QuickTab = 'download' | 'ide' | 'history';
 type PracticeId = 'team' | 'personal';
-type ManualIdeId = 'claude' | 'codebuddy' | 'codex' | 'workbuddy' | 'dsh' | 'hermes' | 'openclaw';
+type ManualIdeId = 'claude' | 'codebuddy' | 'codex' | 'workbuddy' | 'dsh' | 'hermes' | 'openclaw' | 'pi';
 type ProxyMode = 'default' | 'analyse';
 
 interface PracticeStep {
@@ -56,6 +57,7 @@ const KEY_PLACEHOLDER = '<your-team-memory-api-key>';
  * 注意 Claude Code 的代理路由段是 `claude-code`（见 MemoryProxy whitelist.ts 的
  * AGENT_PREFIX_RE 与 setup-proxy.sh），而本页 IDE 标识为 `claude`，需归一化。 */
 function proxyEndpoint(base: string, agent: ManualIdeId, instanceId: string, mode: ProxyMode) {
+  if (agent === 'pi') return piProxyEndpoint(base, instanceId);
   const pathAgent = agent === 'claude' ? 'claude-code' : agent;
   return `${base}/${pathAgent}/${instanceId}${mode === 'analyse' ? '/analyse' : ''}`;
 }
@@ -145,6 +147,19 @@ const MANUAL_IDES: ManualIde[] = [
       'guide.manual.note.openclaw.0',
       'guide.manual.note.openclaw.1',
       'guide.manual.note.openclaw.2',
+    ],
+  },
+  {
+    id: 'pi',
+    name: 'Pi',
+    file: 'MemoryCore/pi-plugin',
+    protocol: 'OpenAI Chat',
+    config: (base, instanceId, _mode, model) =>
+      piProxySetup(base, instanceId, model, KEY_PLACEHOLDER),
+    notes: [
+      'guide.manual.note.pi.extension',
+      'guide.manual.note.pi.identity',
+      'guide.manual.note.pi.endpoint',
     ],
   },
 ];
@@ -553,7 +568,9 @@ export function GuidePage() {
                       <b>{t('guide.manual.model')}</b>
                       <input
                         value={modelId}
-                        onChange={(event) => setModelId(event.target.value.toLowerCase())}
+                      onChange={(event) =>
+                        setModelId(manualIde.id === 'pi' ? event.target.value : event.target.value.toLowerCase())
+                      }
                       />
                       <small>{t('guide.manual.modelHint')}</small>
                     </label>
@@ -569,7 +586,18 @@ export function GuidePage() {
                       <div>
                         <h3>{manualIde.name}</h3>
                         <p>
-                          {t('guide.manual.fileHint')} <code>{manualIde.file}</code>
+                          {t(manualIde.id === 'pi' ? 'guide.manual.pi.extension' : 'guide.manual.fileHint')}{' '}
+                          {manualIde.id === 'pi' ? (
+                            <a
+                              href="https://github.com/TencentCloud/TencentDB-Agent-Memory/tree/feat/server_team/MemoryCore/pi-plugin"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <code>{manualIde.file}</code>
+                            </a>
+                          ) : (
+                            <code>{manualIde.file}</code>
+                          )}
                         </p>
                       </div>
                       <CopyButton value={manualConfig} label={t('guide.copyConfig')} />
