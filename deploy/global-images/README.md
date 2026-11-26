@@ -242,6 +242,12 @@ gateway_endpoint）就把 `MEMORY_HUB_PROXY_PUBLIC_URL` 显式设为空字符串
 
 `proxy` 默认关闭 `auth` / `sessionInit` / `costGuard`（这些依赖内部服务），只做纯转发 + `tdai-memory` 上下文注入（injector 名称，非容器名）。要开启完整流水线，需要另行配置 —— 参见 `context_proxy/config.example.yaml`。
 
+## 数据分析
+
+在 `.env` 中设置 `ANALYTICS_CLICKHOUSE_ENABLED=true`、ClickHouse 连接参数与
+`PANEL_FEATURE_ANALYTICS_ENABLED=true`，然后重新运行 `./start-all.sh`。
+容器网络、认证探针与入口条件见[安装手册](../../INSTALL_CN.md#可选能力数据分析与可观测性默认关闭)。
+
 ## 常见问题
 
 **Q: `./start-all.sh` 卡在 wait_healthy？**

@@ -48,6 +48,13 @@ require_vars() {
   fi
 }
 
+# The shared ClickHouse settings drive the Proxy writer and the Core reader.
+check_analytics_clickhouse() {
+  if [[ "${ANALYTICS_CLICKHOUSE_ENABLED:-false}" == "true" ]]; then
+    require_vars ANALYTICS_CLICKHOUSE_ENDPOINT
+  fi
+}
+
 # 找到可用 docker 命令（兼容 Homebrew 独立安装 + colima）
 # 优先级：PATH 中的 docker → Homebrew apple silicon → Homebrew intel → /usr/local
 # Homebrew Cellar 路径下按版本 glob，取最新（sort -V），避免硬编码具体小版本号。

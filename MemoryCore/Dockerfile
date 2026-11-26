@@ -66,6 +66,8 @@ RUN node -e " \
         const p=JSON.parse(fs.readFileSync('package.json','utf8')); \
         delete p.peerDependencies; \
         delete p.peerDependenciesMeta; \
+        p.dependencies['@clickhouse/client']=p.optionalDependencies['@clickhouse/client']; \
+        delete p.optionalDependencies['@clickhouse/client']; \
         p.overrides=Object.assign({},p.overrides,{ \
             '@jimp/config-typescript':'npm:dotenv@latest' \
         }); \
@@ -74,7 +76,8 @@ RUN node -e " \
 
 # Generate lockfile + install production deps.
 # --omit=optional 精简镜像体积，减少 CI push 超时风险（可选依赖如
-# @clickhouse/client、kafkajs、cos-nodejs-sdk-v5 等在网关镜像中不需要；
+# kafkajs、cos-nodejs-sdk-v5 等在默认网关镜像中不需要；
+# @clickhouse/client 是数据分析查询依赖，上面已移到 dependencies。
 # mongodb 自 2026-09-03 起是正式 dependency —— Mongo 是一等存储后端，不再可裁）。
 # --ignore-scripts skips the openclaw postinstall patch (irrelevant in image).
 # --legacy-peer-deps relaxes strict peer resolution for older transitive deps.

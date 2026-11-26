@@ -20,6 +20,7 @@ load_env
 require_vars \
   PROXY_IMAGE PROXY_PORT \
   PROXY_UPSTREAM_URL PROXY_UPSTREAM_API_KEY PROXY_UPSTREAM_MODEL
+check_analytics_clickhouse
 
 # 与 memory-core 保持一致的 gateway 内部凭据（默认 local，仅本地体验）
 MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
@@ -148,6 +149,28 @@ injection:
 redis:
   enabled: false
 YAML
+
+if [[ "${ANALYTICS_CLICKHOUSE_ENABLED:-false}" == "true" ]]; then
+  # Serialize settings as quoted YAML strings, including passwords with quotes or backslashes.
+  yaml_string() {
+    local value="$1"
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//$'\n'/\\n}
+    value=${value//$'\r'/\\r}
+    value=${value//$'\t'/\\t}
+    printf '"%s"' "$value"
+  }
+  cat >> "$CONFIG_FILE" <<YAML
+
+clickhouse:
+  enabled: true
+  url: $(yaml_string "$ANALYTICS_CLICKHOUSE_ENDPOINT")
+  database: $(yaml_string "${ANALYTICS_CLICKHOUSE_DATABASE:-context_proxy}")
+  user: $(yaml_string "${ANALYTICS_CLICKHOUSE_USERNAME:-default}")
+  password: $(yaml_string "${ANALYTICS_CLICKHOUSE_PASSWORD:-}")
+YAML
+fi
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
