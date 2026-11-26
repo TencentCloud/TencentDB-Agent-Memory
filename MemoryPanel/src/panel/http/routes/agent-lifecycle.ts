@@ -11,8 +11,14 @@
  *   1. auth/verify 反查 caller
  *   2. agent/get 拿到 agent，强校验 owner_user_id === caller（本期不允许 admin 代删）
  *   3. skill/list 按 owner_agent_id + active 分页拉全
+ *      —— 唯一的降级：SkillCore 未启用时内核回模块级能力缺失信封
+ *      （404 + "Skill module not enabled"），语义等价于「该 agent 没有 skill」，
+ *      按空集合继续（见 isSkillCapabilityAbsent）。只认首页命中：分页中途才出现
+ *      该信封说明响应自相矛盾，必须 fail-closed。其它任何 404 / 非 0 code 一律
+ *      原样透传，不降级。
  *   4. 逐条 skill/delete —— 任一失败立即中断，返回 500 + 已删列表 + 失败 skill_id
  *      + 内核错误 message；此时 agent/archive 不会被调用，caller 需要修复后重试
+ *      （SkillCore 可用但 delete 失败是真错误，不适用第 3 步的降级）
  *   5. 全部 skill 成功归档后调 meta/agent/archive
  *      —— 内核在同一次 archive 里顺手清 chat_memory（这部分保持原样）
  *
@@ -39,6 +45,31 @@ import {
 
 /** skill/list 一页 100 条 —— 与 knowledge fetchAllMetaListItems 分页步长对齐。 */
 const SKILL_LIST_PAGE = 100;
+
+/**
+ * SkillCore 未启用时内核回的「能力缺失」信封（issue #1218）。
+ *
+ * 出处：MemoryCore/src/gateway/skill-handlers.ts 的 precheck/precheckWrite ——
+ * getSkillCore() 与 resolveSkillCore() 都拿不到模块时统一
+ * `errorEnvelope(404, "Skill module not enabled", requestId)`。这是**模块级**开关
+ * 状态，不是单次调用的业务错误：此时该 agent 名下必然没有任何 skill，可以按空集合
+ * 继续 archive（修复前被原样透传，导致 skill 为空的 agent 永远删不掉）。
+ *
+ * 只认 (code, message) 精确匹配：内核的 404 也用于表达「agent / skill 不存在」等
+ * 真实失败，宽泛匹配会把它们静默吃成「无 skill」继续归档，留下孤儿 active skill。
+ * message 走 trim 后全等，不做 includes。本函数只判定「是不是能力缺失信封」，
+ * 「能不能降级」还要看分页位置（见 listAgentSkills）。
+ */
+const SKILL_MODULE_ABSENT_CODE = 404;
+const SKILL_MODULE_ABSENT_MESSAGE = 'Skill module not enabled';
+
+function isSkillCapabilityAbsent(env: MetaEnvelope<unknown>): boolean {
+  return (
+    env.code === SKILL_MODULE_ABSENT_CODE &&
+    typeof env.message === 'string' &&
+    env.message.trim() === SKILL_MODULE_ABSENT_MESSAGE
+  );
+}
 
 interface AgentRaw {
   agent_id: string;
@@ -76,7 +107,15 @@ async function listAgentSkills(
       },
       ctx,
     );
-    if (env.code !== 0) return { ok: false, envelope: env };
+    if (env.code !== 0) {
+      // 能力缺失 → 视为「该 agent 没有 skill」继续 archive。
+      // 只认首页（offset === 0 且尚未取到任何 skill）：能力缺失是模块级属性，
+      // 第一页能正常翻页却在第二页才回这个信封属于自相矛盾响应；若当空集合处理，
+      // 已列出的 skill 会被删、未列出的会变成孤儿 active skill，恰好违背本路由
+      // 的初衷，所以这里保持 fail-closed、原样透传。
+      if (offset === 0 && all.length === 0 && isSkillCapabilityAbsent(env)) break;
+      return { ok: false, envelope: env };
+    }
     const batch = extractListItems<SkillRow>(env);
     all.push(...batch);
     const total = (env.data as { total?: number } | null)?.total ?? all.length;
