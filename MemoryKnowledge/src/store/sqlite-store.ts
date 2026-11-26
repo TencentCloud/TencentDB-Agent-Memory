@@ -178,7 +178,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       .select()
       .from(knowledgeCodeGraph)
       .where(and(...conditions))
-      .orderBy(desc(knowledgeCodeGraph.updatedAt))
+      .orderBy(desc(knowledgeCodeGraph.updatedAt), desc(knowledgeCodeGraph.codeGraphId))
       .limit(opts?.limit ?? 20)
       .offset(opts?.offset ?? 0)
       .all();
@@ -370,7 +370,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       .select()
       .from(knowledgeWiki)
       .where(and(...conditions))
-      .orderBy(desc(knowledgeWiki.updatedAt))
+      .orderBy(desc(knowledgeWiki.updatedAt), desc(knowledgeWiki.wikiId))
       .limit(opts?.limit ?? 20)
       .offset(opts?.offset ?? 0)
       .all();
