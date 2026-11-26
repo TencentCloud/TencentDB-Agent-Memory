@@ -1605,6 +1605,7 @@ export const zhCN = {
   'guide.manual.title': '手动配置',
   'guide.manual.model': '模型 ID',
   'guide.manual.modelHint': '必须全小写',
+  'guide.manual.modelHint.pi': '填 Proxy 上游已配置的模型 ID（原样填写，不区分大小写）',
   'guide.manual.fileHint': '写入',
 
   // 最佳实践
@@ -1767,6 +1768,14 @@ export const zhCN = {
   'guide.manual.note.openclaw.0': '需 Header 预选：team-id / agent-id / task-id / conversation-id',
   'guide.manual.note.openclaw.1': 'x-conversation-id 标识当前会话，每次新对话需手动更换',
   'guide.manual.note.openclaw.2': 'x-task-id 当前版本必填，无 Task 可填 no-task',
+  'guide.manual.note.pi.extension':
+    '必须先载入扩展，否则 Pi 里没有 tdai provider：在仓库根目录用 pi -e ./MemoryCore/pi-plugin 载入（或软链到 ~/.pi/agent/extensions/ 自动发现）',
+  'guide.manual.note.pi.v1':
+    '接入地址必须以 /v1 结尾（…/pi/<实例 ID>/v1）：Pi 的 OpenAI Chat 客户端只追加 /chat/completions，不会自动补 /v1',
+  'guide.manual.note.pi.env':
+    'TDAI_USER_KEY 用面板「API Key」里的个人 key（不是 admin key）；TDAI_TEAM_ID / TDAI_AGENT_ID 从面板复制；TDAI_TASK_ID 可选，不填为整个 Agent 范围召回',
+  'guide.manual.note.pi.history':
+    'Pi 的对话会在接入后自动写入团队记忆；历史 session 暂不支持用 asset-import.ts 导入（脚本无 pi 适配器）',
 
   // ===== Analytics（可观测） =====
   'menu.analytics': '线上调用情况',

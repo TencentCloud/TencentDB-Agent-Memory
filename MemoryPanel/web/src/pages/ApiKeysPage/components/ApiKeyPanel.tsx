@@ -37,6 +37,7 @@ import {
 } from 'tea-component';
 import { AddIcon } from 'tea-icons-react';
 import { userKeysApi, metaInstancesApi, type UserKey } from '@/lib/teamApi';
+import { piEndpoint } from '@/lib/proxyEndpoint';
 import { useCurrentRole } from '@/services/useCurrentRole';
 import { useAuthStore } from '@/stores/auth';
 import { tea } from '@/lib/tea-bridge';
@@ -331,6 +332,10 @@ export default function ApiKeyPanel() {
                 { label: 'OpenCode', url: `${base}/opencode/${iid}` },
                 { label: 'OpenClaw', url: `${base}/openclaw/${iid}` },
                 { label: 'Hermes', url: `${base}/hermes/${iid}` },
+                // Pi — 走 pi-plugin 扩展的 openai-completions provider，客户端只追加
+                // /chat/completions 且不补 /v1，所以这里的地址**必须带 /v1**，与其它
+                // 客户端「base 不带 /v1」的惯例不同（见 MemoryCore/pi-plugin/index.ts）。
+                { label: 'Pi', url: piEndpoint(base, iid) },
               ];
               return endpoints.map((ep) => (
                 <div className="_memory-apikey-endpoint" key={ep.label}>
