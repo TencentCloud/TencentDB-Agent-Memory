@@ -4,7 +4,7 @@
  * 基于 tea-component 的 `Layout` + `Menu` 组件，包含 TabBar、路由、菜单过滤等业务逻辑。
  */
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/stores/auth';
@@ -12,28 +12,12 @@ import { useCurrentRole, type TeamRole } from '@/services/useCurrentRole';
 import { usePanelAnalyticsEnabled, useAnalyticsChConfigured } from '@/services/usePanelCapabilities';
 import { GlobalHeader } from '@/layouts/GlobalHeader';
 import { TabBar } from '@/layouts/TabBar';
+import { KeepAlivePages } from '@/layouts/KeepAlivePages';
 import { OnboardingGuide, shouldShowOnboarding, resetOnboarding } from '@/layouts/OnboardingGuide';
 import { ITEM_ICON, usePageMeta, GROUP_ORDER_KEYS, type PageId } from '@/constants/menu';
+import { PAGE_TO_PATH, resolveActivePage } from '@/constants/routes';
 
 const { Body, Sider, Content } = Layout;
-
-/** 路由 path → PageId */
-const PATH_TO_PAGE: Record<string, PageId> = {
-  '/': 'workbench_board',
-  '/wiki': 'wiki',
-  '/code': 'code',
-  '/skills': 'skills',
-  '/memory': 'chat_memory',
-  '/analytics': 'analytics',
-  '/team/members': 'team_members',
-  '/team/agents': 'team_agents',
-  '/team/api-keys': 'api_keys',
-};
-
-/** PageId → 路由 path */
-const PAGE_TO_PATH: Record<PageId, string> = Object.fromEntries(
-  Object.entries(PATH_TO_PAGE).map(([path, id]) => [id, path]),
-) as Record<PageId, string>;
 
 function legacyHashToPath(): string | null {
   const raw = window.location.hash.replace(/^#\/?/, '');
@@ -57,12 +41,10 @@ export function ConsoleLayout() {
   const userRole: TeamRole | null = useCurrentRole();
   const PAGE_META = usePageMeta();
 
-  const activePage: PageId = useMemo(() => {
-    const match = Object.entries(PATH_TO_PAGE).find(
-      ([path]) => path !== '/' && location.pathname.startsWith(path),
-    );
-    return match ? match[1] : 'workbench_board';
-  }, [location.pathname]);
+  const activePage: PageId = useMemo(
+    () => resolveActivePage(location.pathname),
+    [location.pathname],
+  );
 
   useEffect(() => {
     const legacyPath = legacyHashToPath();
@@ -227,10 +209,14 @@ export function ConsoleLayout() {
               />
             )}
             <Content.Body className="_memory-content-body">
-              {/* key 绑定 pathname：路由切换时重挂载页面帧，触发 _page-enter 过渡，保持跨页连续性 */}
-              <main key={location.pathname} className="_memory-page-frame">
-                <Outlet />
-              </main>
+              {/* 多标签页保活：已打开的页签常驻渲染，非激活帧用 visibility 隐藏。
+                  原实现是 key={pathname} 强制重挂载，切页签会丢失滚动位置 / 选中项 /
+                  Agent 选项等页面内状态（见 KeepAlivePages 注释）。 */}
+              <KeepAlivePages
+                pages={openPages}
+                activePath={location.pathname}
+                isGuide={isGuide}
+              />
             </Content.Body>
           </Content>
         </Body>

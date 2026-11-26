@@ -52,9 +52,20 @@
 
 /* Tea 的 Content.Body 内层默认 max-width 为 1360px，超过该宽度后会居中留白，
  * 因此右侧业务页的 Card 看起来比 Memory项目窄。公共壳与参照项目一致改为全宽，
- * 由各业务页在确有阅读宽度需求时自行设置局部 max-width。 */
+ * 由各业务页在确有阅读宽度需求时自行设置局部 max-width。
+ *
+ * 高度链路：Tea 的 Content.Body 是 flex 容器，内层（body-inner）默认按内容撑高，
+ * 而保活容器里的页面帧是绝对定位（不参与撑高），必须让 body-inner 也吃满剩余
+ * 高度，否则帧高度会塌成 0、页面整块看不见。 */
 .tea-layout__content-body-inner {
   max-width: 100%;
+  /* 显式给宽度：Tea 默认 margin:0 auto，在纵向 flex 容器里 auto 横向外边距会
+     抑制 stretch，窄内容页会收缩居中而不是铺满。 */
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ===== 整页高度锁定到视口，滚动条只在内容区内部出现 =====
@@ -96,31 +107,62 @@ body,
 
 .tea-layout__content-body {
   min-height: 0;
-  overflow-y: auto;
-  /* 始终预留纵向滚动条的位置（哪怕当前内容不够高、滚动条不出现）。
-   * 没有这行时：像 ChatMemoryPanel 在「团队资产/固定资产」tab（内容高、出滚动条）
-   * 和「我的资产分配」tab（内容矮、无滚动条）之间切换，会导致内容区可用宽度
-   * 随滚动条的出现/消失而跳变，视觉上就是整块内容"闪一下"跳向右边（滚动条消失时）
-   * 或跳向左边（滚动条出现时）。加 scrollbar-gutter: stable 后宽度始终一致，
-   * 不再跟内容高度联动跳动。 */
-  scrollbar-gutter: stable;
+  /* 多标签页保活后，滚动容器从「全页共用一份」下沉到「每个页面帧各一份」
+     （见下方 ._memory-page-frame）。外层只负责给帧容器一个确定高度，
+     自身不再滚动 —— 否则多帧同时挂载时共享同一个 scrollTop，切页签必然错位。
+     注意 scrollbar-gutter 也一并下沉：外层不滚动了，留在这里没有意义。 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Tea 默认 padding:20px。留白统一由帧内的 16px 提供，这里必须清零，
+     否则外层 20px + 帧 16px 会叠成 36px 的双层留白。 */
+  padding: 0;
 }
 
 /* ===== 公共页面内容壳 =====
  * 对齐 Memory项目的 Content.Body：页面背景、16px 内容留白和全宽承载在布局层统一，
- * 业务页面无需自行处理视口高度与外层间距。 */
+ * 业务页面无需自行处理视口高度与外层间距。
+ * 注意：16px 留白已下沉到 ._memory-page-frame —— 留在这里会让每帧滚动时
+ * 把留白一起滚走（顶部留白消失）。 */
 ._memory-content-body {
   max-width: 100%;
-  min-height: calc(100% - 34px);
-  padding: 16px;
+  min-height: 0;
   background: var(--tea-color-bg-page-default);
 }
 
+/* ===== 多标签页保活容器 =====
+ * 所有已打开的页面帧绝对定位叠在同一块区域上，非激活帧用 visibility: hidden。
+ *
+ * 为什么不用 display: none（实测 Chrome 其实也能保住 scrollTop，但仍有三个问题）：
+ *   1. 隐藏帧不参与布局 → 高度塌成 0，任何在挂载/切回瞬间读取尺寸的组件
+ *      （图谱画布、虚拟化、tooltip 定位）都会拿到 0×0；
+ *   2. 显示/隐藏会触发整棵子树 relayout，切页签时列表高度跳变、滚动条 gutter
+ *      跟着抖一下，正是原来"页面闪一下"的观感；
+ *   3. 隐藏期间拿不到真实尺寸，无法做"切回来时保持滚动锚点"这类补偿。
+ * visibility: hidden 保留布局盒与所有内层滚动偏移，且自动把整帧移出 tab 焦点
+ * 顺序、不接收鼠标事件，是与 keep-alive 最匹配的隐藏方式。 */
+._memory-frames {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
 ._memory-page-frame {
+  position: absolute;
+  inset: 0;
   width: 100%;
   min-width: 0;
-  min-height: 100%;
-  /* 路由切换连续性：快速淡入 + 轻微上移，仅 transform/opacity，不做加载编排 */
+  padding: 16px;
+  /* 每帧独立滚动：隐藏/显示切换时浏览器保留自身 scrollTop */
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  visibility: hidden;
+}
+
+._memory-page-frame--active {
+  visibility: visible;
+  /* 路由切换连续性：快速淡入 + 轻微上移，仅 transform/opacity，不做加载编排。
+     只给激活帧加动画 —— 隐藏帧不会播，切回来时重播才有"页面进入"的观感。 */
   animation: _page-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 

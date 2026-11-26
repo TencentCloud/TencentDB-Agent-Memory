@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type WikiDetail, type WikiPage, type SourceProviderMeta, type WikiCrawlOptions, type WikiSourceListResult } from '@/lib/api/knowledge-api';
 import { useTeams, useAgents } from '@/services';
+import { usePageActive } from '@/layouts/KeepAlivePages';
 import { readAuth } from '@/components/LoginGate';
 import { tea, confirmThenRun } from '@/lib/tea-bridge';
 import {
@@ -36,6 +37,9 @@ import {
 
 export function useWikiSources() {
   const { t } = useTranslation();
+  // 多标签页保活：页面被切走后仍常驻 DOM，加工轮询必须停，否则隐藏页会一直
+  // 每 2s 打一次 /wiki/get。
+  const pageActive = usePageActive();
   const [sources, setSources] = useState<WikiDetail[]>([]);
   const [loading, setLoading] = useState(false);
   // 默认展示 Agent 资产（fixed），避免用户误以为自己的资产在「团队资产」里
@@ -657,6 +661,10 @@ export function useWikiSources() {
 
   useEffect(() => {
     if (pollTargets.length === 0) return;
+    // 页面不在前台时完全不排定时器：多标签页保活后隐藏页仍挂载，若不拦住，
+    // 用户切走后加工进度仍在后台每 2s 轮询（无意义请求 + 干扰可观测）。
+    // 切回来时 pageActive 变化会重新建定时器，立刻补一轮 poll()。
+    if (!pageActive) return;
     // 只取 wiki_id：effect 刻意不依赖 sources 的其余字段，避免每轮 setSources
     // 都把定时器重建一次（那会让「预算」跟着抖动，且高频抖动 clearInterval）。
     const targetIds = pollTargets.map((s) => s.wiki_id);
@@ -771,8 +779,9 @@ export function useWikiSources() {
     // pollTargets 本身：每轮 setSources 都会产生新的数组引用，若依赖它，定时器
     // 会被每 2 秒重建一次（预算抖动 + 节奏漂移）。key 相同说明参与轮询的成员
     // 与状态完全一致，用旧闭包里的 targetIds 是安全的。
+    // pageActive 必须入依赖：页面被切回来时要重新起定时器。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pollTargetsKey, selectedWikiId, fetchDetail]);
+  }, [pollTargetsKey, selectedWikiId, fetchDetail, pageActive]);
 
   /**
    * 详情页进度卡片的会话阶段机（纯派生，不引入独立数据源）。

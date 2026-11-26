@@ -16,6 +16,7 @@ import {
   type SessionTrendRow,
 } from '@/lib/api/analytics';
 import { getErrorMessage } from '@/lib/error-message';
+import { usePageActive } from '@/layouts/KeepAlivePages';
 
 export type ChState = 'probing' | 'ready' | 'not-configured' | 'unreachable' | 'probe-failed';
 
@@ -27,6 +28,9 @@ export function useAnalyticsMetrics(params: {
   spaceId: string;
 }) {
   const { enabled, days, spaceId } = params;
+
+  // 多标签页保活：本页常驻后需知道自己是否在前台，以暂停定时刷新。
+  const pageActive = usePageActive();
 
   const [chState, setChState] = useState<ChState>('probing');
 
@@ -100,12 +104,23 @@ export function useAnalyticsMetrics(params: {
   }, [chReady, load]);
 
   useEffect(() => {
-    if (!chReady) return undefined;
+    // 多标签页保活：隐藏页不排定时器（60s 一次的全量指标拉取不便宜）。
+    // 切回来时 pageActive 变化会重新建定时器并立刻补一次（见下条 effect）。
+    if (!chReady || !pageActive) return undefined;
     const timer = window.setInterval(() => {
       void load();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [chReady, load]);
+  }, [chReady, load, pageActive]);
+
+  // 页面重新回到前台时补一次：隐藏期间定时器被拆掉，指标可能已经过期。
+  // 用 ref 记住上一次的可见性，只在 false → true 时触发，避免挂载首帧重复请求
+  // （首帧由上面的 chReady effect 负责）。
+  const wasActiveRef = useRef(pageActive);
+  useEffect(() => {
+    if (pageActive && !wasActiveRef.current && chReady) void load();
+    wasActiveRef.current = pageActive;
+  }, [pageActive, chReady, load]);
 
   return {
     chState,

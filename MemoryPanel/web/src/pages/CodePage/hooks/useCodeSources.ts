@@ -18,12 +18,15 @@ import {
   reconcileTracked,
 } from '@/lib/codeGraphPolling';
 import { useTeams, useAgents } from '@/services';
+import { usePageActive } from '@/layouts/KeepAlivePages';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
 import { isValidGitUrl, isSshGitUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
 export function useCodeSources() {
   const { t } = useTranslation();
+  // 多标签页保活：页面被切走后仍常驻 DOM，8s 图谱轮询必须停。
+  const pageActive = usePageActive();
   const [sources, setSources] = useState<CodeGraphDetail[]>([]);
   const [loading, setLoading] = useState(false);
   // 默认展示 Agent 资产（fixed），避免用户误以为自己的资产在「团队资产」里
@@ -226,7 +229,9 @@ export function useCodeSources() {
   const hasPollable = useMemo(() => pollableItems(inFlight).length > 0, [inFlight]);
 
   useEffect(() => {
-    if (!activeTeamId || !hasPollable) return;
+    // 隐藏页不排定时器：多标签页保活后本页仍挂载，但用户看不到图谱进度，
+    // 后台每 8s 轮询是纯浪费。切回来时 pageActive 变化会重新 start。
+    if (!activeTeamId || !hasPollable || !pageActive) return;
     const poll = async () => {
       const outcome = await pollOnce(pollableItems(inFlightRef.current), {
         get: (codeGraphId) => knowledgeApi.code.get(codeGraphId),
@@ -251,7 +256,7 @@ export function useCodeSources() {
     const poller = createPoller({ intervalMs: 8000, run: poll });
     poller.start();
     return () => poller.stop();
-  }, [hasPollable, activeTeamId, fetchSources, t]);
+  }, [hasPollable, activeTeamId, fetchSources, t, pageActive]);
 
   async function handleUnbindCode(codeGraphId: string) {
     if (!agentFilter) return;
