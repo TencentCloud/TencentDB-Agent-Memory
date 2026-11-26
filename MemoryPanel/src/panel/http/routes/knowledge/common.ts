@@ -546,6 +546,22 @@ export async function joinKnowledgeAssetsWithKs(
 
 // ── KS-only items（meta 未注册，如创建中/失败的 code-graph）──────────
 
+async function fetchAllKnowledgeListItems<T>(
+  fetchPage: (options: { limit: number; offset: number }) => Promise<{ items: T[]; total: number }>,
+): Promise<T[]> {
+  const limit = 100;
+  const all: T[] = [];
+  let total = Infinity;
+  while (all.length < total) {
+    const page = await fetchPage({ limit, offset: all.length });
+    if (page.items.length === 0) break;
+    all.push(...page.items);
+    // Bound the scan by the initial count, and stop earlier if the list shrinks.
+    total = Math.min(total, page.total);
+  }
+  return all;
+}
+
 /** 从 KS 侧查列表，构造 meta 未注册的 KnowledgeAssetListItem。 */
 async function fetchKsOnlyItems(
   kc: ReturnType<PanelDeps['knowledgeClientFactory']>,
@@ -554,8 +570,8 @@ async function fetchKsOnlyItems(
 ): Promise<KnowledgeAssetListItem[]> {
   try {
     if (assetType === ASSET_TYPE_WIKI) {
-      const res = await kc.wikiList(teamId);
-      return res.items.map((ks) => ({
+      const items = await fetchAllKnowledgeListItems((options) => kc.wikiList(teamId, options));
+      return items.map((ks) => ({
         knowledge_id: ks.wiki_id,
         asset_type: ASSET_TYPE_WIKI,
         name: ks.name,
@@ -577,8 +593,8 @@ async function fetchKsOnlyItems(
         updated_at: ks.updated_at,
       }));
     }
-    const res = await kc.codeGraphList(teamId);
-    return res.items.map((ks) => ({
+    const items = await fetchAllKnowledgeListItems((options) => kc.codeGraphList(teamId, options));
+    return items.map((ks) => ({
       knowledge_id: ks.code_graph_id,
       asset_type: ASSET_TYPE_CODE_GRAPH,
       name: ks.repo_name || ks.repo_url || ks.code_graph_id,
@@ -624,6 +640,10 @@ export async function mergeWithKsOnlyItems(
   if (ksItems.length === 0) return joined;
 
   const knownIds = new Set(joined.map((j) => j.knowledge_id));
-  const orphans = ksItems.filter((ks) => !knownIds.has(ks.knowledge_id));
+  const orphans = ksItems.filter((ks) => {
+    if (knownIds.has(ks.knowledge_id)) return false;
+    knownIds.add(ks.knowledge_id);
+    return true;
+  });
   return [...joined, ...orphans];
 }
