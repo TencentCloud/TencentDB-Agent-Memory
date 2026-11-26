@@ -546,6 +546,61 @@ export async function joinKnowledgeAssetsWithKs(
 
 // ── KS-only items（meta 未注册，如创建中/失败的 code-graph）──────────
 
+/** KS list 单页大小 —— 与 META_LIST_PAGE 一致。 */
+const KS_LIST_PAGE = 100;
+/**
+ * 防御性翻页上限：正常场景几十页足够（每页 100 条）。total 异常（不断变大）或
+ * KS 端持续回非空页时，用它兜住循环，绝不无限拉。
+ */
+const KS_LIST_MAX_PAGES = 1000;
+
+interface KsListPage<T> {
+  items: T[];
+  total: number;
+}
+
+/**
+ * 按 {limit, offset} 翻页拉全 KS 侧 list。
+ *
+ * 内核侧（MemoryKnowledge routes/wiki.ts、code-graph.ts）未传 limit 时默认 20，
+ * 所以 meta 未注册的 KS-only 资产（如经 Knowledge API 直接创建的 code graph）
+ * 从第 21 条起被静默截断（issue #1636）。终止条件与 fetchAllMetaListItems 同款：
+ *   - 已取够 total（total 为数字时，按实际累计条数比较，不假设每页都满）；
+ *   - 空页 → 已到末尾；唯一例外是 offset 仍小于 total（中间页被过滤成空），
+ *     此时只推进 offset 继续拉，避免漏项；
+ *   - 短页（不足一页，且 total 没给出）→ 已到末尾。
+ * 防御性上限 KS_LIST_MAX_PAGES 兜住任何 total 异常/持续非空页的失控。正常团队
+ * 一次就够：第一页（100 条）未取满 total 时最多再拉一页即收敛。
+ *
+ * 不会去重：KS 侧 offset 分页在数据变动时理论上可能重复/漏项（#2037 讨论过
+ * 排序稳定性），去重属另一层语义，这里保持"拿到什么算什么"，避免掩盖漏项。
+ */
+async function fetchAllKsListItems<T>(
+  fetchPage: (opts: { limit: number; offset: number }) => Promise<KsListPage<T>>,
+): Promise<T[]> {
+  const all: T[] = [];
+  let offset = 0;
+  for (let page = 0; page < KS_LIST_MAX_PAGES; page++) {
+    const res = await fetchPage({ limit: KS_LIST_PAGE, offset });
+    const batch = res.items ?? [];
+    all.push(...batch);
+    const total = res.total;
+    if (batch.length === 0) {
+      // 空页 = 已到末尾。唯一例外：offset 仍小于 total，说明列表是按偏移切片、
+      // 中间页被过滤成空，后面还可能有数据 → 继续推进 offset。
+      if (typeof total === 'number' && offset < total) {
+        offset += KS_LIST_PAGE;
+        continue;
+      }
+      break;
+    }
+    if (typeof total === 'number' && all.length >= total) break;
+    if (batch.length < KS_LIST_PAGE) break;
+    offset += KS_LIST_PAGE;
+  }
+  return all;
+}
+
 /** 从 KS 侧查列表，构造 meta 未注册的 KnowledgeAssetListItem。 */
 async function fetchKsOnlyItems(
   kc: ReturnType<PanelDeps['knowledgeClientFactory']>,
@@ -554,8 +609,8 @@ async function fetchKsOnlyItems(
 ): Promise<KnowledgeAssetListItem[]> {
   try {
     if (assetType === ASSET_TYPE_WIKI) {
-      const res = await kc.wikiList(teamId);
-      return res.items.map((ks) => ({
+      const items = await fetchAllKsListItems((opts) => kc.wikiList(teamId, opts));
+      return items.map((ks) => ({
         knowledge_id: ks.wiki_id,
         asset_type: ASSET_TYPE_WIKI,
         name: ks.name,
@@ -577,8 +632,8 @@ async function fetchKsOnlyItems(
         updated_at: ks.updated_at,
       }));
     }
-    const res = await kc.codeGraphList(teamId);
-    return res.items.map((ks) => ({
+    const items = await fetchAllKsListItems((opts) => kc.codeGraphList(teamId, opts));
+    return items.map((ks) => ({
       knowledge_id: ks.code_graph_id,
       asset_type: ASSET_TYPE_CODE_GRAPH,
       name: ks.repo_name || ks.repo_url || ks.code_graph_id,
