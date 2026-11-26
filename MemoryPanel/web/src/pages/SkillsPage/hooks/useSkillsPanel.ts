@@ -16,6 +16,7 @@ import { getPanelSession } from '@/lib/panelSession';
 import { useTeams } from '@/services';
 import { useSkillDetailCache } from '@/services/use-skill-detail-cache';
 import { tea } from '@/lib/tea-bridge';
+import { listAllSkills } from './skill-pagination';
 
 export type Tab = 'team' | 'fixed';
 
@@ -217,22 +218,33 @@ export function useSkillsPanel() {
           // 全量查询：asset/list 无 ACL，不带 owner_user_id 会把整个 team 的
           // skill 元信息拉回响应体（信息暴露 + 慢），得不偿失。此时徽章留空
           // （toggle 处对 undefined 已按 private 兜底），列表本身不受影响。
-          const [listRes, ownedAssets] = await Promise.all([
-            listSkills({
-              team_id: activeTeamId,
-              filters: { owner_agent_id: selectedAgent, status: ['active'] },
-              pagination: { limit: 200 },
-            }),
+          // 循环翻完全部分页：此前写死 `limit: 200` 只取第一页，
+          // agent 下 skill 超过 200 条时列表被静默截断（前端搜索也只覆盖前 200 条）。
+          const [page, ownedAssets] = await Promise.all([
+            listAllSkills(
+              ({ limit, offset }) =>
+                listSkills({
+                  team_id: activeTeamId,
+                  filters: { owner_agent_id: selectedAgent, status: ['active'] },
+                  pagination: { limit, offset },
+                }),
+              { isStale: () => seq !== refreshSeqRef.current },
+            ),
             myUserId
               ? assetsApi
                   .list(activeTeamId, { asset_type: 'skill', owner_user_id: myUserId })
                   .catch(() => [] as Asset[])
               : Promise.resolve([] as Asset[]),
           ]);
-          if (seq !== refreshSeqRef.current) return; // 已被后续请求取代
+          if (page.stale || seq !== refreshSeqRef.current) return; // 已被后续请求取代
+          // 分页中途失败时保留已取到的页（函数内部已降级），但仍要让用户知道不完整。
+          if (page.error) tea.notify.error(page.error);
+          if (page.truncated) {
+            console.warn(`[skills] list truncated at ${page.items.length}/${page.total}`);
+          }
           const vm: Record<string, Asset['visibility']> = {};
           for (const a of ownedAssets) vm[a.asset_id] = a.visibility;
-          setSkills(listRes.items);
+          setSkills(page.items);
           setVisibilityMap(vm);
         }
       }
