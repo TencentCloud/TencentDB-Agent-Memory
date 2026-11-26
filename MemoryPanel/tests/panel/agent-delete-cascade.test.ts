@@ -1,24 +1,14 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { serve, type ServerType } from '@hono/node-server';
+import { loadPanelConfig } from '../../src/panel/config/panel-config.js';
+import { buildPanelDeps } from '../../src/panel/panel-deps.js';
 import { buildPanelApp } from '../../src/panel/http/app.js';
-import { InstanceRegistry } from '../../src/panel/config/instance-registry.js';
-import type { PanelConfig } from '../../src/panel/config/panel-config.js';
-import type { PanelDeps } from '../../src/panel/panel-deps.js';
-import { FetchKernelHttpAdapter } from '../../src/panel/kernel/adapters/fetch-kernel-http-adapter.js';
-import { FetchMetaKernelAdapter } from '../../src/panel/kernel/adapters/fetch-meta-kernel-adapter.js';
-import { FetchSkillKernelAdapter } from '../../src/panel/kernel/adapters/fetch-skill-kernel-adapter.js';
-import { FetchAnalyticsKernelAdapter } from '../../src/panel/kernel/adapters/fetch-analytics-kernel-adapter.js';
-import { FetchTaskSourceAdapter } from '../../src/panel/kernel/adapters/fetch-task-source-adapter.js';
-import { KnowledgeTaskRegistry } from '../../src/panel/state/knowledge-task-registry.js';
-import { IngestProgressStore } from '../../src/panel/state/ingest-progress-store.js';
-import { createPanelApiCallTelemetry } from '../../src/panel/infra/api-call-telemetry.js';
-import { PanelAuthService } from '../../src/panel/auth/service.js';
-import { PanelUserIdResolver } from '../../src/panel/infra/user-id-resolver.js';
-import type { Logger } from '../../src/panel/infra/logger.js';
-import type { KnowledgeClientPort } from '../../src/panel/kernel/ports/knowledge-client-port.js';
+import { mapHttpStatusFromEnvelopeCode } from '../../src/panel/kernel/envelope.js';
 import {
   META_HEADER_REQUEST_ID,
   META_HEADER_SERVICE_ID,
@@ -30,6 +20,30 @@ const GATEWAY_API_KEY = 'test-api-key';
 const OWNER_USER_KEY = 'test-user-key-owner';
 const OTHER_USER_KEY = 'test-user-key-other';
 const INVALID_USER_KEY = 'test-user-key-invalid';
+
+const CONTROLLED_ENV_KEYS = [
+  'HOST',
+  'PORT',
+  'LOG_LEVEL',
+  'LOG_FORMAT',
+  'METADATA_INSTANCES_CONFIG',
+  'METADATA_REMOTE_TIMEOUT_MS',
+  'UI_DIST_DIR',
+  'KNOWLEDGE_SERVICE_URL',
+  'KNOWLEDGE_AUTH_TOKEN',
+  'KNOWLEDGE_TIMEOUT_MS',
+  'KNOWLEDGE_LLM_BINDING_SYNC',
+  'KNOWLEDGE_LLM_PROXY_BASE_URL',
+  'TDAI_AGENT_TEMPLATE_DIR',
+  'PANEL_FEATURE_ANALYTICS_ENABLED',
+  'PANEL_CLICKHOUSE_ENABLED',
+  'PANEL_CLICKHOUSE_URL',
+  'PANEL_AUTH_MODE',
+  'PANEL_AUTH_USER_KEY_ENABLED',
+  'PANEL_AUTH_IDP_ENABLED',
+  'PANEL_AUTH_IDP_WOA_ENABLED',
+  'PANEL_AUTH_IDENTITY_STORE_PATH',
+] as const;
 
 interface MockAgent {
   agent_id: string;
@@ -73,17 +87,6 @@ interface MockGatewayState {
   skillDeleteOverride?: (
     body: Record<string, unknown>,
   ) => EnvelopeResponse | undefined;
-}
-
-function createSilentLogger(): Logger {
-  const logger: Logger = {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    child: () => logger,
-  };
-  return logger;
 }
 
 function createMockGatewayState(): MockGatewayState {
@@ -151,7 +154,12 @@ function sendEnvelope(
   requestId: string,
   payload: EnvelopeResponse,
 ): void {
-  const status = payload.httpStatus ?? (payload.code >= 400 && payload.code < 600 ? payload.code : 200);
+  let status: number;
+  if (payload.httpStatus !== undefined) {
+    status = payload.httpStatus;
+  } else {
+    status = mapHttpStatusFromEnvelopeCode(payload.code);
+  }
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(
     JSON.stringify({
@@ -179,7 +187,10 @@ async function startMockKernelGateway(state: MockGatewayState): Promise<{
     }
 
     if (path === '/v3/meta/auth/verify') {
-      const userKey = typeof body.user_key === 'string' ? body.user_key : '';
+      let userKey = '';
+      if (typeof body.user_key === 'string') {
+        userKey = body.user_key;
+      }
       const user = state.usersByKey.get(userKey);
       if (!user) {
         sendEnvelope(res, requestId, { code: 0, message: 'ok', data: { valid: false } });
@@ -273,15 +284,11 @@ async function startMockKernelGateway(state: MockGatewayState): Promise<{
         sendEnvelope(res, requestId, { code: 404, message: 'SKILL_NOT_FOUND', data: null });
         return;
       }
-      if (body.expected_version !== skill.version) {
-        sendEnvelope(res, requestId, { code: 409, message: 'VERSION_CONFLICT', data: null });
-        return;
-      }
-      skill.status = 'archived';
+      state.skills.delete(skillId);
       sendEnvelope(res, requestId, {
         code: 0,
         message: 'ok',
-        data: { skill_id: skill.skill_id, status: 'archived' },
+        data: { skill_id: skillId, archived: true },
       });
       return;
     }
@@ -294,127 +301,115 @@ async function startMockKernelGateway(state: MockGatewayState): Promise<{
   return { server, endpoint: `http://127.0.0.1:${address.port}` };
 }
 
-function buildTestPanelConfig(): PanelConfig {
-  return {
-    server: { host: '127.0.0.1', port: 0 },
-    metadataInstancesConfig: '',
-    metadataRemoteTimeoutMs: 5_000,
-    ui: { distDir: tmpdir() },
-    log: { level: 'error', format: 'json' },
-    knowledge: { baseUrl: 'http://127.0.0.1:1', authToken: '', timeoutMs: 1_000 },
-    knowledgeLlmBinding: { sync: false, proxyBaseUrl: 'http://127.0.0.1:1' },
-    agentTemplateDir: '/tmp/panel-test-templates',
-    featureAnalyticsEnabled: false,
-    clickhouse: {
-      enabled: false,
-      url: '',
-      database: 'default',
-      table: 'panel_api_call_logs',
-      user: 'default',
-      password: '',
-      flushIntervalMs: 5_000,
-      flushThreshold: 50,
-      ttlDays: 90,
-      requestTimeoutMs: 1_000,
-    },
-    wiki: {
-      textFileMaxBytes: 512 * 1024,
-      binaryFileMaxBytes: 10 * 1024 * 1024,
-    },
-    auth: {
-      userKeyEnabled: true,
-      idpEnabled: false,
-      sessionTtlSeconds: 3_600,
-      sessionCookieName: 'tdai_idp_session',
-      sessionSecure: false,
-      sessionSecret: '',
-      identityStorePath: '/tmp/panel-test-identities.json',
-      woa: {
-        enabled: false,
-        appToken: '',
-        safeMode: true,
-        requireSignature: true,
-        appUrl: '',
-        loginUrl: '',
-        logoutUrl: '',
-        paasId: '',
-        defaultTeamId: '',
-        defaultRole: 'member',
-        authProvider: 'local',
-      },
-      taskSource: {
-        enabled: [],
-        tapd: { mcpUrl: '', siteBaseUrl: '' },
-      },
-    },
-  };
+function captureEnv(keys: readonly string[]): Map<string, string | undefined> {
+  const snapshot = new Map<string, string | undefined>();
+  for (const key of keys) {
+    snapshot.set(key, process.env[key]);
+  }
+  return snapshot;
 }
 
-function buildTestPanelDeps(gatewayEndpoint: string): PanelDeps {
-  const config = buildTestPanelConfig();
-  const logger = createSilentLogger();
-  const instanceRegistry = new InstanceRegistry([
-    {
-      instance_id: INSTANCE_ID,
-      name: 'Test Instance',
-      gateway_endpoint: gatewayEndpoint,
-      api_key: GATEWAY_API_KEY,
-    },
-  ]);
-  const kernelHttp = new FetchKernelHttpAdapter(logger);
-  const metaKernel = new FetchMetaKernelAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
-  const skillKernel = new FetchSkillKernelAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
-  const analyticsKernel = new FetchAnalyticsKernelAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
-  const taskSourceKernel = new FetchTaskSourceAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
-  const userIdResolver = new PanelUserIdResolver(metaKernel, logger);
-  // 预热有效测试 key，避免 telemetry 中间件在响应后异步补发 auth/verify 干扰调用顺序断言
-  userIdResolver.warm(OWNER_USER_KEY, 'usr-owner', INSTANCE_ID);
-  userIdResolver.warm(OTHER_USER_KEY, 'usr-other', INSTANCE_ID);
-  const apiCallTelemetry = createPanelApiCallTelemetry(config.clickhouse, logger, () => null);
-  const auth = new PanelAuthService({
-    config: config.auth,
-    instances: instanceRegistry,
-    metaKernel,
-    logger,
-  });
-
-  return {
-    config,
-    logger,
-    instanceRegistry,
-    kernelHttp,
-    metaKernel,
-    knowledgeClientFactory: () => ({}) as KnowledgeClientPort,
-    skillKernel,
-    analyticsKernel,
-    taskSourceKernel,
-    knowledgeTaskRegistry: new KnowledgeTaskRegistry(),
-    ingestProgressStore: new IngestProgressStore(),
-    apiCallTelemetry,
-    auth,
-    userIdResolver,
-  };
+function restoreEnv(snapshot: Map<string, string | undefined>): void {
+  for (const [key, value] of snapshot.entries()) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
 }
 
-async function startPanelServer(gatewayEndpoint: string): Promise<{
+async function startPanelServer(
+  workDir: string,
+  gatewayEndpoint: string,
+): Promise<{
   server: ServerType;
   baseUrl: string;
 }> {
-  const app = buildPanelApp(buildTestPanelDeps(gatewayEndpoint));
-  const server = await new Promise<ServerType>((resolve) => {
-    const srv = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 }, () => resolve(srv));
-  });
-  const address = server.address() as AddressInfo;
-  return { server, baseUrl: `http://127.0.0.1:${address.port}` };
+  const instancesPath = join(workDir, 'metadata-instances.json');
+  writeFileSync(
+    instancesPath,
+    JSON.stringify({
+      instances: [
+        {
+          id: INSTANCE_ID,
+          name: 'Test Instance',
+          gateway_endpoint: gatewayEndpoint,
+          api_key: GATEWAY_API_KEY,
+        },
+      ],
+    }),
+    'utf8',
+  );
+
+  const envSnapshot = captureEnv(CONTROLLED_ENV_KEYS);
+  try {
+    process.env.HOST = '127.0.0.1';
+    process.env.PORT = '0';
+    process.env.LOG_LEVEL = 'error';
+    process.env.LOG_FORMAT = 'json';
+    process.env.METADATA_INSTANCES_CONFIG = instancesPath;
+    process.env.METADATA_REMOTE_TIMEOUT_MS = '5000';
+    process.env.UI_DIST_DIR = workDir;
+    process.env.KNOWLEDGE_SERVICE_URL = 'http://127.0.0.1:1';
+    process.env.KNOWLEDGE_AUTH_TOKEN = '';
+    process.env.KNOWLEDGE_TIMEOUT_MS = '1000';
+    process.env.KNOWLEDGE_LLM_BINDING_SYNC = 'false';
+    process.env.KNOWLEDGE_LLM_PROXY_BASE_URL = 'http://127.0.0.1:1';
+    process.env.TDAI_AGENT_TEMPLATE_DIR = join(workDir, 'agent-templates');
+    process.env.PANEL_FEATURE_ANALYTICS_ENABLED = 'false';
+    process.env.PANEL_CLICKHOUSE_ENABLED = 'false';
+    process.env.PANEL_CLICKHOUSE_URL = '';
+    process.env.PANEL_AUTH_MODE = 'user_key';
+    process.env.PANEL_AUTH_USER_KEY_ENABLED = 'true';
+    process.env.PANEL_AUTH_IDP_ENABLED = 'false';
+    process.env.PANEL_AUTH_IDP_WOA_ENABLED = 'false';
+    process.env.PANEL_AUTH_IDENTITY_STORE_PATH = join(workDir, 'panel-auth-identities.json');
+
+    const config = loadPanelConfig();
+    const deps = buildPanelDeps(config);
+    // 预热已知测试 key，避免审计中间件在响应后异步补发 auth/verify 干扰调用顺序断言
+    deps.userIdResolver.warm(OWNER_USER_KEY, 'usr-owner', INSTANCE_ID);
+    deps.userIdResolver.warm(OTHER_USER_KEY, 'usr-other', INSTANCE_ID);
+    const app = buildPanelApp(deps);
+
+    const server = await new Promise<ServerType>((resolve) => {
+      const srv = serve(
+        { fetch: app.fetch, hostname: config.server.host, port: config.server.port },
+        () => resolve(srv),
+      );
+    });
+    const address = server.address() as AddressInfo;
+    return { server, baseUrl: `http://127.0.0.1:${address.port}` };
+  } finally {
+    restoreEnv(envSnapshot);
+  }
 }
 
 function closeServer(server: http.Server | ServerType): Promise<void> {
   return new Promise((resolve, reject) => {
-    server.close((err) => (err ? reject(err) : resolve()));
+    server.close((err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
   });
 }
 
+async function waitForCondition(check: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() >= deadline) {
+      throw new Error('Timed out waiting for background request to settle');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
+  let workDir: string;
   let state: MockGatewayState;
   let gatewayServer: http.Server;
   let panelServer: ServerType;
@@ -423,7 +418,10 @@ describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
   async function callDeleteCascade(
     body: Record<string, unknown>,
     userKey = OWNER_USER_KEY,
-  ): Promise<{ status: number; json: { code: number; message: string; request_id: string; data: unknown } }> {
+  ): Promise<{
+    status: number;
+    json: { code: number; message: string; request_id: string; data: unknown };
+  }> {
     const resp = await fetch(`${panelBaseUrl}/api/v1/agent/delete-cascade`, {
       method: 'POST',
       headers: {
@@ -444,17 +442,25 @@ describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
   }
 
   beforeEach(async () => {
+    workDir = mkdtempSync(join(tmpdir(), 'panel-cascade-'));
     state = createMockGatewayState();
     const gw = await startMockKernelGateway(state);
     gatewayServer = gw.server;
-    const panel = await startPanelServer(gw.endpoint);
+    const panel = await startPanelServer(workDir, gw.endpoint);
     panelServer = panel.server;
     panelBaseUrl = panel.baseUrl;
   });
 
   afterEach(async () => {
-    await closeServer(panelServer);
-    await closeServer(gatewayServer);
+    try {
+      await closeServer(panelServer);
+    } finally {
+      try {
+        await closeServer(gatewayServer);
+      } finally {
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    }
   });
 
   it('archives agent when SkillCore is disabled (404 "Skill module not enabled")', async () => {
@@ -486,10 +492,9 @@ describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
     expect(skillListCall?.headers[META_HEADER_USER_KEY]).toBe(OWNER_USER_KEY);
   });
 
-  it('fails closed when /v3/skill/list returns a different 404 message', async () => {
-    for (const msg of ['Not Found', 'skill module not enabled']) {
-      state.calls.length = 0;
-      state.agents.get('agt-1')!.status = 'active';
+  it.each(['Not Found', 'skill module not enabled'])(
+    'fails closed when /v3/skill/list returns a different 404 message: %s',
+    async (msg) => {
       state.skillListOverride = () => ({
         httpStatus: 404,
         code: 404,
@@ -504,8 +509,8 @@ describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
       expect(json.message).toBe(msg);
       expect(state.agents.get('agt-1')?.status).toBe('active');
       expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
-    }
-  });
+    },
+  );
 
   it('fails closed when /v3/skill/list returns 500', async () => {
     state.skillListOverride = () => ({
@@ -546,7 +551,34 @@ describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
     expect(state.agents.get('agt-1')?.status).toBe('active');
     expect(state.calls.some((c) => c.path === '/v3/skill/delete')).toBe(false);
     expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
-    expect([...state.skills.values()].every((s) => s.status === 'active')).toBe(true);
+    expect(state.skills.size).toBe(105);
+  });
+
+  it('fails closed when /v3/skill/list returns skills but /v3/skill/delete returns 404 "Skill module not enabled"', async () => {
+    seedSkills(state, 'agt-1', 2);
+    state.skillDeleteOverride = () => ({
+      httpStatus: 404,
+      code: 404,
+      message: 'Skill module not enabled',
+      data: null,
+    });
+
+    const { status, json } = await callDeleteCascade({ agent_id: 'agt-1' });
+
+    expect(status).toBe(500);
+    expect(json).toMatchObject({
+      code: 500,
+      message: 'SKILL_DELETE_FAILED',
+      data: {
+        failed_skill_id: 'skl-001',
+        kernel_code: 404,
+        kernel_message: 'Skill module not enabled',
+        deleted_skill_ids: [],
+      },
+    });
+    expect(state.agents.get('agt-1')?.status).toBe('active');
+    expect(state.skills.size).toBe(2);
+    expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
   });
 
   it('archives agent when SkillCore is enabled and agent has no skills', async () => {
@@ -589,7 +621,7 @@ describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
       },
     });
     expect(state.agents.get('agt-1')?.status).toBe('archived');
-    expect([...state.skills.values()].every((s) => s.status === 'archived')).toBe(true);
+    expect(state.skills.size).toBe(0);
 
     const paths = state.calls.map((c) => c.path);
     expect(paths.slice(0, 4)).toEqual([
@@ -636,29 +668,51 @@ describe('POST /api/v1/agent/delete-cascade (E2E)', () => {
       },
     });
     expect(state.agents.get('agt-1')?.status).toBe('active');
-    expect(state.skills.get('skl-001')?.status).toBe('archived');
-    expect(state.skills.get('skl-002')?.status).toBe('active');
-    expect(state.skills.get('skl-003')?.status).toBe('active');
+    expect(state.skills.has('skl-001')).toBe(false);
+    expect(state.skills.has('skl-002')).toBe(true);
+    expect(state.skills.has('skl-003')).toBe(true);
     expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
   });
 
-  it('enforces guards: missing agent_id (400), invalid user_key (401), missing agent (404), non-owner (403)', async () => {
-    const missingId = await callDeleteCascade({});
-    expect(missingId.status).toBe(400);
-    expect(missingId.json).toMatchObject({ code: 400, message: 'MISSING_AGENT_ID' });
+  it('rejects request with missing agent_id (400)', async () => {
+    const { status, json } = await callDeleteCascade({});
 
-    const invalidKey = await callDeleteCascade({ agent_id: 'agt-1' }, INVALID_USER_KEY);
-    expect(invalidKey.status).toBe(401);
-    expect(invalidKey.json).toMatchObject({ code: 401, message: 'INVALID_USER_KEY' });
+    expect(status).toBe(400);
+    expect(json).toMatchObject({ code: 400, message: 'MISSING_AGENT_ID' });
+    expect(state.agents.get('agt-1')?.status).toBe('active');
+    expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
+  });
 
-    const notFound = await callDeleteCascade({ agent_id: 'agt-missing' });
-    expect(notFound.status).toBe(404);
-    expect(notFound.json).toMatchObject({ code: 404, message: 'AGENT_NOT_FOUND' });
+  it('rejects request with invalid user_key (401)', async () => {
+    const { status, json } = await callDeleteCascade({ agent_id: 'agt-1' }, INVALID_USER_KEY);
 
-    const nonOwner = await callDeleteCascade({ agent_id: 'agt-1' }, OTHER_USER_KEY);
-    expect(nonOwner.status).toBe(403);
-    expect(nonOwner.json).toMatchObject({ code: 403, message: 'NOT_YOUR_AGENT' });
+    expect(status).toBe(401);
+    expect(json).toMatchObject({ code: 401, message: 'INVALID_USER_KEY' });
+    // 等待审计中间件对未命中缓存的无效 key 发起的异步 auth/verify 完成，避免关闭 server 时残留连接
+    await waitForCondition(
+      () =>
+        state.calls.filter(
+          (c) => c.path === '/v3/meta/auth/verify' && c.body.user_key === INVALID_USER_KEY,
+        ).length >= 2,
+    );
+    expect(state.agents.get('agt-1')?.status).toBe('active');
+    expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
+  });
 
+  it('rejects request when agent does not exist (404)', async () => {
+    const { status, json } = await callDeleteCascade({ agent_id: 'agt-missing' });
+
+    expect(status).toBe(404);
+    expect(json).toMatchObject({ code: 404, message: 'AGENT_NOT_FOUND' });
+    expect(state.agents.get('agt-1')?.status).toBe('active');
+    expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
+  });
+
+  it('rejects request from non-owner user (403)', async () => {
+    const { status, json } = await callDeleteCascade({ agent_id: 'agt-1' }, OTHER_USER_KEY);
+
+    expect(status).toBe(403);
+    expect(json).toMatchObject({ code: 403, message: 'NOT_YOUR_AGENT' });
     expect(state.agents.get('agt-1')?.status).toBe('active');
     expect(state.calls.some((c) => c.path === '/v3/meta/agent/archive')).toBe(false);
   });
