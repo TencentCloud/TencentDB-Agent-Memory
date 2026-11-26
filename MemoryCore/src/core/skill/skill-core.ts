@@ -140,6 +140,24 @@ export interface CreateInput extends IdFields {
   content: string;
   resources?: SkillResourcePayload[];
   metadata?: Record<string, unknown>;
+  /**
+   * 同名替换（默认 false，保持原"重名即 SKILL_NAME_DUPLICATE"语义）。
+   *
+   * true 时：若同 team + 同 owner agent 下已存在同名 active head，则在该
+   * skill_id 上追加 `old.version + 1` 新版本，SKILL.md 与资源整体替换
+   * （旧 manifest 全部移除、本次 resources 全部写入），旧 head 降为历史版本；
+   * 不存在同名 skill 时等同普通 create（新建 v1）。
+   */
+  replace?: boolean;
+}
+
+/** createWithOutcome 的结果：区分"新建"与"替换已有同名 skill"。 */
+export interface CreateOutcome {
+  skill: Skill;
+  /** true = 命中同名 skill 并走了替换路径。 */
+  replaced: boolean;
+  /** 替换前的 head 版本号（仅 replaced=true 时有值）。 */
+  previous_version?: number;
 }
 
 export interface UpdateInput extends IdFields {
@@ -226,6 +244,8 @@ export class SkillCore {
   private readonly maxNonHeadVersions: number;
   private readonly onSkillArchived?: SkillCoreOptions["onSkillArchived"];
   private readonly onSkillAccessed?: SkillCoreOptions["onSkillAccessed"];
+  /** replace=true 的同名串行锁（key = team/owner/name）。 */
+  private readonly keyLocks = new Map<string, Promise<void>>();
 
   constructor(opts: SkillCoreOptions) {
     this.store = opts.store;
@@ -253,12 +273,48 @@ export class SkillCore {
   // ───────────────────────────────────────────────────────────────────
 
   async create(input: CreateInput): Promise<Skill> {
+    return (await this.createWithOutcome(input)).skill;
+  }
+
+  /**
+   * create 的完整形态：额外返回是否走了同名替换路径（gateway 用于回传
+   * `replaced` / `previous_version`）。`replace !== true` 时与历史 create 行为一致。
+   */
+  async createWithOutcome(input: CreateInput): Promise<CreateOutcome> {
     // 1) parse + validate
     const file = this.parseAndValidate(input.content);
     if (file.frontmatter.name !== input.name) {
       throw new SkillCoreError("INVALID_FRONTMATTER", `frontmatter.name '${file.frontmatter.name}' != body.name '${input.name}'`);
     }
 
+    if (input.replace !== true) {
+      return { skill: await this.createFresh(input, file.frontmatter.description), replaced: false };
+    }
+
+    // replace=true：同 (team, owner agent, name) 串行化，避免同进程内两次替换
+    // 读到同一个 head 后各自 +1 造成版本目录冲突。跨进程并发仍由 store 层
+    // 的 head-flip（SQLite 事务 / TCVDB CAS → SKILL_VERSION_STALE）兜底。
+    const teamId = input.team_id ?? "default";
+    const ownerAgentId = input.agent_id ?? "default";
+    const lockKey = `${teamId}\u0000${ownerAgentId}\u0000${input.name}`;
+    return this.withKeyLock(lockKey, async () => {
+      const existing = await this.findActiveHeadByName(teamId, ownerAgentId, input.name);
+      if (existing) return this.replaceExisting(existing, input, file.frontmatter.description);
+      try {
+        return { skill: await this.createFresh(input, file.frontmatter.description), replaced: false };
+      } catch (e) {
+        // 查询与写入之间被其它实例抢先建了同名 skill → 再查一次并走替换。
+        if (e instanceof SkillCoreError && e.code === "SKILL_NAME_DUPLICATE") {
+          const raced = await this.findActiveHeadByName(teamId, ownerAgentId, input.name);
+          if (raced) return this.replaceExisting(raced, input, file.frontmatter.description);
+        }
+        throw e;
+      }
+    });
+  }
+
+  /** 新建 skill v1（原 create 主体）：生成不碰撞的 sid → versioning.createNewSkill。 */
+  private async createFresh(input: CreateInput, description: string): Promise<Skill> {
     // 2) 生成 sid 并做碰撞检测
     //
     // 背景：默认 ulid 走 CSPRNG base62 12 字符（~71 bit 真熵，单实例 100 万
@@ -300,13 +356,80 @@ export class SkillCore {
         {
           content: input.content,
           name: input.name,
-          description: file.frontmatter.description,
+          description,
           resourcesToWrite: input.resources,
           metadata_json: input.metadata ? JSON.stringify(input.metadata) : undefined,
         },
       );
     } catch (e) {
       toCoreError(e);
+    }
+  }
+
+  /**
+   * 同名替换：在已有 head 的 skill_id 上追加 v(old+1)。
+   *   - SKILL.md 全量替换；
+   *   - 资源整体替换：旧 manifest 全部移除 + 本次 resources 全部写入
+   *     （appendNextVersion 先 remove 后 write，同 path 也会以新内容落库）；
+   *   - 旧 head 降为历史版本（is_head=0），可经 versions / get(version) 回看；
+   *     不使用 status='archived'——该状态在本系统表示整 skill 已删除。
+   *   - skill_id / owner 不变，meta_asset 绑定无需迁移。
+   * 内容与资源均无变化（旧/新都无资源且 content_hash 相同）时幂等返回原 head。
+   */
+  private async replaceExisting(head: Skill, input: CreateInput, description: string): Promise<CreateOutcome> {
+    if (input.team_id) assertTeamMatchWrap(head, input.team_id);
+    if (input.agent_id) assertOwnerWrap(head, input.agent_id, input.team_id);
+    try {
+      const skill = await this.versioning.appendNextVersion(head, this.ctxOf(input), {
+        content: input.content,
+        name: head.name,
+        description,
+        resourcesToRemove: head.manifest.map((m) => m.path),
+        resourcesToWrite: input.resources ?? [],
+        metadata_json: input.metadata ? JSON.stringify(input.metadata) : undefined,
+      });
+      void this.versioning.cleanupExpiredVersionsForSkill(
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
+      ).catch(() => { /* fire-and-forget */ });
+      return { skill, replaced: true, previous_version: head.version };
+    } catch (e) {
+      toCoreError(e);
+    }
+  }
+
+  /**
+   * 按 (team, owner agent, name) 精确找 active head —— 与 store 层重名校验同一口径。
+   * 复用 listSkills(name_prefix) 而不新增 store 接口，三种后端（SQLite/TCVDB/Mongo）
+   * 均已支持；前缀可能命中同族名字，这里再做精确比对。
+   */
+  private async findActiveHeadByName(teamId: string, ownerAgentId: string, name: string): Promise<Skill | null> {
+    const { items } = await this.store.listSkills({
+      team_id: teamId,
+      owner_agent_id: ownerAgentId,
+      name_prefix: name,
+      status: ["active"],
+      limit: 1000,
+      offset: 0,
+    });
+    return items.find((s) =>
+      s.name === name && s.is_head && s.status === "active"
+      && s.team_id === teamId && s.owner_agent_id === ownerAgentId,
+    ) ?? null;
+  }
+
+  /** 进程内按 key 串行执行（Promise 链；不同 key 互不阻塞）。 */
+  private async withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.keyLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const tail = prev.then(() => gate);
+    this.keyLocks.set(key, tail);
+    try {
+      await prev;
+      return await fn();
+    } finally {
+      release();
+      if (this.keyLocks.get(key) === tail) this.keyLocks.delete(key);
     }
   }
 

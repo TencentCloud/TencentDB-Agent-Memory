@@ -455,13 +455,23 @@ sessions/<source>/<team-id>/<user-id>/<session-id>/subagents/<subagent-id>/<star
 | content | string | 是 | SKILL.md 全文 |
 | resources | object[] | 否 | ≤100 个，`{ path ≤512, content, encoding: "utf-8"\|"base64", mime_type?, is_executable? }` |
 | metadata | object | 否 | 自定义元数据 |
+| replace | boolean | 否 | 默认 `false`。同名替换开关，语义见下 |
 | team_id / agent_id / user_id / task_id | string | 见下 | 写接口要求 team+agent+user 提供 |
 
 > 约束：`agent_id` 必须以 `team_id` 为命名空间（有 agent 必须有 team）。
 
-**响应** `data`：`SkillSummary`（见 §3.2 末尾统一说明）。
+**同名替换（`replace`）**
 
-**错误**：`40001`(参数/frontmatter 不一致)、`42201`(重名)、`4291`(配额超限)、`50304`(skill_id 连续碰撞)。
+- 重名口径：同 `team_id` + 同 owner `agent_id` 下已存在同 `name` 的 active skill（其它 agent / team 的同名 skill 互不影响）。
+- `replace` 缺省或 `false`：重名时返回 `42201 SKILL_NAME_DUPLICATE`（与历史行为一致）。
+- `replace: true` 且命中重名：在**原 `skill_id`** 上追加新版本，`version = 旧 head.version + 1`；SKILL.md 全量替换，资源**整体替换**（旧版本 manifest 全部移除，本次 `resources` 全部写入；不传 `resources` 即清空资源）；`metadata` 传了则覆盖，不传沿用旧值。旧 head 降为历史版本（`is_head=false`），可通过 `/v3/skill/versions`、`/v3/skill/get`(`version`) 回看。owner / skill_id / 资产绑定不变。
+- `replace: true` 且内容与资源均无变化（旧/新都无资源且 SKILL.md 相同）：幂等返回原 head，版本不变。
+- `replace: true` 但不存在同名 skill：按普通 create 新建 v1。
+- 并发：同一实例内对同一 (team, agent, name) 的替换串行执行；跨实例并发由版本 head-flip 校验兜底（可能返回 `40901`）。
+
+**响应** `data`：`SkillSummary`（见 §3.2 末尾统一说明）。命中同名替换时额外带 `replaced: true` 与 `previous_version`（替换前的 head 版本号）；普通新建不带这两个字段。
+
+**错误**：`40001`(参数/frontmatter 不一致)、`42201`(重名且未传 `replace: true`)、`4291`(配额超限)、`50304`(skill_id 连续碰撞)。
 
 **示例**
 

@@ -714,6 +714,8 @@ export const zhCN = {
   'importSkill.zip.done': '完成',
   'importSkill.zip.summary': '导入完成：成功 {{ok}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个',
   'importSkill.zip.result.ok': '{{count}} 个资源文件',
+  'importSkill.zip.result.replaced': '已替换为 v{{version}}（{{count}} 个资源文件）',
+  'importSkill.zip.result.unchanged': '内容未变化，保持 v{{version}}',
   'importSkill.zip.result.skipped': '已跳过：{{reason}}',
   'importSkill.zip.result.failed': '导入失败：{{reason}}',
   'importSkill.zip.error.notZip': '不是有效的 .zip 压缩包',
@@ -760,6 +762,12 @@ export const zhCN = {
   'importSkill.result.session.accepted':
     '提交成功，提取任务已受理。预计 1-3 分钟后完成，请稍后刷新 skill 列表查看结果。',
   'importSkill.result.directory': '导入成功：{{name}}（{{count}} 个资源文件）',
+  'importSkill.result.replaced': '已替换为 v{{version}}：{{name}}（{{count}} 个资源文件）',
+  'importSkill.result.unchanged': '{{name}} 内容与资源均未变化，保持 v{{version}}',
+  'importSkill.replace.confirm.message': '已存在同名 Skill「{{name}}」，是否替换？',
+  'importSkill.replace.confirm.description':
+    '替换后将用本次上传的 SKILL.md 和资源文件整体覆盖该 Skill 的当前内容（本次未包含的旧资源文件会被移除），版本号递增 1；旧版本保留在版本历史中。取消则不做任何修改。',
+  'importSkill.replace.confirm.ok': '替换',
   'importSkill.sample.user': '我们的 PostgreSQL 14 主库今天又卡死了…',
   'importSkill.sample.assistant': '先 ssh 到主库节点，查看慢查询日志…',
   'importSkill.sample.toolCall': '调用 bash 执行: tail -100 /var/log/postgresql/slow.log',

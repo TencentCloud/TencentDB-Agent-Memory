@@ -39,6 +39,12 @@ import {
   type SkillResourcePayload,
   type ExtractParams,
 } from '@/lib/api/skill-api';
+import {
+  createWithReplaceConfirm,
+  describeCreateOutcome,
+  type SkillCreateOutcome,
+} from '@/lib/skill-replace';
+import { tea } from '@/lib/tea-bridge';
 import { Alert, Button, Form, Input, Modal, Segment, Select } from 'tea-component';
 import { FolderOpenIcon } from 'tea-icons-react';
 import i18n from '@/i18n';
@@ -206,7 +212,7 @@ async function resolveSkillContent(plan: SkillPlan): Promise<{ name: string; con
 async function importPlan(
   plan: SkillPlan,
   ctx: { userId: string; teamId: string; agentId: string },
-): Promise<{ name: string; count: number }> {
+): Promise<{ name: string; count: number; outcome: SkillCreateOutcome }> {
   const { name, content } = await resolveSkillContent(plan);
 
   // 资源文件随 create 一次性落库（单版本 v1）。
@@ -235,15 +241,42 @@ async function importPlan(
     );
   }
 
-  await createSkill({
-    user_id: ctx.userId,
-    team_id: ctx.teamId,
-    agent_id: ctx.agentId,
-    name,
-    content,
-    resources: resources.length ? resources : undefined,
+  // 同名冲突（42201）→ 询问用户是否替换 → 确认后带 replace:true 重试一次；
+  // 取消则原样抛出第一次的同名错误（不创建、不替换）。
+  const { result } = await createWithReplaceConfirm(
+    {
+      user_id: ctx.userId,
+      team_id: ctx.teamId,
+      agent_id: ctx.agentId,
+      name,
+      content,
+      resources: resources.length ? resources : undefined,
+    },
+    createSkill,
+    () => confirmReplaceSkill(name),
+  );
+  return { name, count: resources.length, outcome: describeCreateOutcome(result) };
+}
+
+/** 同名 skill 替换确认（Tea Modal.confirm，与站内其它二次确认一致）。 */
+function confirmReplaceSkill(name: string): Promise<boolean> {
+  return tea.confirm({
+    message: i18n.t('importSkill.replace.confirm.message', { name }),
+    description: i18n.t('importSkill.replace.confirm.description'),
+    okText: i18n.t('importSkill.replace.confirm.ok'),
+    cancelText: i18n.t('importSkill.cancel'),
   });
-  return { name, count: resources.length };
+}
+
+/** 导入结果文案：新建 / 已替换为 vN / 内容未变化。 */
+function outcomeText(r: { name: string; count: number; outcome: SkillCreateOutcome }): string {
+  if (r.outcome.kind === 'replaced') {
+    return i18n.t('importSkill.result.replaced', { name: r.name, version: r.outcome.version, count: r.count });
+  }
+  if (r.outcome.kind === 'unchanged') {
+    return i18n.t('importSkill.result.unchanged', { name: r.name, version: r.outcome.version });
+  }
+  return i18n.t('importSkill.result.directory', { name: r.name, count: r.count });
 }
 
 /**
@@ -427,6 +460,8 @@ interface ZipResult {
   status: 'ok' | 'skipped' | 'failed';
   name?: string;
   count?: number;
+  /** 成功项的落库结果（新建 / 已替换为 vN / 未变化）。 */
+  outcome?: SkillCreateOutcome;
   reason?: string;
 }
 
@@ -631,6 +666,7 @@ export default function ImportSkillDialog(props: {
                 status: 'ok',
                 name: r.name,
                 count: r.count,
+                outcome: r.outcome,
               });
             } catch (e) {
               resultByKey.set(item.key, {
@@ -669,7 +705,7 @@ export default function ImportSkillDialog(props: {
         agentId: agentId || props.userId, // v3 要求 agent_id，固定模式用选中的，否则用 userId 兜底
       });
 
-      setResult(t('importSkill.result.directory', { name: imported.name, count: imported.count }));
+      setResult(outcomeText(imported));
       setTimeout(() => props.onImported(), 800);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -910,7 +946,12 @@ export default function ImportSkillDialog(props: {
                     </div>
                     {r.status === 'ok' && (
                       <div className="_memory-isd-zip-meta _memory-isd-ok-text">
-                        ✓ {r.name} · {t('importSkill.zip.result.ok', { count: r.count ?? 0 })}
+                        ✓ {r.name} ·{' '}
+                        {r.outcome?.kind === 'replaced'
+                          ? t('importSkill.zip.result.replaced', { version: r.outcome.version, count: r.count ?? 0 })
+                          : r.outcome?.kind === 'unchanged'
+                            ? t('importSkill.zip.result.unchanged', { version: r.outcome.version })
+                            : t('importSkill.zip.result.ok', { count: r.count ?? 0 })}
                       </div>
                     )}
                     {r.status === 'skipped' && (

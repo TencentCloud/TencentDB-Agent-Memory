@@ -731,6 +731,8 @@ export const enUS = {
   'importSkill.zip.done': 'Done',
   'importSkill.zip.summary': 'Finished: {{ok}} succeeded / {{skipped}} skipped / {{failed}} failed',
   'importSkill.zip.result.ok': '{{count}} resource files',
+  'importSkill.zip.result.replaced': 'Replaced as v{{version}} ({{count}} resource files)',
+  'importSkill.zip.result.unchanged': 'No changes, kept at v{{version}}',
   'importSkill.zip.result.skipped': 'Skipped: {{reason}}',
   'importSkill.zip.result.failed': 'Import failed: {{reason}}',
   'importSkill.zip.error.notZip': 'Not a valid .zip archive',
@@ -777,6 +779,12 @@ export const enUS = {
   'importSkill.result.session.accepted':
     'Submitted successfully. Extraction task accepted. Results expected in 1-3 minutes. Please refresh the skill list later.',
   'importSkill.result.directory': 'Import succeeded: {{name}} ({{count}} resource files)',
+  'importSkill.result.replaced': 'Replaced as v{{version}}: {{name}} ({{count}} resource files)',
+  'importSkill.result.unchanged': '{{name}} is unchanged (content and resources identical), kept at v{{version}}',
+  'importSkill.replace.confirm.message': 'A Skill named "{{name}}" already exists. Replace it?',
+  'importSkill.replace.confirm.description':
+    'Replacing overwrites the Skill\'s current SKILL.md and resource files with this upload (old resource files not included in this upload are removed) and increments the version by 1. Previous versions remain in the version history. Cancel to leave it unchanged.',
+  'importSkill.replace.confirm.ok': 'Replace',
   'importSkill.sample.user': 'Our PostgreSQL 14 primary database froze again today…',
   'importSkill.sample.assistant': 'Let me SSH to the primary node and check the slow query log…',
   'importSkill.sample.toolCall': 'Call bash to run: tail -100 /var/log/postgresql/slow.log',
