@@ -4,12 +4,14 @@
  * 展示小组件 / 常量工具 / 共享 Markdown 分别独立收口。
  */
 import { useTranslation } from 'react-i18next';
-import { Button, Card, Form, Input, Justify, MetricsBoard, Modal, SearchBox, Segment, Select, StatusTip, Table, Text } from 'tea-component';
+import { Button, Card, Form, Input, Justify, MetricsBoard, Modal, Segment, Select, StatusTip, Table, Text } from 'tea-component';
 import { BooksIcon, ChevronRightIcon, UsergroupIcon, ViewListIcon, ViewModuleIcon } from 'tea-icons-react';
 import { knowledgeApi, type SourceProviderFormField } from '@/lib/api/knowledge-api';
 import { tea } from '@/lib/tea-bridge';
 import AllocateAssetDialog from '@/components/asset/AllocateAssetDialog';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
+import { AssetListSearch } from '@/components/asset/AssetListSearch';
+import { isKeywordActive, resolveFilterEmptyState } from '@/lib/asset-filter';
 import { formatShortTime, SCOPE_LABEL_KEYS, type StatusFilter, type ViewMode, type WikiScopeTab } from '../constants/wiki-constants';
 import { WikiOwnerLabel, WikiStatusBadge } from './wiki-ui';
 import { WikiActions } from './wiki-detail-components';
@@ -31,7 +33,6 @@ export default function WikiSourcesPanel() {
     currentUser,
     teamAgents,
     // list view
-    sources,
     loading,
     scopeTab,
     setScopeTab,
@@ -76,6 +77,11 @@ export default function WikiSourcesPanel() {
     filteredSources,
     runningWikiIds,
   } = wiki;
+
+  // 空态以「当前范围（团队/固定资产）总数」为准：范围内没有资产 → 原空态；
+  // 有资产但被关键词/状态筛选全部过滤 → 专用「无匹配」空态。
+  const emptyState = resolveFilterEmptyState(stats.total, filteredSources.length);
+  const filtering = isKeywordActive(keyword) || statusFilter !== 'all';
 
   if (subView === 'detail') {
     return <WikiDetailView store={wiki} />;
@@ -141,10 +147,16 @@ export default function WikiSourcesPanel() {
             <Justify
               right={
                 <div className="_asset-wiki-toolbar">
-                  <SearchBox
+                  {filtering && (
+                    <Text theme="label" className="_alp-count">
+                      {t('asset.search.count', { matched: filteredSources.length, total: stats.total })}
+                    </Text>
+                  )}
+                  <AssetListSearch
                     value={keyword}
                     onChange={setKeyword}
                     placeholder={t('wiki.searchPlaceholder')}
+                    ariaLabel={t('wiki.search.ariaLabel')}
                   />
                   <Segment
                     value={statusFilter}
@@ -178,18 +190,18 @@ export default function WikiSourcesPanel() {
                 </div>
               ))}
             </div>
-          ) : sources.length === 0 ? (
+          ) : emptyState === 'empty' ? (
             <StatusTip
               status="empty"
               emptyText={
                 <div className="_asset-wiki-empty">
                   <BooksIcon size="large" />
                   <Text>{t('wiki.empty.title')}</Text>
-                  <Text theme="label">{t('wiki.empty.desc')}</Text>
+                  {scopeTab !== 'fixed' && <Text theme="label">{t('wiki.empty.desc')}</Text>}
                 </div>
               }
             />
-          ) : filteredSources.length === 0 ? (
+          ) : emptyState === 'noMatch' ? (
             <StatusTip status="empty" emptyText={t('wiki.empty.filtered')} />
           ) : viewMode === 'card' ? (
             <div className="_asset-wiki-grid _view-swap">

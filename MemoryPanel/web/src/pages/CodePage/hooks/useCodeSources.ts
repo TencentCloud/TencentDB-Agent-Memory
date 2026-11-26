@@ -20,6 +20,7 @@ import {
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
+import { codeGraphSearchFields, matchesKeyword } from '@/lib/asset-filter';
 import { isValidGitUrl, isSshGitUrl, formatRepoName, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
 export function useCodeSources() {
@@ -145,22 +146,17 @@ export function useCodeSources() {
   );
 
   const filteredSources = useMemo(() => {
-    const normalizedKeyword = keyword.trim().toLowerCase();
     return scopeSources.filter((source) => {
       const isProcessing = source.status === 'pending' || source.status === 'processing';
       const isError = source.status === 'failed' || source.status === 'missing';
       if (statusFilter === 'ready' && source.status !== 'ready') return false;
       if (statusFilter === 'processing' && !isProcessing) return false;
       if (statusFilter === 'error' && !isError) return false;
-      if (!normalizedKeyword) return true;
-      return [
-        source.repo_name,
-        source.repo_url,
-        source.branch,
-        source.code_graph_id,
-        source.owner_user_id ?? '',
-        source.commit_hash ?? '',
-      ].some((value) => value.toLowerCase().includes(normalizedKeyword));
+      // 关键词：展示名 / repo_name / repo_url / ID / 分支 / commit / 归属人，规则见 asset-filter。
+      return matchesKeyword(
+        codeGraphSearchFields(source, formatRepoName(source.repo_name, source.repo_url)),
+        keyword,
+      );
     });
   }, [scopeSources, keyword, statusFilter]);
 

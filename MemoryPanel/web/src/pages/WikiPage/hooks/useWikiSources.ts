@@ -8,6 +8,7 @@ import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea, confirmThenRun } from '@/lib/tea-bridge';
+import { matchesKeyword, wikiSearchFields } from '@/lib/asset-filter';
 import {
   findExistingRawFilenames,
   formatOverwriteFilenames,
@@ -322,17 +323,12 @@ export function useWikiSources() {
   );
 
   const filteredSources = useMemo(() => {
-    const normalizedKeyword = keyword.trim().toLowerCase();
     return scopeSources.filter((source) => {
       const isProcessing = source.status === 'pending' || source.status === 'processing';
       if (statusFilter === 'ready' && source.status !== 'ready') return false;
       if (statusFilter === 'processing' && !isProcessing) return false;
-      if (!normalizedKeyword) return true;
-      return (
-        source.name.toLowerCase().includes(normalizedKeyword) ||
-        source.wiki_id.toLowerCase().includes(normalizedKeyword) ||
-        (source.owner_user_id ?? '').toLowerCase().includes(normalizedKeyword)
-      );
+      // 关键词：名称 / 描述(summary) / ID / 来源 URL / 归属人，规则见 asset-filter。
+      return matchesKeyword(wikiSearchFields(source), keyword);
     });
   }, [scopeSources, keyword, statusFilter]);
 

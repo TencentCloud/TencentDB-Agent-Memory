@@ -25,6 +25,7 @@
  * is not worth it.
  *
  */
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Select, Segment, Tag, Tooltip } from 'tea-component';
 import { DeleteIcon } from 'tea-icons-react';
@@ -39,7 +40,14 @@ import {
   AssetItemBadges,
   AssetItemTime,
 } from '@/components/asset/AssetListPanel';
+import { AssetListSearch } from '@/components/asset/AssetListSearch';
 import { UserBadge } from '@/components/asset/UserBadge';
+import {
+  filterByKeyword,
+  isKeywordActive,
+  resolveFilterEmptyState,
+  skillSearchFields,
+} from '@/lib/asset-filter';
 import SkillDetailPane from './SkillDetailPane';
 import ImportSkillDialog from './ImportSkillDialog';
 import ForkSkillDialog from './ForkSkillDialog';
@@ -88,6 +96,15 @@ export default function SkillsPanel({
     handleToggleVisibility,
     selectedSkill,
   } = store;
+
+  // 本地关键词过滤：只过滤已加载列表，不影响选中项（被过滤掉时右侧详情保持不变）。
+  const [keyword, setKeyword] = useState('');
+  const filteredSkills = useMemo(
+    () => filterByKeyword(skillsWithCache, keyword, skillSearchFields),
+    [skillsWithCache, keyword],
+  );
+  const filtering = isKeywordActive(keyword);
+  const emptyState = resolveFilterEmptyState(skillsWithCache.length, filteredSkills.length);
 
   return (
     <div className="_memory-skills-body">
@@ -187,18 +204,36 @@ export default function SkillsPanel({
                 )}
               </>
             }
-            count={t('skills.count', { count: skillsWithCache.length })}
+            count={
+              filtering
+                ? t('asset.search.count', {
+                    matched: filteredSkills.length,
+                    total: skillsWithCache.length,
+                  })
+                : t('skills.count', { count: skillsWithCache.length })
+            }
+            toolbar={
+              <AssetListSearch
+                full
+                value={keyword}
+                onChange={setKeyword}
+                placeholder={t('skills.search.placeholder')}
+                ariaLabel={t('skills.search.ariaLabel')}
+              />
+            }
             loading={loading}
-            items={skillsWithCache}
+            items={filteredSkills}
             selectedId={selectedSkillId}
             getItemId={(s) => s.skill_id}
             onSelect={(s) => setSelectedSkillId(s.skill_id)}
             emptyText={
-              tab === 'fixed' && !selectedAgent
-                ? t('skills.empty.fixed.noAgent')
-                : tab === 'fixed'
-                  ? t('skills.empty.fixed.hasAgent', { agent: selectedAgent })
-                  : t('skills.empty.team')
+              emptyState === 'noMatch'
+                ? t('asset.search.noMatch', { keyword: keyword.trim() })
+                : tab === 'fixed' && !selectedAgent
+                  ? t('skills.empty.fixed.noAgent')
+                  : tab === 'fixed'
+                    ? t('skills.empty.fixed.hasAgent', { agent: selectedAgent })
+                    : t('skills.empty.team')
             }
             renderItem={(s) => {
               const ownerIsMe = !!myUserId && s.owner_user_id === myUserId;
