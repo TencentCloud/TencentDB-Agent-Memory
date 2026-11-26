@@ -4,13 +4,15 @@
  * Markdown 渲染统一走共享 AssetMarkdown。
  */
 import { useTranslation } from 'react-i18next';
-import { Alert, Button, Card, Copy, Form, Input, Justify, MetricsBoard, Modal, SearchBox, Segment, Select, StatusTip, Table, Text } from 'tea-component';
+import { Alert, Button, Card, Copy, Form, Input, Justify, MetricsBoard, Modal, Segment, Select, StatusTip, Table, Text } from 'tea-component';
 import { ChevronRightIcon, CodeIcon, DeleteIcon, RefreshIcon, UsergroupIcon, ViewListIcon, ViewModuleIcon } from 'tea-icons-react';
 import { knowledgeApi } from '@/lib/api/knowledge-api';
 import { isTerminalFailure } from '@/lib/codeGraphPolling';
 import { tea } from '@/lib/tea-bridge';
 import AllocateAssetDialog from '@/components/asset/AllocateAssetDialog';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
+import { AssetListSearch } from '@/components/asset/AssetListSearch';
+import { isKeywordActive, resolveFilterEmptyState } from '@/lib/asset-filter';
 import { formatRepoName, formatShortTime, isSshGitUrl, isValidGitUrl, SSH_SOURCE_ID, type ScopeTab, type StatusFilter, type ViewMode } from '../constants/code-constants';
 import { CodeOwnerLabel, statusLabel } from './code-ui';
 import { useCodeSources } from '../hooks/useCodeSources';
@@ -31,7 +33,6 @@ export default function CodeSourcesPanel() {
     currentUser,
     teamAgents,
     // list view
-    displaySources,
     loading,
     scopeTab,
     setScopeTab,
@@ -82,6 +83,11 @@ export default function CodeSourcesPanel() {
     stats,
     filteredSources,
   } = code;
+
+  // 空态以「当前范围（团队/固定资产）总数」为准：范围内没有资产 → 原空态；
+  // 有资产但被关键词/状态筛选全部过滤 → 专用「无匹配」空态。
+  const emptyState = resolveFilterEmptyState(stats.total, filteredSources.length);
+  const filtering = isKeywordActive(keyword) || statusFilter !== 'all';
 
   if (subView === 'detail') {
     return <CodeDetailView store={code} />;
@@ -153,10 +159,16 @@ export default function CodeSourcesPanel() {
             <Justify
               right={
                 <div className="_asset-code-toolbar">
-                  <SearchBox
+                  {filtering && (
+                    <Text theme="label" className="_alp-count">
+                      {t('asset.search.count', { matched: filteredSources.length, total: stats.total })}
+                    </Text>
+                  )}
+                  <AssetListSearch
                     value={keyword}
                     onChange={setKeyword}
                     placeholder={t('code.searchPlaceholder')}
+                    ariaLabel={t('code.search.ariaLabel')}
                   />
                   <Segment
                     value={statusFilter}
@@ -191,18 +203,18 @@ export default function CodeSourcesPanel() {
                 </div>
               ))}
             </div>
-          ) : displaySources.length === 0 ? (
+          ) : emptyState === 'empty' ? (
             <StatusTip
               status="empty"
               emptyText={
                 <div className="_asset-code-empty">
                   <CodeIcon size="large" />
                   <Text>{t('code.empty.title')}</Text>
-                  <Text theme="label">{t('code.empty.desc')}</Text>
+                  {scopeTab !== 'fixed' && <Text theme="label">{t('code.empty.desc')}</Text>}
                 </div>
               }
             />
-          ) : filteredSources.length === 0 ? (
+          ) : emptyState === 'noMatch' ? (
             <StatusTip status="empty" emptyText={t('code.empty.filtered')} />
           ) : viewMode === 'card' ? (
             <div className="_codelist-grid _view-swap">

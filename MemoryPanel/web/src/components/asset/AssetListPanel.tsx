@@ -3,6 +3,7 @@
  *
  * 统一 Skills / Memory 等资产页的左侧导航列表容器，提供：
  *   - 面板标题 + 条数统计
+ *   - 可选工具条（如关键词搜索框，位于标题下方）
  *   - 加载骨架屏
  *   - 空态提示
  *   - 选中态管理（浅品牌底色，无边框）
@@ -22,6 +23,8 @@ interface AssetListPanelProps<T> {
   title: ReactNode;
   /** 条数统计文本 */
   count?: ReactNode;
+  /** 标题下方的工具条（如 AssetListSearch）；加载中也保留，避免输入框闪烁 */
+  toolbar?: ReactNode;
   /** 是否加载中 */
   loading?: boolean;
   /** 数据项 */
@@ -43,6 +46,7 @@ interface AssetListPanelProps<T> {
 export function AssetListPanel<T>({
   title,
   count,
+  toolbar,
   loading,
   items,
   selectedId,
@@ -58,6 +62,7 @@ export function AssetListPanel<T>({
         <span className="_alp-title">{title}</span>
         {!loading && count != null && <span className="_alp-count">{count}</span>}
       </div>
+      {toolbar != null && <div className="_alp-toolbar">{toolbar}</div>}
 
       {loading ? (
         <div className="_alp-items">

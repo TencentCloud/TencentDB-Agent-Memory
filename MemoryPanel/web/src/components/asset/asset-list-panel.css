@@ -55,6 +55,16 @@
   flex-shrink: 0;
 }
 
+/* ===== 工具条：关键词搜索（位于标题下方） ===== */
+._alp-toolbar {
+  padding: 4px 0 8px;
+  flex-shrink: 0;
+}
+
+._alp-search--full {
+  width: 100%;
+}
+
 /* ===== 列表滚动区 ===== */
 ._alp-items {
   list-style: none;
