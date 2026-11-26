@@ -77,11 +77,23 @@ interface OnboardingStep {
   descKey: string;
 }
 
-/** 按顺序返回第一个匹配的元素，找不到返回 null */
+/**
+ * 元素是否位于「非激活页面帧」内。
+ *
+ * 多标签页保活后，已打开但被隐藏的页签仍留在 DOM 里（visibility: hidden），
+ * 其中的锚点（如 [data-guide="import-skill"]）照样能被 querySelector 命中。
+ * 若不过滤，引导会去高亮一个用户根本看不见的页面里的按钮，气泡位置也会错。
+ * 这里用 KeepAlivePages 打在帧上的 data-frame-active 判定。
+ */
+function isInHiddenFrame(el: Element): boolean {
+  return el.closest('[data-frame-active="false"]') !== null;
+}
+
+/** 按顺序返回第一个匹配且可见的元素，找不到返回 null */
 function firstMatch(selectors: string[]): Element | null {
   for (const sel of selectors) {
     const el = document.querySelector(sel);
-    if (el) return el;
+    if (el && !isInHiddenFrame(el)) return el;
   }
   return null;
 }
@@ -89,7 +101,9 @@ function firstMatch(selectors: string[]): Element | null {
 /** 解析步骤高亮元素；目标元素缺失时按序回退，最终回退到全局 Header 品牌区，保证 Guide 始终可渲染 */
 function resolveElement(selector: string | string[]): Element {
   const list = Array.isArray(selector) ? selector : [selector];
-  return firstMatch(list) || document.querySelector(FALLBACK_SELECTOR) || document.body;
+  const fallback = document.querySelector(FALLBACK_SELECTOR);
+  // 兜底的 Header 品牌区不在页面帧内，不会被 isInHiddenFrame 过滤掉
+  return firstMatch(list) || (fallback && !isInHiddenFrame(fallback) ? fallback : null) || document.body;
 }
 
 /**
