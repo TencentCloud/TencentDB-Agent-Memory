@@ -287,8 +287,11 @@ export default function SkillsPanel({
         }
         detail={
           <SkillDetailPane
-            // 同名替换后 skillId 不变，靠 detailRefreshToken 重挂才能拉到新正文
-            key={`${selectedSkillId ?? ''}:${detailRefreshToken}`}
+            // 同名替换后 skillId 不变，靠 token 变化重挂才能拉到新正文/新版本。
+            // 注意 key 里**不能**带 selectedSkillId：那会让每次切换选中项都整颗重挂，
+            // 而 SkillDetailPane 内部的 stickyRef（列表刷新导致 selectedSkill 短暂为
+            // null 时保持上一次的名字，避免面板先闪空态）在新实例里恒为 null。
+            key={detailRefreshToken}
             skillName={selectedSkill?.name ?? null}
             // 传原始 selectedSkillId（独立 state）而非 selectedSkill?.skill_id（列表派生）：
             // 选中即有值，不受 agent/skill 列表加载或刷新时序影响，避免详情面板先闪空态再变加载态。

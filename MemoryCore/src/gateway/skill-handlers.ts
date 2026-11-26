@@ -5,6 +5,7 @@
  *
  * 错误码映射（核心层 SkillCoreError → HTTP envelope code）：
  *   INVALID_FRONTMATTER       → 40001  (frontmatter.name 与 body/head 不一致)
+ *   INVALID_ARGUMENT          → 40001  (参数组合非法，如 replace_resources 与 resources 不成对)
  *   INVALID_PATH              → 40001
  *   SKILL_NOT_OWNER           → 40301
  *   SKILL_TEAM_MISMATCH       → 40302
@@ -140,6 +141,7 @@ export interface SkillRouterDeps {
 
 const ERROR_CODE_MAP: Record<string, number> = {
   INVALID_FRONTMATTER: 40001,
+  INVALID_ARGUMENT: 40001,
   INVALID_PATH: 40001,
   SKILL_NOT_OWNER: 40301,
   SKILL_TEAM_MISMATCH: 40302,

@@ -375,9 +375,15 @@ async function applyPayload(
  * 同名替换：`replace_resources: true` + 资源全集，服务端保证 skill_id 不变、
  * version +1、manifest 恰等于上传集合，旧版本保留。
  *
+ * `expected_version` 用**探测/确认时拿到的那个版本**，而不是临时再取一次最新版本：
+ * 后者等于让乐观锁永远不生效（40901 变成死代码），而且确认弹窗给用户看的是
+ * `vN → vN+1`，实际写入却可能是别人刚推进的 `v(N+1) → v(N+2)`，用户确认的和
+ * 发生的不是一回事。这里用探测版本发请求，让"期间被人改过"真实暴露出来。
+ *
  * 重试策略（都只重试一次，第二次失败按失败计）：
- *   - 40901 SKILL_VERSION_STALE：探测/取值之后版本被别人推进 → 重取版本再写；
- *   - 42201 SKILL_NAME_DUPLICATE：同名作用域在写入前变了 → 重新探测目标。
+ *   - 40901 SKILL_VERSION_STALE：期间版本被推进 → 重新探测拿新 version 再写；
+ *   - 42201 SKILL_NAME_DUPLICATE：同名作用域在写入前变了 → 同样重新探测。
+ * 两个码都走"重新探测"这一条路：它同时刷新 skill_id 与 version。
  */
 async function replacePayload(
   payload: PlanPayload,
@@ -391,18 +397,10 @@ async function replacePayload(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      // 取最新 head 的 version：探测结果可能已经过期（同一 skill 在另一个标签页
-      // 被编辑过），用 stale 版本写入会直接 40901。
-      const latest = await getSkill({
-        skill_id: current.skillId,
-        team_id: ctx.teamId,
-        include_content: false,
-        include_manifest: false,
-      });
       const updated = await updateSkill({
         ...identity,
         skill_id: current.skillId,
-        expected_version: latest.version,
+        expected_version: current.version,
         content: payload.content,
         replace_resources: true,
         resources: payload.resources,
@@ -411,22 +409,18 @@ async function replacePayload(
         name: payload.name,
         count: payload.resources.length,
         // 版本没变 = 服务端判定"内容与资源都没变"，没有产生新版本
-        status: updated.version === latest.version ? 'replaced-unchanged' : 'replaced',
+        status: updated.version === current.version ? 'replaced-unchanged' : 'replaced',
         version: updated.version,
-        previousVersion: latest.version,
+        previousVersion: current.version,
         skillId: current.skillId,
       };
     } catch (e) {
       if (attempt === 0 && e instanceof SkillApiError && (e.code === 40901 || e.code === 42201)) {
         attempt += 1;
-        if (e.code === 42201) {
-          const reProbed = await findSameName(payload.name, ctx);
-          if (reProbed) {
-            current = reProbed;
-            continue;
-          }
-        } else {
-          continue; // 40901：下一轮会重取 version
+        const reProbed = await findSameName(payload.name, ctx);
+        if (reProbed) {
+          current = reProbed;
+          continue;
         }
       }
       throw e;

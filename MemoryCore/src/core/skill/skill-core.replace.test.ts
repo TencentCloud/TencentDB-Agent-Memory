@@ -192,6 +192,35 @@ describe("SkillCore.update — replace_resources", () => {
     expect(cleared.manifest).toEqual([]);
   });
 
+  it("size 相同但字节不同 → 仍判定为变化并升版（真读字节的那条分支）", async () => {
+    const created = await core.create(createInput({
+      resources: [file("docs/a.md", "AB")],
+    }));
+
+    const updated = await core.update({
+      user_id: USER,
+      team_id: TEAM,
+      agent_id: AGENT,
+      skill_id: created.skill_id,
+      expected_version: 1,
+      content: skillMd(),
+      replace_resources: true,
+      // 与 "AB" 等长，size 快筛救不了，只能读旧字节比对才判得出变化
+      resources: [file("docs/a.md", "AC")],
+    });
+
+    expect(updated.version).toBe(2);
+    expect(updated.manifest.map((m) => m.path)).toEqual(["docs/a.md"]);
+    const head = await core.readFile({ skill_id: created.skill_id, team_id: TEAM, path: "docs/a.md" });
+    expect(head.content).toBe("AC");
+
+    // copy-on-write：v1 的字节不能被新版本覆盖
+    const v1 = await core.readFile({
+      skill_id: created.skill_id, team_id: TEAM, version: 1, path: "docs/a.md",
+    });
+    expect(v1.content).toBe("AB");
+  });
+
   it("expected_version 落后 → SKILL_VERSION_STALE", async () => {
     const created = await core.create(createInput());
 
@@ -229,6 +258,43 @@ describe("SkillCore.update — replace_resources", () => {
     }
     expect(caught).toBeInstanceOf(SkillCoreError);
     expect((caught as SkillCoreError).code).toBe("INVALID_FRONTMATTER");
+  });
+
+  it("replace_resources 与 resources 不成对 → INVALID_ARGUMENT（core 自带防御）", async () => {
+    const created = await core.create(createInput());
+    const base = {
+      user_id: USER,
+      team_id: TEAM,
+      agent_id: AGENT,
+      skill_id: created.skill_id,
+      expected_version: 1,
+      content: skillMd(NAME, "# 换正文"),
+    };
+
+    // 漏传 resources：绝不能按空集合把资源删光
+    let missingResources: unknown;
+    try {
+      await core.update({ ...base, replace_resources: true });
+    } catch (e) {
+      missingResources = e;
+    }
+    expect(missingResources).toBeInstanceOf(SkillCoreError);
+    expect((missingResources as SkillCoreError).code).toBe("INVALID_ARGUMENT");
+
+    // 只给 resources：增量写应该走 writeFiles，而不是悄悄全量替换
+    let missingFlag: unknown;
+    try {
+      await core.update({ ...base, resources: [file("docs/a.md", "Z")] });
+    } catch (e) {
+      missingFlag = e;
+    }
+    expect(missingFlag).toBeInstanceOf(SkillCoreError);
+    expect((missingFlag as SkillCoreError).code).toBe("INVALID_ARGUMENT");
+
+    // 两次拒绝都不该产生任何写入
+    const head = await core.get({ skill_id: created.skill_id, team_id: TEAM });
+    expect(head.version).toBe(1);
+    expect(head.manifest.map((m) => m.path).sort()).toEqual(["docs/a.md", "docs/b.md"]);
   });
 });
 

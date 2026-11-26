@@ -55,6 +55,7 @@ const TAG = "[skill-core]";
 
 export type SkillCoreErrorCode =
   | "INVALID_FRONTMATTER"
+  | "INVALID_ARGUMENT"
   | "SKILL_FRONTMATTER_INVALID"
   | "SKILL_PATCH_NOT_UNIQUE"
   | "SKILL_NAME_DUPLICATE"
@@ -328,25 +329,46 @@ export class SkillCore {
       throw new SkillCoreError("INVALID_FRONTMATTER", "name change is not allowed across versions");
     }
 
-    // 同名替换（默认关闭）：把资源集合整体换成 input.resources。
-    // 两个细节决定了这段不能省：
-    //   1. 差集必须算 —— 只传 resourcesToWrite 不传 resourcesToRemove 会留下旧文件，
-    //      manifest 就不是"上传集合"而是"并集"。
-    //   2. 只把真正变化的文件交给 versioning —— appendNextVersion 的幂等判据是
-    //      "content_hash 相同 且 write/remove 都为空"，无脑传全量会让"内容完全
-    //      相同的重复导入"也升一版，版本号越堆越高。
-    let resourcesToWrite: SkillResourcePayload[] | undefined;
-    let resourcesToRemove: string[] | undefined;
-    if (input.replace_resources === true) {
-      const incoming = dedupeByPath(input.resources ?? []);
-      const incomingPaths = new Set(incoming.map((r) => r.path));
-      resourcesToRemove = head.manifest
-        .filter((m) => !incomingPaths.has(m.path))
-        .map((m) => m.path);
-      resourcesToWrite = await this.filterChangedResources(head, incoming);
+    // `replace_resources` 与 `resources` 必须成对出现。
+    // HTTP 层的 updateRequestSchema 已经拦了一次，但 SkillCore 是内部 API
+    // （skill-core-sink / extractor 也在调），只靠 schema 一层的话，任何新调用方
+    // 漏传 `resources` 都会被当成"空集合"→ 静默删光该 skill 的全部资源。
+    if (input.replace_resources === true && input.resources === undefined) {
+      throw new SkillCoreError(
+        "INVALID_ARGUMENT",
+        "resources is required when replace_resources=true (pass [] to clear all resources)",
+      );
+    }
+    if (input.replace_resources !== true && input.resources !== undefined) {
+      throw new SkillCoreError(
+        "INVALID_ARGUMENT",
+        "resources requires replace_resources=true; use writeFiles for incremental upsert",
+      );
     }
 
     try {
+      // 同名替换（默认关闭）：把资源集合整体换成 input.resources。
+      // 两个细节决定了这段不能省：
+      //   1. 差集必须算 —— 只传 resourcesToWrite 不传 resourcesToRemove 会留下旧文件，
+      //      manifest 就不是"上传集合"而是"并集"。
+      //   2. 只把真正变化的文件交给 versioning —— appendNextVersion 的幂等判据是
+      //      "content_hash 相同 且 write/remove 都为空"，无脑传全量会让"内容完全
+      //      相同的重复导入"也升一版，版本号越堆越高。
+      //
+      // 整段放在 try 里：filterChangedResources 会调 readResource，抛出的
+      // RESOURCE_TOO_LARGE / INVALID_PATH 必须经 toCoreError 归一，否则网关会把
+      // 可操作的业务错误当成 50001 内部错误。
+      let resourcesToWrite: SkillResourcePayload[] | undefined;
+      let resourcesToRemove: string[] | undefined;
+      if (input.replace_resources === true) {
+        const incoming = dedupeByPath(input.resources ?? []);
+        const incomingPaths = new Set(incoming.map((r) => r.path));
+        resourcesToRemove = head.manifest
+          .filter((m) => !incomingPaths.has(m.path))
+          .map((m) => m.path);
+        resourcesToWrite = await this.filterChangedResources(head, incoming);
+      }
+
       const result = await this.versioning.appendNextVersion(head, this.ctxOf(input), {
         content: input.content,
         name: head.name,

@@ -768,7 +768,7 @@ export const zhCN = {
   // 同名替换（目录 / 压缩包共用）
   'importSkill.replace.confirm': '已存在同名 Skill「{{name}}」，继续将替换其内容与资源文件',
   'importSkill.replace.desc':
-    '归属 Agent：{{agent}}；版本 v{{from}} → v{{to}}；资源文件 {{oldCount}} → {{newCount}} 个。skill_id 与授权/绑定关系保持不变，旧版本仍可在版本历史中查看。',
+    '归属 Agent：{{agent}}；版本 v{{from}} → v{{to}}；资源文件 {{oldCount}} → {{newCount}} 个。skill_id 与授权/绑定关系保持不变，旧版本仍可在版本历史中查看。内容与资源都没有变化时不会升版。',
   'importSkill.replace.okText': '替换',
   'importSkill.replace.cancelText': '取消',
   'importSkill.replace.zipConfirm': '本次导入有 {{count}} 个同名 Skill 将被替换：{{names}}',

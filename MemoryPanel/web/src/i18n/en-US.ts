@@ -786,7 +786,7 @@ export const enUS = {
   'importSkill.replace.confirm':
     'A skill named "{{name}}" already exists. Continuing will replace its content and resource files',
   'importSkill.replace.desc':
-    'Owning Agent: {{agent}}; version v{{from}} → v{{to}}; resource files {{oldCount}} → {{newCount}}. The skill_id and its permissions/bindings stay unchanged, and the previous version is still available in version history.',
+    'Owning Agent: {{agent}}; version v{{from}} → v{{to}}; resource files {{oldCount}} → {{newCount}}. The skill_id and its permissions/bindings stay unchanged, and the previous version is still available in version history. No new version is created when both content and resources are unchanged.',
   'importSkill.replace.okText': 'Replace',
   'importSkill.replace.cancelText': 'Cancel',
   'importSkill.replace.zipConfirm':
