@@ -133,6 +133,21 @@ export class SessionStore {
   }
 
   /**
+   * Return all L1 keys whose suffix matches `:${sessionId}` (or the bare
+   * sessionId). Used by the memory/skill bridge L1 fast path to find a
+   * session without knowing the agentSource prefix — the bridge curl only
+   * carries `x-conversation-id`, not the agent source that handler.ts used
+   * to build the composite key (`${agentSource}:${sessionKey}`).
+   */
+  keysWithSuffix(sessionId: string): string[] {
+    const result: string[] = [];
+    for (const k of this.states.keys()) {
+      if (k === sessionId || k.endsWith(`:${sessionId}`)) result.push(k);
+    }
+    return result;
+  }
+
+  /**
    * 把 recovery source 挂到 state 的**非可枚举**字段上——handler 侧读取
    * `state.__recoverySource` 语义不变，但 `deepEqual` / `JSON.stringify` /
    * `Object.keys` 都不会看到这一枚 transient marker，避免测试断言"恢复后
