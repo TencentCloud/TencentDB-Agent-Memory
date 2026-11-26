@@ -482,11 +482,26 @@ sessions/<source>/<team-id>/<user-id>/<session-id>/subagents/<subagent-id>/<star
 
 全量更新（乐观锁）。
 
-**请求体**：`skill_id`、`expected_version`(≥1)、`content` + id 字段。
+**请求体**：`skill_id`、`expected_version`(≥1)、`content` + id 字段，以及**可选**的同名替换字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `replace_resources` | boolean | 默认 `false`。为 `true` 时按「资源集合整体替换」处理 |
+| `resources` | object[] | ≤100 个；**仅在 `replace_resources=true` 时可传**（`[]` 表示清空全部资源） |
+
+`replace_resources=true` 的语义：
+
+1. `resources` 即新版本的**资源全集**——`head.manifest` 里不在该集合中的 path 被删除，集合内新增/变更的文件被写入，新版本 `manifest` 恰等于上传集合；
+2. `skill_id` 不变，`version = head.version + 1`，旧版本行与 storage 目录保留（`get`/`files/read` 指定 `version` 仍可回读，可回滚）；
+3. 若 `content` 与资源**都没有变化**，不升版：直接返回当前 head（`version` 与请求的 `expected_version` 相同），调用方可据此提示"内容未变化"；
+4. 不改名：`content` 的 frontmatter `name` 必须与 head 一致，否则 `40001`。
+
+> 为什么不是 files/write + files/remove，或 delete + create：
+> 前者要两次写入、中间态各升一版；后者会换掉 `skill_id`（= `asset_id`）并级联清 ACL / agent 绑定。因此"同名导入 = 确认后替换"走本次 update。
 
 **响应** `data`：`SkillSummary`。
 
-**错误**：`40901`(版本过期，data 带 `current_version`)、`40401`、`40301`。
+**错误**：`40001`(参数/frontmatter 不一致、`replace_resources` 与 `resources` 未成对)、`40901`(版本过期，data 带 `current_version`)、`40401`、`40301`。
 
 ### POST /v3/skill/patch
 
