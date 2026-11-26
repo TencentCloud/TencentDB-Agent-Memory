@@ -8,7 +8,8 @@
     "mock": "VITE_ENTRY=mock vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:i18n-storage": "node --test tests/i18n-storage.test.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "eslint src --ext .ts,.tsx --fix",
     "lint:check": "eslint src --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
@@ -40,6 +41,9 @@
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.20",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
@@ -54,6 +58,7 @@
     "prettier": "^3.9.4",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^2.1.9"
   }
 }
