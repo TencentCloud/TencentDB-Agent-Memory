@@ -39,6 +39,7 @@ import {
 
 /** skill/list 一页 100 条 —— 与 knowledge fetchAllMetaListItems 分页步长对齐。 */
 const SKILL_LIST_PAGE = 100;
+const SKILL_MODULE_DISABLED_MESSAGE = 'Skill module not enabled';
 
 interface AgentRaw {
   agent_id: string;
@@ -76,7 +77,13 @@ async function listAgentSkills(
       },
       ctx,
     );
-    if (env.code !== 0) return { ok: false, envelope: env };
+    if (env.code !== 0) {
+      // SkillCore 未启用时首页返回固定 404，按无技能放行以允许归档；后续页保持 fail-closed
+      if (offset === 0 && env.code === 404 && env.message === SKILL_MODULE_DISABLED_MESSAGE) {
+        return { ok: true, items: [] };
+      }
+      return { ok: false, envelope: env };
+    }
     const batch = extractListItems<SkillRow>(env);
     all.push(...batch);
     const total = (env.data as { total?: number } | null)?.total ?? all.length;
