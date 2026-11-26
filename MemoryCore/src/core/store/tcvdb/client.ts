@@ -125,11 +125,16 @@ export class TcvdbClient {
    * Send a POST request to VectorDB API.
    * Handles auth, timeout, retries (5xx/timeout), and error unwrapping.
    */
-  async request<T = ApiResponse>(path: string, body: Record<string, unknown>): Promise<T> {
+  async request<T = ApiResponse>(
+    path: string,
+    body: Record<string, unknown>,
+    options: { maxRetries?: number } = {},
+  ): Promise<T> {
     let lastError: Error | undefined;
     const t0 = performance.now();
+    const maxRetries = options.maxRetries ?? MAX_RETRIES;
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const tAttempt = performance.now();
       try {
         this.logger?.debug?.(`${TAG} → ${path} attempt=${attempt} body=${JSON.stringify(body).slice(0, 500)}`);
@@ -165,16 +170,16 @@ export class TcvdbClient {
         const attemptMs = Math.round(performance.now() - tAttempt);
         if (err instanceof TcvdbApiError && err.apiCode !== 0) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (attempt < MAX_RETRIES) {
+        if (attempt < maxRetries) {
           const delay = 500 * (attempt + 1);
-          this.logger?.debug?.(`${TAG} ${path} retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms (lastAttemptMs=${attemptMs}, error=${lastError.message})`);
+          this.logger?.debug?.(`${TAG} ${path} retry ${attempt + 1}/${maxRetries} in ${delay}ms (lastAttemptMs=${attemptMs}, error=${lastError.message})`);
           await new Promise((r) => setTimeout(r, delay));
         }
       }
     }
 
     const totalMs = Math.round(performance.now() - t0);
-    this.logger?.debug?.(`${TAG} ✗ ${path} totalMs=${totalMs} attempts=${MAX_RETRIES + 1} error=${lastError?.message}`);
+    this.logger?.debug?.(`${TAG} ✗ ${path} totalMs=${totalMs} attempts=${maxRetries + 1} error=${lastError?.message}`);
     throw lastError ?? new Error(`${TAG} ${path} failed after retries`);
   }
 
@@ -309,6 +314,7 @@ export class TcvdbClient {
       documentIds?: string[];
       update: Record<string, unknown>;
     },
+    options: { maxRetries?: number } = {},
   ): Promise<number> {
     const query: Record<string, unknown> = {};
     if (params.filter !== undefined) query.filter = params.filter;
@@ -318,7 +324,7 @@ export class TcvdbClient {
       collection,
       query,
       update: params.update,
-    });
+    }, options);
     return resp.affectedCount ?? 0;
   }
 
