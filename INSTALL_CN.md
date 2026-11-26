@@ -556,6 +556,8 @@ PANEL_FEATURE_ANALYTICS_ENABLED=true
 默认复用该连接。可设置 `KNOWLEDGE_CLICKHOUSE_ENABLED=false` 关闭 Knowledge
 的埋点和查询，或通过 `KNOWLEDGE_CLICKHOUSE_URL`、`KNOWLEDGE_CLICKHOUSE_DATABASE`、
 `KNOWLEDGE_CLICKHOUSE_USER` 和 `KNOWLEDGE_CLICKHOUSE_PASSWORD` 覆盖连接信息。
+要在 Panel 看到 Knowledge 工具调用，Knowledge 须写入 Core 查询的同一数据库，并使用
+默认的 `tool_call_logs` 表。使用独立数据库时，可通过 Knowledge 的分析 API 查询。
 
 如使用自定义部署，分别配置 Proxy 的 `clickhouse`、Core 的 `analytics.clickhouse`
 （或 `ANALYTICS_CLICKHOUSE_*` 环境变量）和 Knowledge 的 `KNOWLEDGE_CLICKHOUSE_*`，
@@ -584,9 +586,9 @@ curl -fsS "http://localhost:${KNOWLEDGE_PORT:-8424}/v3/analytics/config" \
 
 以系统管理员身份登录 Panel。「数据分析」入口要求
 `PANEL_FEATURE_ANALYTICS_ENABLED=true`，且 Core 探针返回
-`configured: true` 和 `reachable: true`。Knowledge 探针用于 Wiki 和 CodeGraph 图表。
-关闭 Knowledge 时，这两类图表会显示未启用。埋点表和图表数据可能要等首批工具调用
-或模型请求写入后才会出现。
+`configured: true` 和 `reachable: true`。Panel 通过 Core 读取图表数据，包括写入
+共享数据库的 Knowledge 工具调用。Knowledge 探针用于检查其埋点写入和分析 API 使用
+的连接。记录工具调用或模型请求后，相应数据才会出现在图表中。
 
 如果 Knowledge 探针返回 401，请核对 `.env` 中的 Bearer 密钥。启动脚本首次运行时
 会生成 `KNOWLEDGE_SERVICE_KEY`，并将相同的值作为 `KNOWLEDGE_AUTH_TOKEN` 传给 Panel。

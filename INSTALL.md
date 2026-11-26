@@ -688,7 +688,10 @@ environment variables. Knowledge defaults to the same connection. Add
 `KNOWLEDGE_CLICKHOUSE_ENABLED=false` to disable its telemetry and queries, or
 override its connection with `KNOWLEDGE_CLICKHOUSE_URL`,
 `KNOWLEDGE_CLICKHOUSE_DATABASE`, `KNOWLEDGE_CLICKHOUSE_USER` and
-`KNOWLEDGE_CLICKHOUSE_PASSWORD`.
+`KNOWLEDGE_CLICKHOUSE_PASSWORD`. For Knowledge tool calls to appear in the
+Panel, keep Knowledge's writer on the database read by Core and use the
+default `tool_call_logs` table. A separate Knowledge database can be queried
+through the Knowledge analytics API.
 
 For deployments outside `global-images`, configure Proxy's `clickhouse` block,
 Core's `analytics.clickhouse` block (or `ANALYTICS_CLICKHOUSE_*` environment),
@@ -719,10 +722,11 @@ curl -fsS "http://localhost:${KNOWLEDGE_PORT:-8424}/v3/analytics/config" \
 
 Sign in to Panel as a system admin. The Analytics menu requires
 `PANEL_FEATURE_ANALYTICS_ENABLED=true` and a Core probe with
-`configured: true` and `reachable: true`. The Knowledge probe applies to the
-Wiki and CodeGraph charts. With Knowledge disabled, those charts show their
-disabled state. Tables and chart data may appear only after the first tool
-calls or model requests have been recorded.
+`configured: true` and `reachable: true`. Panel reads its chart data through
+Core, including Knowledge tool calls written to the shared database. The
+Knowledge probe verifies the connection used by its telemetry writer and
+direct analytics API. Chart data appears after tool calls or model requests
+are recorded.
 
 If the Knowledge probe returns 401, check the bearer in `.env`. The launcher
 generates `KNOWLEDGE_SERVICE_KEY` on the first run and passes the same value to
