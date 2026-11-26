@@ -760,10 +760,14 @@ L0/L1 列表批量删除。**仅资产 Owner**。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| archived | boolean | 固定 `true` |
-| agent_id | string | 被归档的 agent |
+| archived | boolean | Owner 路径为 `true`；Admin 路径（硬删除）为 `false` |
+| deleted | boolean | 仅 Admin 路径返回，固定 `true` |
+| admin_initiated | boolean | 仅 Admin 路径返回，固定 `true` |
+| agent_id | string | 被删除/归档的 agent |
 | deleted_skill_count | number | 已删 skill 数 |
 | deleted_skill_ids | string[] | 已删 skill ID 列表 |
+
+**权限**：Agent owner、Team Admin、System Admin 均可调用。Owner 走 archive 路径（软删除）；Admin 走 delete 路径（硬删除，owner 不可达时归档只会留下新孤儿）。两条路径都会先逐条清理该 agent 名下的 active skill（`skill/delete` 校验的是 `(team_id, agent_id)` 与 skill 归属的匹配，不校验 caller 身份，admin 同样可清）。
 
 **错误**：`MISSING_AGENT_ID`、`INVALID_USER_KEY`、`AGENT_NOT_FOUND`、`NOT_YOUR_AGENT`；任一 skill 删除失败返回 `500 SKILL_DELETE_FAILED`（含 `failed_skill_id`、`deleted_skill_ids`），此时 agent 不会 archive。
 
