@@ -23,6 +23,7 @@ import { buildSafeTraceRequestBody, writeRequestLog } from "../../requestLog.js"
 import { logPipelineUpstreamError } from "../../upstream-error-log.js";
 import { apiKeyToKeyId, extractBearerToken, opikCreateTrace, uuidv7 } from "../../opik.js";
 import { createPipeline, writeLog } from "../../logger.js";
+import { readIncomingRequestId, withRequestId } from "../../request-id.js";
 import { extractSpaceIdFromPath } from "../../credit-reporter.js";
 import { writeFailedReportRaw } from "../../clickhouse.js";
 import { joinUrl } from "../../guard-adapter.js";
@@ -43,7 +44,7 @@ import {
 import {
   createCfqStripStream,
   createCfqStripObserver,
-  stripCfqFromResponseText,
+  settleAndStripCfqFromResponseText,
 } from "../../common/cfq-strip.js";
 import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import {
@@ -76,6 +77,7 @@ import {
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
 } from "../../session/codex/form.js";
+import { extractSessionId, resolveSessionKeyFallback } from "../../session/session-key.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -88,13 +90,15 @@ import { TdaiClient, buildTdaiClientForRequest } from "../../tdai/client.js";
 import { deriveTdaiIdentity } from "../../tdai/identity.js";
 import {
   ResponsesAssembler,
-  buildSessionTurnContext,
-  createSessionTurnSeed,
+  buildSessionCallContext,
+  createSessionCallSeed,
+  sessionTraceDir,
   parseSseData,
-  responsesReplyFromJson,
-  submitSessionTurn,
-  type PendingSessionTurn,
-  type SessionTurnContext,
+  responseFromText,
+  submitSessionCall,
+  teeErrorBodyToSessionCall,
+  type PendingSessionCall,
+  type SessionCallContext,
 } from "../../session-trace/index.js";
 import type { TdaiIdentity, TdaiMessage } from "../../tdai/types.js";
 import { stageArchive } from "../stages/archive.js";
@@ -208,21 +212,7 @@ export function extractWorkbuddySessionId(
   headers: Record<string, string>,
   body: Record<string, unknown>,
 ): string | null {
-  // subagent 归一：带 x-parent-conversation-id 的请求（并行 subagent）一律用
-  // parent id 作为会话身份，复用主会话 session state，避免重弹 session-init 表单
-  // （2026-09-20 修复 WorkBuddy 压缩后无限循环，详见 session/session-key.ts 注释）。
-  const parentId = headers["x-parent-conversation-id"] ?? headers["X-Parent-Conversation-Id"];
-  if (typeof parentId === "string" && parentId.length > 0) return parentId;
-
-  const fromHeader = headers["session-id"] ?? headers["Session-Id"] ?? headers["x-conversation-id"];
-  if (typeof fromHeader === "string" && fromHeader.length > 0) return fromHeader;
-
-  const meta = body.client_metadata as Record<string, unknown> | undefined;
-  if (meta && typeof meta === "object") {
-    const sid = meta.session_id;
-    if (typeof sid === "string" && sid.length > 0) return sid;
-  }
-  return null;
+  return extractSessionId(headers, body);
 }
 
 // ── Default mode gate detection ──────────────────────────────────────────────
@@ -477,7 +467,7 @@ async function forwardToUpstream(
   pipe: ReturnType<typeof createPipeline>,
   lf: LangfuseTurnContext | null,
   archiveCtx: WorkbuddyArchiveCtx | null = null,
-  sessionTurn: PendingSessionTurn | null = null,
+  sessionCall: PendingSessionCall | null = null,
   /**
    * v3.3 user-session-default: 命中账户默认时, Proxy 在客户端响应最前面插的
    * ✅ 绑定提示文本(markdown)。null = 不插(非命中默认 / 后续轮次 / aux)。
@@ -514,7 +504,8 @@ async function forwardToUpstream(
     pathForOverride: upstreamPath,
   });
   if (isInstanceUpstreamBlocked(_upstreamResolve)) {
-    return c.json(_upstreamResolve.errorBody, 400);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId(_upstreamResolve.errorBody as Record<string, unknown>, traceId), 400);
   }
   if (_upstreamResolve.overrideUrl) {
     upstreamUrl = _upstreamResolve.overrideUrl;
@@ -537,6 +528,7 @@ async function forwardToUpstream(
   // Auxiliary turns are excluded for the same reason they skip langfuse and
   // archive: they are client-driven background calls, not dialogue turns.
   let preparedStats: Record<string, unknown> | null = null;
+  let compressionObservations: Record<string, unknown>[] | undefined;
   if (lf && Array.isArray(body.input)) {
     preparedStats = await prepareUpstreamRequest({
       config,
@@ -556,16 +548,26 @@ async function forwardToUpstream(
       lf,
       opikTraceId: traceId,
       opikKeyId: obsProjectName,
+      sessionTraceDir: sessionCall
+        ? sessionTraceDir(config, sessionCall.seed, {
+            spaceId,
+            sessionInfo: sessionCall.sessionInfo,
+            authUserId: sessionCall.authUserId,
+          })
+        : undefined,
+      ...(sessionCall?.seed ? { onCompressionObservations: (o: Record<string, unknown>[]) => { compressionObservations = o; } } : {}),
     });
   }
 
   const bodyStr = JSON.stringify(body);
-  const sessionTurnCtx = sessionTurn
-    ? buildSessionTurnContext(config, sessionTurn.seed, {
+  const sessionCallCtx = sessionCall
+    ? buildSessionCallContext(config, sessionCall.seed, {
         spaceId,
-        sessionInfo: sessionTurn.sessionInfo,
-        authUserId: sessionTurn.authUserId,
-        upstreamBody: body,
+        sessionInfo: sessionCall.sessionInfo,
+        authUserId: sessionCall.authUserId,
+        request: body,
+        traceId,
+        compressionObservations,
       })
     : null;
 
@@ -678,7 +680,9 @@ async function forwardToUpstream(
         pipe.error("LANGFUSE_SPAN", lfErr);
       }
     }
-    return c.json({ error: `Upstream fetch failed: ${msg}` }, 502);
+    submitSessionCall(sessionCallCtx, { status: 0, response: { error: msg }, model: modelId });
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: `Upstream fetch failed: ${msg}` }, traceId), 502);
   }
 
   const respHeaders = filterResponseHeaders(upstreamResp.headers);
@@ -719,6 +723,7 @@ async function forwardToUpstream(
 
   if (!isSSE) {
     const responseText = await upstreamResp.text();
+    submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: responseFromText(responseText), model: modelId, upstreamRequestId });
     let usage: Record<string, unknown> | undefined;
     const toolCalls = new Map<string, UpstreamToolCall>();
     let outputText = "";
@@ -729,7 +734,6 @@ async function forwardToUpstream(
       }
       mergeResponsesToolCalls(toolCalls, responseBody.output);
       outputText = collectResponsesOutputText(responseBody);
-      if (upstreamResp.ok) submitSessionTurn(sessionTurnCtx, responsesReplyFromJson(responseBody), modelId);
     } catch {
       // Preserve an unexpected non-JSON response without billing it.
     }
@@ -780,7 +784,8 @@ async function forwardToUpstream(
       }
     }
     // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-    const clientResponseText = stripCfqFromResponseText(
+    // 先结算本轮 CFQ 再返回：客户端拿到响应才会发下一轮，下一轮因此一定读得到。
+    const clientResponseText = await settleAndStripCfqFromResponseText(
       "responses",
       responseText,
       preparedStats,
@@ -804,13 +809,20 @@ async function forwardToUpstream(
     });
   }
 
+  let upstreamStream: ReadableStream<Uint8Array> | null = upstreamResp.body;
+  if (!upstreamStream) {
+    submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: "", model: modelId, upstreamRequestId });
+  } else if (!upstreamResp.ok) {
+    upstreamStream = teeErrorBodyToSessionCall(sessionCallCtx, upstreamStream, { status: upstreamResp.status, model: modelId, upstreamRequestId });
+  }
+
   // Main turns are tapped for observability/archive; auxiliary Responses calls
   // are tapped for credit only.
-  if (!upstreamResp.body || (!lf && skipCreditReport)) {
+  if (!upstreamStream || (!lf && skipCreditReport)) {
     // 不 tap 也要剥离：注入与否跟观测无关，客户端校验一样会拒。
     // v3.3: 若命中账户默认, 同样在最前面插 ✅ 绑定提示 (流式)。
-    const stripped = upstreamResp.body
-      ? upstreamResp.body.pipeThrough(createCfqStripStream(
+    const stripped = upstreamStream
+      ? upstreamStream.pipeThrough(createCfqStripStream(
           "responses",
           preparedStats,
           createCfqStripObserver(pipe),
@@ -829,7 +841,7 @@ async function forwardToUpstream(
   }
 
   // SSE + langfuse: tee & tap
-  const observedStream = withStreamIdleWarning(upstreamResp.body, {
+  const observedStream = withStreamIdleWarning(upstreamStream, {
     spaceId,
     traceId,
     requestId: traceId,
@@ -857,7 +869,8 @@ async function forwardToUpstream(
     archiveCtx,
     inputBody: body,
     upstreamUrl,
-    sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
+    sessionCallCtx: upstreamResp.ok ? sessionCallCtx : null,
+    upstreamStatus: upstreamResp.status,
   });
 
   // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
@@ -918,7 +931,8 @@ interface WorkbuddyTapContext {
   /** 上游 URL，写进 observationMetadata 便于排障 */
   upstreamUrl: string;
   /** Online session trace for this call; null when it is not recorded. */
-  sessionTurnCtx: SessionTurnContext | null;
+  sessionCallCtx: SessionCallContext | null;
+  upstreamStatus: number;
 }
 
 /**
@@ -949,7 +963,7 @@ async function consumeWorkbuddyStream(
   // 按 call_id 累积工具调用，供增量会话的 CFQ 侧信道使用。output_item.done
   // 与 completed 会重复给出同一条，Map 去重后以终态为准。
   const toolCalls = new Map<string, UpstreamToolCall>();
-  const replyAssembler = ctx.sessionTurnCtx ? new ResponsesAssembler() : null;
+  const replyAssembler = ctx.sessionCallCtx ? new ResponsesAssembler() : null;
 
   try {
     for (;;) {
@@ -1015,7 +1029,7 @@ async function consumeWorkbuddyStream(
 
   if (replyAssembler) {
     parseSseData(buf).forEach((evt) => replyAssembler.push(evt));
-    submitSessionTurn(ctx.sessionTurnCtx, replyAssembler.result(), ctx.modelId);
+    submitSessionCall(ctx.sessionCallCtx, { status: ctx.upstreamStatus, response: replyAssembler.result(), model: ctx.modelId, upstreamRequestId: ctx.upstreamRequestId });
   }
 
   const endTime = new Date().toISOString();
@@ -1186,7 +1200,8 @@ export async function runWorkbuddyPipeline(
   c: Context,
   config: ProxyConfig,
 ): Promise<Response> {
-  const traceId = uuidv7();
+  // 客户端/网关 x-request-id 作为 trace 主键，缺失才走 uuidv7。see request-id.ts。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
   const startTime = new Date().toISOString();
   const requestStartMono = performance.now();
   const path = c.req.path;
@@ -1197,14 +1212,16 @@ export async function runWorkbuddyPipeline(
   const spaceId = auth.spaceId;
   const userId = auth.userId;
   if (auth.rejected) {
-    return c.json({ error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` }, 401);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` }, traceId), auth.failureStatus ?? 401);
   }
   const keyId = auth.keyId;
 
   // ── 2. Read body (via shared stageParseBody) ─────────────────────────
   const parseResult = await stageParseBody(c);
   if (!parseResult.ok) {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Invalid JSON body" }, traceId), 400);
   }
   // ⚠️ `let` 不能改回 `const`: 下面 § 9 注入阶段 (line 1616 附近)
   // 会 `body = injectWorkbuddyAssets(body, ...)` 原地替换为注入后的新对象。
@@ -1220,7 +1237,10 @@ export async function runWorkbuddyPipeline(
     wecomName = wecomIdentity.name;
   }
   const poolRejection = poolServiceRejection(config, body.model);
-  if (poolRejection) return c.json(poolRejection, 400);
+  if (poolRejection) {
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId(poolRejection, traceId), 400);
+  }
 
   // ── 3. Extract headers ───────────────────────────────────────────────────
   const headers: Record<string, string> = {};
@@ -1261,11 +1281,12 @@ export async function runWorkbuddyPipeline(
     if (!_wbIsCustomUpstream) {
       const gateResult = stageModelGate(requestedModel, config, false);
       if (!gateResult.ok) {
-        return c.json({
+        c.header("x-request-id", traceId);
+        return c.json(withRequestId({
           type: "error",
           error: { type: "invalid_request_error",
             message: `Model '${requestedModel}' is not a registered display name in the credit pricing table` },
-        }, 400);
+        }, traceId), 400);
       }
     }
   }
@@ -1291,11 +1312,15 @@ export async function runWorkbuddyPipeline(
 
   // ── 6. Session ID + langfuse turn ctx ────────────────────────────────────
   const sessionId = extractWorkbuddySessionId(headers, body);
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
   const agentSource = "workbuddy";
+  const sessionKey = resolveSessionKeyFallback(
+    sessionId,
+    keyId,
+    { protocol: "responses", agentSource },
+  );
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;
-  const sessionTurnSeed = createSessionTurnSeed(config, {
+  const sessionCallSeed = createSessionCallSeed(config, {
     agent: agentSource,
     path,
     protocol: "responses",
@@ -1732,7 +1757,7 @@ export async function runWorkbuddyPipeline(
     assetCapabilities,
   });
   return forwardToUpstream(c, config, body, traceId, startTime, keyId, wecomName || keyId, modelId, pipe, lf, archiveCtx, {
-    seed: sessionTurnSeed,
+    seed: sessionCallSeed,
     sessionInfo,
     authUserId: userId,
   }, defaultBindingNotice);

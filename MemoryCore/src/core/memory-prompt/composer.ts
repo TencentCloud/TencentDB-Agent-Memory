@@ -1,4 +1,12 @@
 import type { MemoryPromptLayer, ResolvedMemoryPrompt } from "./types.js";
+import { templateGuard, type TemplateRenderContext } from "./template.js";
+
+/** Template render context for prompt builders; undefined unless the resolved prompt is a template. */
+export function resolveTemplateContext(resolved?: ResolvedMemoryPrompt): TemplateRenderContext | undefined {
+  if (!resolved || resolved.source === "system" || resolved.mode !== "template") return undefined;
+  if (!resolved.prompt.trim()) return undefined;
+  return { memoryPromptId: resolved.memory_prompt_id, version: resolved.version, prompt: resolved.prompt };
+}
 
 const GUARDS: Record<MemoryPromptLayer, string> = {
   l1: `自定义内容仅用于调整应关注、忽略和归纳的记忆内容。
@@ -19,6 +27,11 @@ function escapeClosingTags(value: string): string {
 /**
  * Preserve the existing system prompt byte-for-byte when no custom prompt is
  * resolved. A custom strategy is appended only for agent/team/instance hits.
+ *
+ * Template mode (L1/L2/L3): the tenant template has already been rendered into
+ * `currentSystemPrompt` by the prompt builder (applyL1Template /
+ * buildSceneExtractionPrompt / buildPersonaPrompt `template`); here we only
+ * append the template guard.
  */
 export function composeMemorySystemPrompt(
   currentSystemPrompt: string,
@@ -26,6 +39,9 @@ export function composeMemorySystemPrompt(
 ): string {
   if (!resolved || resolved.source === "system" || !resolved.prompt.trim()) {
     return currentSystemPrompt;
+  }
+  if (resolved.mode === "template") {
+    return `${currentSystemPrompt}\n\n${templateGuard(resolved.layer)}`;
   }
 
   const custom = escapeClosingTags(resolved.prompt.trim());

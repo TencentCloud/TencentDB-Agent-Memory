@@ -46,6 +46,11 @@ export interface ClickHouseConfig {
   flushThreshold: number;
   /** Data retention TTL in days. 0 = no TTL. Default: 0. */
   ttlDays: number;
+  /**
+   * 集群名。非空时 compress_filter_logs 用 `ON CLUSTER` + `ReplicatedMergeTree()`
+   * 建表；空串用普通 MergeTree（本机单节点）。只允许字母、数字、`_`、`-`、`.`。
+   */
+  cluster?: string;
 }
 
 /** One row = one upstream request (primary usage or extension telemetry). turn 由 (session_key, turn_seq) 标识。 */
@@ -112,6 +117,82 @@ export interface ClickHouseRow {
   cfq_expected_calls: number;
   /** Redis 写入前已生成的有效 CFQ 数量（主模型 + 分析模型兜底）。 */
   cfq_generated_calls: number;
+  /** 本轮所在工具 schema 带 allow_compression 的工具调用数；CCR 关闭时为 0。 */
+  ccr_eligible_calls: number;
+  /** 其中模型填了 allow_compression=false、触发 CCR 的数量。 */
+  ccr_triggered_calls: number;
+  /** JEV 场景结果：1=Coding，0=Non-coding，NULL=未判断或判断异常。 */
+  scene_coding: number | null;
+  // ── 请求输入构成（字符数，压缩前；图片不计字符，只计个数）。见 input-char-stats.ts ──
+  input_system_chars: number;
+  input_user_chars: number;
+  input_tool_schema_chars: number;
+  input_reasoning_chars: number;
+  input_tool_call_chars: number;
+  /** tool result 文本字符数，不含图片。 */
+  input_tool_result_chars: number;
+  input_assistant_text_chars: number;
+  /** 加密 / 签名内容、文档、无法归类的内容。 */
+  input_other_chars: number;
+  input_image_count: number;
+  // ── 压缩字符去向：仅已开启压缩的内容，均含决策缓存回放的历史。见 cost-guard char-stats.ts ──
+  /** 送入压缩的原文字符数（含服务端保留原文、远端失败）。 */
+  compress_input_chars: number;
+  /** 上述内容写回上游的字符数。 */
+  compress_output_chars: number;
+  /** 被本地规则拦下、没有送入压缩的字符数。 */
+  compress_rule_filtered_chars: number;
+  /** 其中 SQL 规则拦下的部分。 */
+  compress_sql_filtered_chars: number;
+  /** 因缺少 CFQ 没有压缩的字符数。 */
+  compress_no_cfq_filtered_chars: number;
+  /** 因并发超限没有压缩的字符数。 */
+  compress_overflow_chars: number;
+  /** no_cfq 中位于历史轮次的 tool result 字符数。 */
+  history_no_cfq_tool_result_chars: number;
+}
+
+/**
+ * usage_logs 的字符统计列：列名 → extensionStats 键。DDL、迁移和写入共用这一份，
+ * 加列只改这里。全部 `UInt32 DEFAULT 0`：单请求字符数远小于 42 亿，老行读出 0。
+ */
+const USAGE_CHAR_COLUMNS = [
+  ["input_system_chars", "inputSystemChars"],
+  ["input_user_chars", "inputUserChars"],
+  ["input_tool_schema_chars", "inputToolSchemaChars"],
+  ["input_reasoning_chars", "inputReasoningChars"],
+  ["input_tool_call_chars", "inputToolCallChars"],
+  ["input_tool_result_chars", "inputToolResultChars"],
+  ["input_assistant_text_chars", "inputAssistantTextChars"],
+  ["input_other_chars", "inputOtherChars"],
+  ["input_image_count", "inputImageCount"],
+  ["compress_input_chars", "compressInputChars"],
+  ["compress_output_chars", "compressOutputChars"],
+  ["compress_rule_filtered_chars", "compressRuleFilteredChars"],
+  ["compress_sql_filtered_chars", "compressSqlFilteredChars"],
+  ["compress_no_cfq_filtered_chars", "compressNoCfqFilteredChars"],
+  ["compress_overflow_chars", "compressOverflowChars"],
+  ["history_no_cfq_tool_result_chars", "historyNoCfqToolResultChars"],
+] as const satisfies ReadonlyArray<readonly [keyof ClickHouseRow, string]>;
+
+type UsageCharColumn = (typeof USAGE_CHAR_COLUMNS)[number][0];
+
+const USAGE_CHAR_COLUMN_TYPE = "UInt32 DEFAULT 0";
+const UINT32_MAX = 4_294_967_295;
+
+/** Non-negative integer clamped to UInt32; anything else becomes 0. */
+function uint32(v: unknown): number {
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return 0;
+  return Math.min(Math.floor(v), UINT32_MAX);
+}
+
+/** The character columns of one usage row, read from the request's extensionStats. */
+export function usageCharColumns(
+  extensionStats: Record<string, unknown> | undefined,
+): Record<UsageCharColumn, number> {
+  const out = {} as Record<UsageCharColumn, number>;
+  for (const [column, key] of USAGE_CHAR_COLUMNS) out[column] = uint32(extensionStats?.[key]);
+  return out;
 }
 
 /**
@@ -184,6 +265,9 @@ export function initClickHouse(cfg: ClickHouseConfig): void {
     // 没有这条定时 flush,轻量场景 (< flushThreshold 行/周期) 数据会
     // 一直卡在 buffer 里直到 shutdown 才落库,严重滞后。
     void flushSkillUsage().catch(() => {});
+    void flushCompressFilter().catch(() => {});
+    void flushRateLimit().catch(() => {});
+    void flushSessionTraceIndex().catch(() => {});
   }, cfg.flushIntervalMs);
   flushTimer.unref(); // Don't prevent process exit
 
@@ -275,7 +359,13 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     "  compress_remote_count UInt64 DEFAULT 0,",
     "  compress_remote_total_ms UInt64 DEFAULT 0,",
     "  cfq_expected_calls UInt32 DEFAULT 0,",
-    "  cfq_generated_calls UInt32 DEFAULT 0",
+    "  cfq_generated_calls UInt32 DEFAULT 0,",
+    "  ccr_eligible_calls UInt32 DEFAULT 0,",
+    "  ccr_triggered_calls UInt32 DEFAULT 0,",
+    "  scene_coding Nullable(UInt8),",
+    USAGE_CHAR_COLUMNS
+      .map(([column]) => `  ${column} ${USAGE_CHAR_COLUMN_TYPE}`)
+      .join(",\n"),
     ") ENGINE = MergeTree()",
     "ORDER BY (user_id, session_key, timestamp)",
     ttlClause,
@@ -346,6 +436,11 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     });
   }
 
+  // 压缩过滤分析表：单独 try，建表失败只影响这一张表。
+  await ensureCompressFilterTable(client, cfg);
+  await ensureRateLimitTable(client, cfg);
+  await ensureSessionTraceIndexTable(client, cfg);
+
   log.info("clickhouse.init.tableReady", {
     table: `${cfg.database}.${cfg.table}`,
     rawTable: cfg.rawTable ? `${cfg.database}.${cfg.rawTable}` : undefined,
@@ -414,10 +509,20 @@ export async function migrateSchema(
     // CFQ 生成率保留可加和的分子/分母；老行默认 0，不污染升级后的聚合。
     { table: cfg.table, column: "cfq_expected_calls", type: "UInt32 DEFAULT 0" },
     { table: cfg.table, column: "cfq_generated_calls", type: "UInt32 DEFAULT 0" },
+    // CCR 触发率（allow_compression=false 比例）同样存分子/分母。
+    { table: cfg.table, column: "ccr_eligible_calls", type: "UInt32 DEFAULT 0" },
+    { table: cfg.table, column: "ccr_triggered_calls", type: "UInt32 DEFAULT 0" },
+    { table: cfg.table, column: "scene_coding", type: "Nullable(UInt8)" },
     // 客户端原始请求模型；模型池服务名（tdai-code-o5）在转发前会被改写成主模型。
     { table: cfg.table, column: "requested_model", type: "LowCardinality(String) DEFAULT ''" },
     // 模型池决策来源；区分真正跑了池分析的请求与工具循环沿用、辅助请求、压缩检测等绕过分析的请求。
     { table: cfg.table, column: "route_reason", type: "LowCardinality(String) DEFAULT ''" },
+    // 请求输入构成与压缩字符去向（字符数）；老行默认 0。
+    ...USAGE_CHAR_COLUMNS.map(([column]) => ({
+      table: cfg.table,
+      column,
+      type: USAGE_CHAR_COLUMN_TYPE,
+    })),
   ];
 
   // usage_raw：追溯表补齐（本次新增 6 列 + model_name + upstream_request_id）
@@ -935,6 +1040,12 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
     compress_remote_total_ms: compressRemote.totalMs,
     cfq_expected_calls: num(entry.extensionStats?.cfqExpectedCalls),
     cfq_generated_calls: num(entry.extensionStats?.cfqGeneratedCalls),
+    ccr_eligible_calls: num(entry.extensionStats?.ccrEligibleCalls),
+    ccr_triggered_calls: num(entry.extensionStats?.ccrTriggeredCalls),
+    scene_coding: typeof entry.extensionStats?.sceneCoding === "boolean"
+      ? Number(entry.extensionStats.sceneCoding)
+      : null,
+    ...usageCharColumns(entry.extensionStats),
   };
 }
 
@@ -1208,6 +1319,9 @@ export async function shutdownClickHouse(): Promise<void> {
   await flushSessionInit().catch(() => {});
   await flushToolCall().catch(() => {});
   await flushSkillUsage().catch(() => {});
+  await flushCompressFilter().catch(() => {});
+  await flushRateLimit().catch(() => {});
+  await flushSessionTraceIndex().catch(() => {});
   if (client) {
     await client.close().catch(() => {});
     client = null;
@@ -1818,4 +1932,946 @@ export function writeSkillUsageRow(input: SkillUsageLogInput): void {
   } catch {
     // 绝不阻塞业务
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Compress Filter Telemetry — 压缩过滤 / CFQ 结算分析表
+//
+// 一张表两类事件（`event_type` 列区分）：
+//   - request ：每次上游请求的请求准备阶段。每个 tool result 去了哪（各类过滤、
+//               送没送压缩器、缓存回放）、CFQ 回填 / 注入 / 服从率 / opt-out。
+//   - response：每次主模型响应的 CFQ 结算。自填 / 兜底生成、写 Redis、耗时、失败原因。
+// 行类型看 `event_type` 列。每行都带 timestamp / request_id / upstream_request_id /
+// space_id / model_id / base_url 等公共列；两类行按 request_id（同一次上游请求）或
+// (session_key, turn_seq) 关联。
+//
+// 口径（request 行）：每个请求都带完整历史，同一个 tool result 会在之后每轮重复出现。
+//   - skip_* 列与 skip_reasons 只记本请求新做出的裁决；从决策缓存回放的在
+//     skip_reasons_cached / skip_no_cfq_cached。本地闸门（图片 / SQL / 长度 / 类型 /
+//     来源 / 格式异常）不进缓存，每轮都会重新计数。
+//   - 看「这一轮回填有没有出问题」用 skip_no_cfq（新判 no_cfq）与 backfill_missed。
+//
+// 硬约束同其它内部埋点：write* 同步返回 void、绝不 throw；CH 未启用时 no-op。
+// ════════════════════════════════════════════════════════════════════════════
+
+/** 表名（DDL + insert 共用）。 */
+export const COMPRESS_FILTER_TABLE = "compress_filter_logs";
+
+/** 集群名 / 库名只允许这些字符，防止配置值拼进 DDL 造成注入。 */
+const CH_IDENTIFIER_RE = /^[A-Za-z0-9_.-]+$/;
+/** map 列单行最多保留的键数，防止异常输入把一行撑大。 */
+const COMPRESS_FILTER_MAP_MAX_KEYS = 50;
+/** map 键、短文本列的截断长度。 */
+const COMPRESS_FILTER_KEY_MAX_CHARS = 64;
+const COMPRESS_FILTER_TEXT_MAX_CHARS = 256;
+const U32_MAX = 4_294_967_295;
+
+/** `event_type` 的取值。 */
+export type CompressFilterEventType = "request" | "response";
+
+/**
+ * 列定义，DDL 的唯一来源：`[列名, 类型, 列注释?]`。按「公共 → request → response」分组；
+ * 不属于本事件类型的列写默认值（0 / ''）。公共列每行都有值。
+ */
+const COMPRESS_FILTER_COLUMNS: ReadonlyArray<readonly [string, string, string?]> = [
+  // ── 公共（每行都有） ──
+  ["timestamp", "DateTime64(3, 'Asia/Shanghai')",
+    "行时间：request 行为请求准备完成时刻，response 行为主模型响应观察完成时刻"],
+  ["event_type", "LowCardinality(String)",
+    "行类型：request=请求侧压缩过滤统计；response=主模型响应的 CFQ 结算统计"],
+  ["request_id", "String",
+    "代理内部请求 ID（同日志 requestId、Opik/Langfuse trace id），关联同一请求的 request/response 行"],
+  ["upstream_request_id", "String DEFAULT ''", "上游响应头 x-request-id，跨系统追溯用"],
+  ["space_id", "String DEFAULT ''", "空间/租户 ID"],
+  ["model_id", "LowCardinality(String) DEFAULT ''", "实际调用的上游模型 ID"],
+  ["base_url", "String DEFAULT ''", "上游地址（scheme://host/path，已去掉 query 与认证信息）"],
+  ["session_key", "String", "会话隔离键"],
+  ["turn_seq", "UInt32 DEFAULT 0", "turn 序号"],
+  ["user_id", "String DEFAULT ''", "用户标识"],
+  ["protocol", "LowCardinality(String) DEFAULT ''", "上游协议：anthropic / openai / responses"],
+  // ── request：阶段与开关 ──
+  ["prepare_ms", "UInt32 DEFAULT 0"],
+  ["cfq_channel_active", "UInt8 DEFAULT 0"],
+  ["compressor_enabled", "UInt8 DEFAULT 0"],
+  ["compress_error", "UInt8 DEFAULT 0"],
+  // ── request：内容单元去向 ──
+  ["units", "UInt32 DEFAULT 0"],
+  ["tool_results", "UInt32 DEFAULT 0"],
+  ["assistant_units", "UInt32 DEFAULT 0", "其中来源是 assistant 回复的内容单元数"],
+  ["assistant_sent", "UInt32 DEFAULT 0",
+    "assistant 单元里本请求送到远端压缩服务并拿到响应的数量（不含缓存回放；远端报错的不带来源，不计入）"],
+  ["remote_calls", "UInt32 DEFAULT 0"],
+  ["remote_failed", "UInt32 DEFAULT 0"],
+  ["not_sent", "UInt32 DEFAULT 0"],
+  ["compressed_fresh", "UInt32 DEFAULT 0"],
+  ["compressed_cached", "UInt32 DEFAULT 0"],
+  ["skipped", "UInt32 DEFAULT 0"],
+  ["skipped_fresh", "UInt32 DEFAULT 0"],
+  ["skipped_cached", "UInt32 DEFAULT 0"],
+  // ── request：按原因的新裁决数（本请求做出的） ──
+  ["skip_no_cfq", "UInt32 DEFAULT 0"],
+  ["skip_no_cfq_cached", "UInt32 DEFAULT 0"],
+  ["skip_no_cfq_unconfirmed", "UInt32 DEFAULT 0",
+    "skip_no_cfq 中结算尚未确认漏填、只当轮不压不固化的数量（多为结束帧之前的旁路请求）"],
+  ["skip_embedded_image", "UInt32 DEFAULT 0"],
+  ["skip_sql_content", "UInt32 DEFAULT 0"],
+  ["skip_below_min_length", "UInt32 DEFAULT 0"],
+  ["skip_content_type", "UInt32 DEFAULT 0"],
+  ["skip_code", "UInt32 DEFAULT 0"],
+  ["skip_source_filter", "UInt32 DEFAULT 0"],
+  ["skip_keep_full", "UInt32 DEFAULT 0"],
+  ["skip_scene", "UInt32 DEFAULT 0"],
+  ["skip_semaphore_overflow", "UInt32 DEFAULT 0"],
+  ["skip_server_kept_original", "UInt32 DEFAULT 0"],
+  ["skip_not_shorter", "UInt32 DEFAULT 0"],
+  ["skip_server_invalid", "UInt32 DEFAULT 0"],
+  ["skip_remote_error", "UInt32 DEFAULT 0"],
+  ["skip_malformed", "UInt32 DEFAULT 0"],
+  ["skip_other", "UInt32 DEFAULT 0"],
+  ["skip_reasons", "Map(LowCardinality(String), UInt32)"],
+  ["skip_reasons_cached", "Map(LowCardinality(String), UInt32)"],
+  ["no_cfq_tools", "Map(String, UInt32)"],
+  // ── request：压缩效果与延迟 ──
+  ["cfq_source_schema", "UInt32 DEFAULT 0"],
+  ["cfq_source_description", "UInt32 DEFAULT 0"],
+  ["remote_total_ms", "UInt32 DEFAULT 0"],
+  ["remote_max_ms", "UInt32 DEFAULT 0"],
+  ["compress_duration_ms", "UInt32 DEFAULT 0"],
+  ["orig_tokens", "UInt64 DEFAULT 0"],
+  ["comp_tokens", "UInt64 DEFAULT 0"],
+  ["fresh_orig_tokens", "UInt64 DEFAULT 0"],
+  ["fresh_comp_tokens", "UInt64 DEFAULT 0"],
+  ["failed_reasons", "String DEFAULT ''"],
+  // ── request：CFQ 回填 / 注入 / 服从率 / opt-out ──
+  ["backfill_targets", "UInt32 DEFAULT 0"],
+  ["backfill_hits", "UInt32 DEFAULT 0"],
+  ["backfill_with_cfq", "UInt32 DEFAULT 0"],
+  ["backfill_missed", "UInt32 DEFAULT 0"],
+  ["backfill_error", "UInt8 DEFAULT 0"],
+  ["cfq_injected_tools", "UInt32 DEFAULT 0"],
+  ["inject_error", "UInt8 DEFAULT 0"],
+  ["echo_total", "UInt32 DEFAULT 0"],
+  ["echo_hit", "UInt32 DEFAULT 0"],
+  ["cfq_reminded", "UInt32 DEFAULT 0",
+    "本请求在 tool_result 开头注入 CFQ 漏填提醒的条数（含历史轮次按裁决回放的）"],
+  ["opt_out_denied", "UInt32 DEFAULT 0"],
+  ["opt_out_allowed", "UInt32 DEFAULT 0"],
+  // ── request：目标与场景 ──
+  ["goal_source", "LowCardinality(String) DEFAULT ''"],
+  ["scene_coding", "Nullable(UInt8)"],
+  ["scene_cache_hit", "UInt8 DEFAULT 0"],
+  ["scene_latency_ms", "UInt32 DEFAULT 0"],
+  // ── response：结算 ──
+  ["settle_status", "LowCardinality(String) DEFAULT ''"],
+  ["settle_ms", "UInt32 DEFAULT 0"],
+  ["settle_wait_ms", "UInt32 DEFAULT 0"],
+  ["tool_calls", "UInt32 DEFAULT 0"],
+  ["dropped_no_id", "UInt32 DEFAULT 0"],
+  ["duplicates", "UInt32 DEFAULT 0"],
+  ["cfq_expected", "UInt32 DEFAULT 0"],
+  ["cfq_generated", "UInt32 DEFAULT 0"],
+  ["cfq_self_filled", "UInt32 DEFAULT 0"],
+  ["cfq_missing", "UInt32 DEFAULT 0"],
+  ["opt_out", "UInt32 DEFAULT 0"],
+  ["eligibility", "LowCardinality(String) DEFAULT ''"],
+  // ── response：兜底 ──
+  ["fallback_ran", "UInt8 DEFAULT 0"],
+  ["fallback_generated", "UInt32 DEFAULT 0"],
+  ["fallback_ms", "UInt32 DEFAULT 0"],
+  ["fallback_prompt_tokens", "UInt64 DEFAULT 0"],
+  ["fallback_completion_tokens", "UInt64 DEFAULT 0"],
+  ["fallback_cached_tokens", "UInt64 DEFAULT 0"],
+  ["fallback_failures", "String DEFAULT ''"],
+  ["missing_reason", "LowCardinality(String) DEFAULT ''"],
+  ["missing_marked", "UInt32 DEFAULT 0",
+    "结束帧之前写入确认漏填标记（cg:cfqmiss:）的条数；请求侧只有读到标记才固化 no_cfq 并提醒"],
+  // ── response：Redis 写入 ──
+  ["store_ready", "UInt8 DEFAULT 1"],
+  ["redis_commands", "UInt32 DEFAULT 0"],
+  ["redis_persisted", "UInt32 DEFAULT 0"],
+  ["redis_failed", "UInt32 DEFAULT 0"],
+  ["redis_retried", "UInt8 DEFAULT 0"],
+  ["redis_timed_out", "UInt8 DEFAULT 0"],
+  ["redis_skipped", "UInt8 DEFAULT 0"],
+  ["redis_write_ms", "UInt32 DEFAULT 0"],
+  ["redis_error", "String DEFAULT ''"],
+  // ── response：异常 ──
+  ["timed_out", "UInt8 DEFAULT 0"],
+  ["hard_stopped", "UInt8 DEFAULT 0"],
+  ["crashed", "UInt8 DEFAULT 0"],
+  // ── 公共尾部 ──
+  ["source_tag", "LowCardinality(String) DEFAULT 'proxy'"],
+  ["host", "LowCardinality(String)"],
+];
+
+/**
+ * compress_filter_logs 的 DDL。
+ *
+ * 有集群名时走副本模式：`CREATE TABLE db.t ON CLUSTER c ... ENGINE = ReplicatedMergeTree()`，
+ * 依赖服务端配置的 `{shard}` / `{replica}` 宏；表名带库前缀，
+ * 避免分布式 DDL 在其它节点上落进默认库。无集群名时用普通 MergeTree（本机单节点）。
+ *
+ * @throws 集群名或库名含非法字符时抛错，由调用方记录后放弃建表。
+ */
+export function compressFilterTableDdl(opts: { database?: string; cluster?: string } = {}): string {
+  const cluster = (opts.cluster ?? "").trim();
+  if (cluster && !CH_IDENTIFIER_RE.test(cluster)) {
+    throw new Error(`invalid clickhouse.cluster: ${JSON.stringify(cluster)}`);
+  }
+  const database = (opts.database ?? "").trim();
+  if (cluster && database && !CH_IDENTIFIER_RE.test(database)) {
+    throw new Error(`invalid clickhouse.database: ${JSON.stringify(database)}`);
+  }
+  const table = cluster && database
+    ? `${database}.${COMPRESS_FILTER_TABLE}`
+    : COMPRESS_FILTER_TABLE;
+  const onCluster = cluster ? ` ON CLUSTER ${cluster}` : "";
+  const engine = cluster ? "ReplicatedMergeTree()" : "MergeTree()";
+  const ttlClause = TELEMETRY_TTL_DAYS > 0
+    ? `TTL toDateTime(timestamp) + INTERVAL ${TELEMETRY_TTL_DAYS} DAY`
+    : "";
+  const columns = COMPRESS_FILTER_COLUMNS.map(([name, type, comment], i) =>
+    `  ${columnDef(name, type, comment)}${i < COMPRESS_FILTER_COLUMNS.length - 1 ? "," : ""}`);
+  return [
+    `CREATE TABLE IF NOT EXISTS ${table}${onCluster} (`,
+    ...columns,
+    `) ENGINE = ${engine}`,
+    "PARTITION BY toYYYYMM(timestamp)",
+    "ORDER BY (event_type, space_id, session_key, timestamp)",
+    ttlClause,
+  ].filter(Boolean).join("\n");
+}
+
+function columnDef(name: string, type: string, comment?: string): string {
+  return `${name} ${type}${comment ? ` COMMENT '${escapeChString(comment)}'` : ""}`;
+}
+
+/**
+ * 表已存在时补齐新增的列：对比 `existing`，为缺失的列生成一条
+ * `ALTER TABLE … [ON CLUSTER c] ADD COLUMN IF NOT EXISTS … AFTER <前一列>`。
+ * 没有缺失列时返回 null。纯函数，便于单测。
+ *
+ * @throws 集群名或库名含非法字符时抛错（同 {@link compressFilterTableDdl}）。
+ */
+export function compressFilterAddColumnsDdl(
+  existing: ReadonlySet<string>,
+  opts: { database?: string; cluster?: string } = {},
+): string | null {
+  // 复用 DDL 的校验规则。
+  compressFilterTableDdl(opts);
+  const cluster = (opts.cluster ?? "").trim();
+  const database = (opts.database ?? "").trim();
+  const table = cluster && database ? `${database}.${COMPRESS_FILTER_TABLE}` : COMPRESS_FILTER_TABLE;
+  const clauses: string[] = [];
+  COMPRESS_FILTER_COLUMNS.forEach(([name, type, comment], i) => {
+    if (existing.has(name)) return;
+    const after = i > 0 ? ` AFTER ${COMPRESS_FILTER_COLUMNS[i - 1]![0]}` : " FIRST";
+    clauses.push(`  ADD COLUMN IF NOT EXISTS ${columnDef(name, type, comment)}${after}`);
+  });
+  if (clauses.length === 0) return null;
+  return [`ALTER TABLE ${table}${cluster ? ` ON CLUSTER ${cluster}` : ""}`, clauses.join(",\n")].join("\n");
+}
+
+/** 已存在的表补列。失败只记 warn：缺列时 insert 报错，flush 失败的行会回队重试。 */
+async function migrateCompressFilterColumns(
+  ch: ClickHouseClient,
+  cfg: ClickHouseConfig,
+  cluster: string,
+): Promise<void> {
+  try {
+    const rs = await ch.query({
+      query: "SELECT name FROM system.columns WHERE database = {db:String} AND table = {table:String}",
+      query_params: { db: cfg.database, table: COMPRESS_FILTER_TABLE },
+      format: "JSONEachRow",
+    });
+    const existing = new Set(((await rs.json()) as Array<{ name: string }>).map((r) => r.name));
+    if (existing.size === 0) return;
+    const ddl = compressFilterAddColumnsDdl(existing, { database: cfg.database, cluster });
+    if (!ddl) return;
+    await ch.command({ query: ddl, clickhouse_settings: { wait_end_of_query: 1 } });
+    log.info("clickhouse.init.compressFilterColumnsAdded", {
+      columns: COMPRESS_FILTER_COLUMNS.map(([n]) => n).filter((n) => !existing.has(n)),
+    });
+  } catch (err: unknown) {
+    log.warn("clickhouse.init.compressFilterMigrateFailed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** 建表（集群模式下先确保各节点上有库）。失败只记 warn，不影响其它表。 */
+async function ensureCompressFilterTable(ch: ClickHouseClient, cfg: ClickHouseConfig): Promise<void> {
+  const cluster = (cfg.cluster ?? "").trim();
+  try {
+    const ddl = compressFilterTableDdl({ database: cfg.database, cluster });
+    if (cluster) {
+      // 主建库语句只在当前节点执行；分布式建表要求每个节点都有这个库。
+      try {
+        await ch.command({
+          query: `CREATE DATABASE IF NOT EXISTS ${cfg.database} ON CLUSTER ${cluster}`,
+          clickhouse_settings: { wait_end_of_query: 1 },
+        });
+      } catch (err: unknown) {
+        log.warn("clickhouse.init.compressFilterDatabaseFailed", {
+          cluster,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    await createTableIfNotExists(ch, ddl);
+    await migrateCompressFilterColumns(ch, cfg, cluster);
+    log.info("clickhouse.init.compressFilterTableReady", {
+      table: `${cfg.database}.${COMPRESS_FILTER_TABLE}`,
+      engine: cluster ? "ReplicatedMergeTree" : "MergeTree",
+      ...(cluster ? { cluster } : {}),
+      ttlDays: TELEMETRY_TTL_DAYS,
+    });
+  } catch (err: unknown) {
+    log.warn("clickhouse.init.compressFilterTableFailed", {
+      ...(cluster ? { cluster } : {}),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ── 行类型与构造 ────────────────────────────────────────────────────────────
+
+/** 两类事件共用的关联字段（每行都写）。 */
+export interface CompressFilterContext {
+  /**
+   * 代理内部请求 ID：与日志里的 requestId、Opik / Langfuse trace id 是同一个值，
+   * 关联同一次上游请求的 request / response 行。
+   */
+  requestId?: string;
+  /** 上游响应头 x-request-id。 */
+  upstreamRequestId?: string;
+  sessionKey?: string;
+  turnSeq?: number;
+  userId?: string;
+  spaceId?: string;
+  protocol?: string;
+  /** 实际调用的上游模型 ID。 */
+  modelId?: string;
+  /** 上游地址，原样传入；落表前去掉 query / fragment / 认证信息。 */
+  baseUrl?: string;
+}
+
+/** request 行输入：`stats` 是扩展返回的扁平过滤统计，宿主不解释其来源。 */
+export interface CompressFilterRequestInput extends CompressFilterContext {
+  timestamp: string;
+  /** 宿主测得的请求准备阶段墙钟耗时（ms）。 */
+  prepareMs: number;
+  stats: Record<string, unknown>;
+}
+
+/**
+ * response 行的结算状态：
+ *   - settled      ：扩展完成结算（明细来自扩展）
+ *   - not_settled  ：响应被观察到，但结算从未发生（runner 漏接 / 客户端提前断开）
+ *   - guard_timeout：扩展超出自身预算，被宿主兜底超时放行
+ *   - rejected     ：扩展结算 reject / 抛错
+ */
+export type CompressFilterSettleStatus = "settled" | "not_settled" | "guard_timeout" | "rejected";
+
+/** response 行输入：`observation` 是扩展返回的结算统计（可为 null）。 */
+export interface CompressFilterResponseInput extends CompressFilterContext {
+  timestamp: string;
+  settleStatus: CompressFilterSettleStatus;
+  /** 宿主侧卡住结束帧的墙钟时长（ms）。 */
+  settleWaitMs: number;
+  observation: Record<string, unknown> | null;
+}
+
+export type CompressFilterLogRow = Record<string, string | number | null | Record<string, number>>;
+
+function u32(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.min(Math.floor(v), U32_MAX) : 0;
+}
+
+function u64(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+function flag(v: unknown): number {
+  return v === true ? 1 : 0;
+}
+
+function text(v: unknown, max = COMPRESS_FILTER_TEXT_MAX_CHARS): string {
+  return typeof v === "string" ? v.slice(0, max) : "";
+}
+
+/** 只保留「字符串键 → 非负整数」，键截断、数量封顶。 */
+function countMap(v: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  let n = 0;
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    if (n >= COMPRESS_FILTER_MAP_MAX_KEYS) break;
+    const count = u32(value);
+    if (!key || count === 0) continue;
+    const k = key.slice(0, COMPRESS_FILTER_KEY_MAX_CHARS);
+    out[k] = (out[k] ?? 0) + count;
+    n++;
+  }
+  return out;
+}
+
+/** 跳过原因 → 扁平列。未列出的原因归入 skip_other（map 列里仍保留原名）。 */
+const SKIP_REASON_COLUMN: Readonly<Record<string, string>> = {
+  no_cfq: "skip_no_cfq",
+  embedded_image: "skip_embedded_image",
+  sql_content: "skip_sql_content",
+  below_min_length: "skip_below_min_length",
+  "content-type": "skip_content_type",
+  code: "skip_code",
+  "source-filter": "skip_source_filter",
+  keep_full: "skip_keep_full",
+  scene_non_coding: "skip_scene",
+  jev_error: "skip_scene",
+  semaphore_overflow: "skip_semaphore_overflow",
+  server_kept_original: "skip_server_kept_original",
+  not_shorter: "skip_not_shorter",
+  server_invalid_response: "skip_server_invalid",
+  remote_http_5xx: "skip_remote_error",
+  remote_http_4xx: "skip_remote_error",
+  remote_timeout: "skip_remote_error",
+  remote_error: "skip_remote_error",
+  warmup_placeholder: "skip_malformed",
+  codex_in_body_truncated: "skip_malformed",
+  malformed_codex_header: "skip_malformed",
+  malformed_dsh_read_wrapper: "skip_malformed",
+  empty_body_with_header: "skip_malformed",
+  no_tool_call: "skip_malformed",
+};
+
+/** 转义 ClickHouse 单引号字符串字面量。 */
+function escapeChString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
+/**
+ * 上游地址落表前脱敏：只保留 `scheme://host[:port]/path`，去掉 query、fragment、
+ * 用户名密码（有的网关把 key 放在 query 里）。解析失败返回空串，宁缺毋泄。
+ */
+export function sanitizeBaseUrl(raw: unknown): string {
+  if (typeof raw !== "string" || raw.trim() === "") return "";
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return `${url.protocol}//${url.host}${path}`.slice(0, 512);
+  } catch {
+    return "";
+  }
+}
+
+/** 一行的全部列都写上：JSONEachRow 不依赖列默认值，request / response 行形状一致。 */
+function baseCompressFilterRow(
+  eventType: CompressFilterEventType,
+  timestamp: string,
+  ctx: CompressFilterContext,
+): CompressFilterLogRow {
+  const row: CompressFilterLogRow = {};
+  for (const [name, type] of COMPRESS_FILTER_COLUMNS) {
+    if (type.startsWith("Map(")) row[name] = {};
+    else if (type.startsWith("Nullable(")) row[name] = null;
+    else if (/^(String|LowCardinality\(String\))/.test(type)) row[name] = "";
+    else row[name] = 0;
+  }
+  row.timestamp = toChTimestamp(timestamp);
+  row.event_type = eventType;
+  row.request_id = text(ctx.requestId);
+  row.upstream_request_id = text(ctx.upstreamRequestId);
+  row.space_id = text(ctx.spaceId);
+  row.model_id = text(ctx.modelId, 128);
+  row.base_url = sanitizeBaseUrl(ctx.baseUrl);
+  row.session_key = text(ctx.sessionKey, 512);
+  row.turn_seq = u32(ctx.turnSeq);
+  row.user_id = text(ctx.userId);
+  row.protocol = text(ctx.protocol, COMPRESS_FILTER_KEY_MAX_CHARS);
+  row.store_ready = 1;
+  row.source_tag = "proxy";
+  row.host = HOST_ID;
+  return row;
+}
+
+/** 构造 request 行；纯函数便于单测。 */
+export function buildCompressFilterRequestRow(input: CompressFilterRequestInput): CompressFilterLogRow {
+  const s = input.stats;
+  const row = baseCompressFilterRow("request", input.timestamp, input);
+  row.prepare_ms = u32(input.prepareMs);
+  row.cfq_channel_active = flag(s.cfqChannelActive);
+  row.compressor_enabled = flag(s.compressorEnabled);
+  row.compress_error = flag(s.compressError);
+
+  row.units = u32(s.units);
+  row.tool_results = u32(s.toolResults);
+  row.assistant_units = u32(s.assistantUnits);
+  row.assistant_sent = u32(s.assistantSent);
+  row.remote_calls = u32(s.remoteCalls);
+  row.remote_failed = u32(s.remoteFailed);
+  row.not_sent = u32(s.notSent);
+  row.compressed_fresh = u32(s.compressedFresh);
+  row.compressed_cached = u32(s.compressedCached);
+  row.skipped = u32(s.skipped);
+  row.skipped_fresh = u32(s.skippedFresh);
+  row.skipped_cached = u32(s.skippedCached);
+
+  const reasons = countMap(s.skipReasons);
+  const reasonsCached = countMap(s.skipReasonsCached);
+  for (const [reason, count] of Object.entries(reasons)) {
+    const column = SKIP_REASON_COLUMN[reason] ?? "skip_other";
+    row[column] = (row[column] as number) + count;
+  }
+  row.skip_no_cfq_cached = reasonsCached.no_cfq ?? 0;
+  row.skip_no_cfq_unconfirmed = u32(s.noCfqUnconfirmed);
+  row.skip_reasons = reasons;
+  row.skip_reasons_cached = reasonsCached;
+  row.no_cfq_tools = countMap(s.noCfqTools);
+
+  row.cfq_source_schema = u32(s.cfqSourceSchema);
+  row.cfq_source_description = u32(s.cfqSourceDescription);
+  row.remote_total_ms = u32(s.remoteTotalMs);
+  row.remote_max_ms = u32(s.remoteMaxMs);
+  row.compress_duration_ms = u32(s.compressDurationMs);
+  row.orig_tokens = u64(s.origTokens);
+  row.comp_tokens = u64(s.compTokens);
+  row.fresh_orig_tokens = u64(s.freshOrigTokens);
+  row.fresh_comp_tokens = u64(s.freshCompTokens);
+  row.failed_reasons = text(s.failedReasons);
+
+  const targets = u32(s.backfillTargets);
+  const withCfq = u32(s.backfillWithCfq);
+  row.backfill_targets = targets;
+  row.backfill_hits = u32(s.backfillHits);
+  row.backfill_with_cfq = withCfq;
+  row.backfill_missed = Math.max(0, targets - withCfq);
+  row.backfill_error = flag(s.backfillError);
+  row.cfq_injected_tools = u32(s.cfqInjectedTools);
+  row.inject_error = flag(s.injectError);
+  row.echo_total = u32(s.echoTotal);
+  row.echo_hit = u32(s.echoHit);
+  row.cfq_reminded = u32(s.cfqReminded);
+  row.opt_out_denied = u32(s.optOutDenied);
+  row.opt_out_allowed = u32(s.optOutAllowed);
+
+  row.goal_source = text(s.goalSource, COMPRESS_FILTER_KEY_MAX_CHARS);
+  row.scene_coding = typeof s.sceneCoding === "boolean" ? (s.sceneCoding ? 1 : 0) : null;
+  row.scene_cache_hit = flag(s.sceneCacheHit);
+  row.scene_latency_ms = u32(s.sceneLatencyMs);
+  return row;
+}
+
+/** 构造 response 行；纯函数便于单测。observation 为 null 时只有状态与耗时。 */
+export function buildCompressFilterResponseRow(input: CompressFilterResponseInput): CompressFilterLogRow {
+  const o = input.observation ?? {};
+  const row = baseCompressFilterRow("response", input.timestamp, input);
+  row.settle_status = input.settleStatus;
+  row.settle_ms = u32(o.costMs);
+  row.settle_wait_ms = u32(input.settleWaitMs);
+  row.tool_calls = u32(o.toolCalls);
+  row.dropped_no_id = u32(o.droppedNoId);
+  row.duplicates = u32(o.duplicates);
+  row.cfq_expected = u32(o.expected);
+  row.cfq_generated = u32(o.generated);
+  row.cfq_self_filled = u32(o.selfFilled);
+  row.cfq_missing = u32(o.missing);
+  row.opt_out = u32(o.optOut);
+  row.eligibility = text(o.eligibility, COMPRESS_FILTER_KEY_MAX_CHARS);
+
+  row.fallback_ran = flag(o.fallbackRan);
+  row.fallback_generated = u32(o.fallbackGenerated);
+  row.fallback_ms = u32(o.fallbackMs);
+  row.fallback_prompt_tokens = u64(o.fallbackPromptTokens);
+  row.fallback_completion_tokens = u64(o.fallbackCompletionTokens);
+  row.fallback_cached_tokens = u64(o.fallbackCachedTokens);
+  row.fallback_failures = text(o.fallbackFailures);
+  row.missing_reason = text(o.missingReason, COMPRESS_FILTER_KEY_MAX_CHARS);
+  row.missing_marked = u32(o.missingMarked);
+
+  row.store_ready = o.storeReady === false ? 0 : 1;
+  row.redis_commands = u32(o.writeCommands);
+  row.redis_persisted = u32(o.retained);
+  row.redis_failed = u32(o.failed);
+  row.redis_retried = flag(o.writeRetried);
+  row.redis_timed_out = flag(o.writeTimedOut);
+  row.redis_skipped = flag(o.writeSkipped);
+  row.redis_write_ms = u32(o.writeMs);
+  row.redis_error = text(o.writeError);
+
+  row.timed_out = flag(o.timedOut);
+  row.hard_stopped = flag(o.hardStopped);
+  row.crashed = flag(o.crashed);
+  return row;
+}
+
+// ── Writer ──────────────────────────────────────────────────────────────────
+
+let compressFilterBuffer: CompressFilterLogRow[] = [];
+
+function requeueCompressFilter(rows: CompressFilterLogRow[]): void {
+  compressFilterBuffer = requeueWithOverflowGuard(
+    compressFilterBuffer,
+    rows,
+    "clickhouse.compressFilter.overflow",
+  );
+}
+
+async function flushCompressFilter(): Promise<void> {
+  await flushBuffer(
+    compressFilterBuffer,
+    client,
+    COMPRESS_FILTER_TABLE,
+    requeueCompressFilter,
+    "clickhouse.compressFilter",
+  );
+}
+
+/** CH 是否会接收压缩过滤行；调用方据此跳过统计采集的开销。 */
+export function isCompressFilterLogEnabled(): boolean {
+  return !disabled && config !== null;
+}
+
+/** 写一条 request 行（fire-and-forget，绝不抛）。CH 未启用时 no-op。 */
+export function writeCompressFilterRequestRow(input: CompressFilterRequestInput): void {
+  if (disabled || !config) return;
+  try {
+    enqueueRow(
+      compressFilterBuffer,
+      buildCompressFilterRequestRow(input),
+      flushCompressFilter,
+      config?.flushThreshold ?? 50,
+    );
+  } catch {
+    // 绝不阻塞业务
+  }
+}
+
+/** 写一条 response 行（fire-and-forget，绝不抛）。CH 未启用时 no-op。 */
+export function writeCompressFilterResponseRow(input: CompressFilterResponseInput): void {
+  if (disabled || !config) return;
+  try {
+    enqueueRow(
+      compressFilterBuffer,
+      buildCompressFilterResponseRow(input),
+      flushCompressFilter,
+      config?.flushThreshold ?? 50,
+    );
+  } catch {
+    // 绝不阻塞业务
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Rate Limit Telemetry — 每次限流判定一行，供外部监控平台画 TPM / QPM 曲线
+//
+// window_* 是 Lua 判定时算出的 60 秒滑动窗口用量（限流器眼中的 QPM / TPM），
+// limit_* 是当时生效的限额（已叠加实例 / 实例×模型 override）。
+// 硬约束同其它内部埋点：write* 同步返回 void、绝不 throw；CH 未启用时 no-op。
+// ════════════════════════════════════════════════════════════════════════════
+
+export const RATE_LIMIT_TABLE = "rate_limit_logs";
+const RATE_LIMIT_TTL_DAYS = 30;
+
+export type RateLimitLogDecision = "allowed" | "rejected_qpm" | "rejected_tpm" | "degraded";
+
+export interface RateLimitLogInput {
+  timestamp: string;                   // ISO 8601 UTC
+  spaceId: string;
+  modelId: string;
+  decision: RateLimitLogDecision;
+  windowRequests: number;
+  windowTokens: number;
+  limitQpm: number;
+  limitTpm: number;
+}
+
+export interface RateLimitLogRow {
+  timestamp: string;
+  space_id: string;
+  model_id: string;
+  decision: string;
+  window_requests: number;
+  window_tokens: number;
+  limit_qpm: number;
+  limit_tpm: number;
+}
+
+/** 构造 rate_limit 行；纯函数便于单测。 */
+export function buildRateLimitLogRow(input: RateLimitLogInput): RateLimitLogRow {
+  return {
+    timestamp: toChTimestamp(input.timestamp),
+    space_id: input.spaceId,
+    model_id: input.modelId,
+    decision: input.decision,
+    window_requests: u32(input.windowRequests),
+    window_tokens: u64(input.windowTokens),
+    limit_qpm: u32(input.limitQpm),
+    limit_tpm: u64(input.limitTpm),
+  };
+}
+
+/** 集群模式下建表 / ALTER 用到的三段：带库前缀的表名、`ON CLUSTER` 子句、引擎名前缀。 */
+interface ClusterTarget {
+  table: string;
+  onCluster: string;
+  /** 集群模式为 `Replicated`，拼在引擎名前，如 `${replicated}MergeTree()`。 */
+  replicated: string;
+}
+
+/**
+ * 有集群名时表名带库前缀（避免分布式 DDL 在其它节点上落进默认库）、加 `ON CLUSTER`、
+ * 用 Replicated 引擎；无集群名时用本机表。
+ *
+ * @throws 集群名或库名含非法字符时抛错。
+ */
+function resolveClusterTarget(opts: { database?: string; cluster?: string }, table: string): ClusterTarget {
+  const cluster = (opts.cluster ?? "").trim();
+  if (cluster && !CH_IDENTIFIER_RE.test(cluster)) {
+    throw new Error(`invalid clickhouse.cluster: ${JSON.stringify(cluster)}`);
+  }
+  const database = (opts.database ?? "").trim();
+  if (cluster && database && !CH_IDENTIFIER_RE.test(database)) {
+    throw new Error(`invalid clickhouse.database: ${JSON.stringify(database)}`);
+  }
+  return {
+    table: cluster && database ? `${database}.${table}` : table,
+    onCluster: cluster ? ` ON CLUSTER ${cluster}` : "",
+    replicated: cluster ? "Replicated" : "",
+  };
+}
+
+/**
+ * rate_limit_logs 的 DDL。集群模式与 {@link compressFilterTableDdl} 相同：
+ * `ON CLUSTER` + `ReplicatedMergeTree()`，表名带库前缀。
+ *
+ * @throws 集群名或库名含非法字符时抛错，由调用方记录后放弃建表。
+ */
+export function rateLimitTableDdl(opts: { database?: string; cluster?: string } = {}): string {
+  const { table, onCluster, replicated } = resolveClusterTarget(opts, RATE_LIMIT_TABLE);
+  const engine = `${replicated}MergeTree()`;
+  const ttlClause = RATE_LIMIT_TTL_DAYS > 0
+    ? `TTL toDateTime(timestamp) + INTERVAL ${RATE_LIMIT_TTL_DAYS} DAY`
+    : "";
+  return [
+    `CREATE TABLE IF NOT EXISTS ${table}${onCluster} (`,
+    "  timestamp DateTime64(3, 'Asia/Shanghai'),",
+    "  space_id String,",
+    "  model_id LowCardinality(String),",
+    // 枚举: allowed / rejected_qpm / rejected_tpm / degraded（Redis 故障 fail-open）
+    "  decision LowCardinality(String),",
+    // 放行时含本次请求
+    "  window_requests UInt32,",
+    "  window_tokens UInt64,",
+    "  limit_qpm UInt32,",
+    "  limit_tpm UInt64",
+    `) ENGINE = ${engine}`,
+    "PARTITION BY toYYYYMMDD(timestamp)",
+    "ORDER BY (space_id, model_id, timestamp)",
+    ttlClause,
+  ].filter(Boolean).join("\n");
+}
+
+/** 建表（集群模式下先确保各节点上有库）。失败只记 warn，不影响其它表。 */
+async function ensureRateLimitTable(ch: ClickHouseClient, cfg: ClickHouseConfig): Promise<void> {
+  const cluster = (cfg.cluster ?? "").trim();
+  try {
+    const ddl = rateLimitTableDdl({ database: cfg.database, cluster });
+    if (cluster) {
+      await ch.command({
+        query: `CREATE DATABASE IF NOT EXISTS ${cfg.database} ON CLUSTER ${cluster}`,
+        clickhouse_settings: { wait_end_of_query: 1 },
+      });
+    }
+    await createTableIfNotExists(ch, ddl);
+    log.info("clickhouse.init.rateLimitTableReady", {
+      table: `${cfg.database}.${RATE_LIMIT_TABLE}`,
+      engine: cluster ? "ReplicatedMergeTree" : "MergeTree",
+      ...(cluster ? { cluster } : {}),
+      ttlDays: RATE_LIMIT_TTL_DAYS,
+    });
+  } catch (err: unknown) {
+    log.warn("clickhouse.init.rateLimitTableFailed", {
+      ...(cluster ? { cluster } : {}),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+let rateLimitBuffer: RateLimitLogRow[] = [];
+
+function requeueRateLimit(rows: RateLimitLogRow[]): void {
+  rateLimitBuffer = requeueWithOverflowGuard(
+    rateLimitBuffer,
+    rows,
+    "clickhouse.rateLimit.overflow",
+  );
+}
+
+async function flushRateLimit(): Promise<void> {
+  await flushBuffer(
+    rateLimitBuffer,
+    client,
+    RATE_LIMIT_TABLE,
+    requeueRateLimit,
+    "clickhouse.rateLimit",
+  );
+}
+
+/** 写一条限流判定记录（fire-and-forget，绝不抛）。CH 未启用时 no-op。 */
+export function writeRateLimitLogRow(input: RateLimitLogInput): void {
+  if (disabled || !config) return;
+  try {
+    enqueueRow(
+      rateLimitBuffer,
+      buildRateLimitLogRow(input),
+      flushRateLimit,
+      config?.flushThreshold ?? 50,
+    );
+  } catch {
+    // 绝不阻塞业务
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Session Trace Index — 在线会话 trace 的时间索引
+//
+// COS 上的会话对象按 team / user / session 分目录，时间只在文件名里，按「实例 + 时间窗口」
+// 查要列遍整个实例。这张表每个已落盘对象一行，主键 (instance_id, started_at) 直接命中，
+// 查到 object_key 再回 COS 取内容。
+//
+// 只在 Core 返回成功后写，所以行都对应真实存在的对象；反过来不保证：Core 已写入但 Proxy
+// 超时、CH 长时间不可用、进程崩溃时会漏行。实例销毁时由 proxy-destroy 删除该实例的行。
+// 硬约束同其它内部埋点：write* 同步返回 void、绝不 throw；CH 未启用时 no-op。
+// ════════════════════════════════════════════════════════════════════════════
+
+export const SESSION_TRACE_INDEX_TABLE = "session_trace_index";
+
+export interface SessionTraceIndexInput {
+  /** 实例 ID，即 COS 路径里的 `<instance-id>`（`x-tdai-service-id`）。 */
+  instanceId: string;
+  /** 记录的 `started_at`（ISO 8601 UTC）。 */
+  startedAt: string;
+  /** Core 返回的 `object_key`，相对实例根目录。 */
+  objectKey: string;
+}
+
+export interface SessionTraceIndexRow {
+  instance_id: string;
+  started_at: string;
+  object_key: string;
+}
+
+/** 构造索引行；纯函数便于单测。 */
+export function buildSessionTraceIndexRow(input: SessionTraceIndexInput): SessionTraceIndexRow {
+  return {
+    instance_id: input.instanceId,
+    started_at: toChTimestamp(input.startedAt),
+    object_key: input.objectKey,
+  };
+}
+
+/**
+ * session_trace_index 的 DDL。集群模式同 {@link rateLimitTableDdl}。
+ *
+ * ReplacingMergeTree 按排序键合并重复行（insert 失败回队后重写的那批）；合并是异步的，
+ * 查询需要严格去重时加 `LIMIT 1 BY object_key`。不设 TTL：COS 上的会话对象没有过期规则，
+ * 一直保留到实例销毁。
+ *
+ * @throws 集群名或库名含非法字符时抛错，由调用方记录后放弃建表。
+ */
+export function sessionTraceIndexTableDdl(opts: { database?: string; cluster?: string } = {}): string {
+  const { table, onCluster, replicated } = resolveClusterTarget(opts, SESSION_TRACE_INDEX_TABLE);
+  return [
+    `CREATE TABLE IF NOT EXISTS ${table}${onCluster} (`,
+    "  instance_id String,",
+    "  started_at DateTime64(3, 'Asia/Shanghai'),",
+    "  object_key String",
+    `) ENGINE = ${replicated}ReplacingMergeTree()`,
+    "PARTITION BY toYYYYMM(started_at)",
+    "ORDER BY (instance_id, started_at, object_key)",
+  ].join("\n");
+}
+
+/** 建表（集群模式下先确保各节点上有库）。失败只记 warn，不影响其它表。 */
+async function ensureSessionTraceIndexTable(ch: ClickHouseClient, cfg: ClickHouseConfig): Promise<void> {
+  const cluster = (cfg.cluster ?? "").trim();
+  try {
+    const ddl = sessionTraceIndexTableDdl({ database: cfg.database, cluster });
+    if (cluster) {
+      await ch.command({
+        query: `CREATE DATABASE IF NOT EXISTS ${cfg.database} ON CLUSTER ${cluster}`,
+        clickhouse_settings: { wait_end_of_query: 1 },
+      });
+    }
+    await createTableIfNotExists(ch, ddl);
+    log.info("clickhouse.init.sessionTraceIndexTableReady", {
+      table: `${cfg.database}.${SESSION_TRACE_INDEX_TABLE}`,
+      engine: cluster ? "ReplicatedReplacingMergeTree" : "ReplacingMergeTree",
+      ...(cluster ? { cluster } : {}),
+    });
+  } catch (err: unknown) {
+    log.warn("clickhouse.init.sessionTraceIndexTableFailed", {
+      ...(cluster ? { cluster } : {}),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+let sessionTraceIndexBuffer: SessionTraceIndexRow[] = [];
+
+function requeueSessionTraceIndex(rows: SessionTraceIndexRow[]): void {
+  sessionTraceIndexBuffer = requeueWithOverflowGuard(
+    sessionTraceIndexBuffer,
+    rows,
+    "clickhouse.sessionTraceIndex.overflow",
+  );
+}
+
+async function flushSessionTraceIndex(): Promise<void> {
+  await flushBuffer(
+    sessionTraceIndexBuffer,
+    client,
+    SESSION_TRACE_INDEX_TABLE,
+    requeueSessionTraceIndex,
+    "clickhouse.sessionTraceIndex",
+  );
+}
+
+/** 写一条索引行（fire-and-forget，绝不抛）。CH 未启用、任一字段为空时 no-op。 */
+export function writeSessionTraceIndexRow(input: SessionTraceIndexInput): void {
+  if (disabled || !config) return;
+  if (!input.instanceId || !input.startedAt || !input.objectKey) return;
+  try {
+    enqueueRow(
+      sessionTraceIndexBuffer,
+      buildSessionTraceIndexRow(input),
+      flushSessionTraceIndex,
+      config?.flushThreshold ?? 50,
+    );
+  } catch {
+    // 绝不阻塞业务
+  }
+}
+
+/**
+ * 删除某实例的全部索引行：先丢掉缓冲里还没写出的行，再提交 `ALTER TABLE … DELETE`。
+ * mutation 在后台执行，返回时旧行可能还查得到，读取方遇到 COS 404 应跳过。
+ *
+ * @returns CH 未启用时 `"disabled"`，已提交删除时 `"deleted"`
+ * @throws CH 客户端未就绪或 mutation 提交失败
+ */
+export async function deleteSessionTraceIndex(instanceId: string): Promise<"deleted" | "disabled"> {
+  if (disabled || !config) return "disabled";
+  sessionTraceIndexBuffer = sessionTraceIndexBuffer.filter((row) => row.instance_id !== instanceId);
+  if (!client) throw new Error("clickhouse client not ready");
+  const { table, onCluster } = resolveClusterTarget(
+    { database: config.database, cluster: config.cluster },
+    SESSION_TRACE_INDEX_TABLE,
+  );
+  await client.command({
+    query: `ALTER TABLE ${table}${onCluster} DELETE WHERE instance_id = {instance_id:String}`,
+    query_params: { instance_id: instanceId },
+  });
+  return "deleted";
 }

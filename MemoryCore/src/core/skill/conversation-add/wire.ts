@@ -97,7 +97,7 @@ export function wireConversationAddHandler(
     // 无 Redis 的降级：仅 standalone 单机场景可用
     queue = new LocalSkillAgentTaskQueue();
     deps.logger.warn(
-      "[skill-conversation-add] no redis nor queue injected — falling back to in-memory queue (single-node only)",
+      "【P2】[skill-conversation-add] no redis nor queue injected — falling back to in-memory queue (single-node only)",
     );
   }
 

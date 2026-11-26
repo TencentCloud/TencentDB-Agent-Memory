@@ -10,6 +10,7 @@
 import type { Context } from "hono";
 import { createHash } from "node:crypto";
 import { writeLog, createPipeline } from "../../logger.js";
+import { readIncomingRequestId, withRequestId } from "../../request-id.js";
 import { applyMainModel } from "../../mainModel.js";
 import { applyPoolService, poolRouteReason } from "../../pool-service.js";
 import {
@@ -39,7 +40,7 @@ import { prepareUpstreamRequest, notifyUpstreamResponse } from "../../request-pr
 import {
   createCfqStripStream,
   createCfqStripObserver,
-  stripCfqFromResponseText,
+  settleAndStripCfqFromResponseText,
 } from "../../common/cfq-strip.js";
 import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "../../credit-reporter.js";
@@ -82,7 +83,7 @@ import { stageInstanceUpstreamEarly } from "../stages/instance-upstream-early.js
 import { stageInstanceUpstreamOverride } from "../stages/instance-upstream-override.js";
 import { stageResolveTargetFull } from "../stages/resolve-target-full.js";
 import { stageResolveUserId } from "../stages/resolve-user-id.js";
-import { stageForwardWithRetry } from "../stages/forward-with-retry.js";
+import { stageForwardWithRetry, type ForwardWithRetryResult } from "../stages/forward-with-retry.js";
 import { matchSystemUserByUserId, hasSystemUsers } from "../../systemUser.js";
 import { handleSystemUserPassthrough } from "../../systemUserPassthrough.js";
 import { TdaiClient, buildTdaiClientForRequest } from "../../tdai/client.js";
@@ -91,11 +92,13 @@ import { extractLatestUserMessage, recordTdaiTurn } from "../../tdai/recorder.js
 import { trackWrite, withL0Retry } from "../../tdai/pending-writes.js";
 import {
   AnthropicMessageAssembler,
-  anthropicReplyFromJson,
-  buildSessionTurnContext,
-  createSessionTurnSeed,
-  submitSessionTurn,
-  type SessionTurnContext,
+  buildSessionCallContext,
+  createSessionCallSeed,
+  responseFromText,
+  sessionTraceDir,
+  submitSessionCall,
+  teeErrorBodyToSessionCall,
+  type SessionCallContext,
 } from "../../session-trace/index.js";
 import type { TdaiIdentity, TdaiMessage } from "../../tdai/types.js";
 import { triggerSkillExtractIfReady } from "../../skill/handler-glue.js";
@@ -430,7 +433,7 @@ async function forwardWithRetry(
   forwardTimeoutMs: number,
   sessionKeyForDebug?: string,
   rateLimitContext?: { config: ProxyConfig; instanceId?: string },
-): Promise<{ resp: Response; retried: boolean }> {
+): Promise<ForwardWithRetryResult> {
   // ── anthropic 独有 md5 debug (cache_control anchor + sys 双 md5) ──
   // 用于观测 KV cache 命中: cache 前缀 bytes 一致才命中。
   if (process.env.PROXY_DEBUG_DUMP_OUTBOUND_MD5) {
@@ -479,7 +482,8 @@ export async function runAnthropicPipeline(
 ): Promise<Response> {
   const startTime = new Date().toISOString();
   const requestStartMono = performance.now();
-  const traceId = uuidv7();
+  // 客户端/网关 x-request-id 作为 trace 主键，缺失才走 uuidv7。see request-id.ts。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
 
   // ── Early auth (via shared stageAuth) ────────────────────────────────────
   // Verify BEFORE parsing the body so a rejected caller never triggers body
@@ -491,7 +495,8 @@ export async function runAnthropicPipeline(
   const earlySpaceId = earlyAuth.spaceId;
   const earlyVerify = { userId: earlyAuth.userId, rejected: earlyAuth.rejected, rejectReason: earlyAuth.rejectReason };
   if (earlyAuth.rejected) {
-    return c.json({ type: "error", error: { type: "authentication_error", message: `Authentication failed: ${earlyAuth.rejectReason ?? "unknown"}` } }, 401);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ type: "error", error: { type: (earlyAuth.failureStatus ?? 401) >= 500 ? "api_error" : "authentication_error", message: `Authentication failed: ${earlyAuth.rejectReason ?? "unknown"}` } }, traceId), earlyAuth.failureStatus ?? 401);
   }
 
   // ── Parse body ──────────────────────────────────────────────────────────
@@ -502,7 +507,8 @@ export async function runAnthropicPipeline(
   // Parse via shared stage (also PROXY_DEBUG_DUMP_INBOUND, dev-only)
   const parseResult = await stageParseBody(c);
   if (!parseResult.ok) {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Invalid JSON body" }, traceId), 400);
   }
   // eslint-disable-next-line prefer-const
   let body = parseResult.body;
@@ -656,9 +662,14 @@ export async function runAnthropicPipeline(
   }
 
 // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("../../session/session-key.js");
-  const conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  const { resolveConversationId, resolveSessionKeyFallback } = await import("../../session/session-key.js");
+  const conversationId = resolveConversationId(c, body);
+  const profileSessionId = resolveSessionKey(config, lcHeaders, c.req.path, body, "");
+  const sessionKey = resolveSessionKeyFallback(
+    conversationId ?? profileSessionId,
+    keyId,
+    { protocol: "anthropic", agentSource },
+  );
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -671,7 +682,7 @@ export async function runAnthropicPipeline(
   // sk-mem key（用于 TDAI ACL / MetadataClient 的 x-tdai-user-key）就是入口的 apiKey。
   const callerUserKey = apiKey || null;
 
-  const sessionTurnSeed = createSessionTurnSeed(config, {
+  const sessionCallSeed = createSessionCallSeed(config, {
     agent: agentSource,
     path: c.req.path,
     protocol: "anthropic",
@@ -1186,6 +1197,7 @@ export async function runAnthropicPipeline(
   // place, so it has to land after every host-side mutation (injection, agent
   // overrides) and before the upstream body is assembled below. The host does
   // not interpret the returned stats — see request-prepare-adapter.ts.
+  let compressionObservations: Record<string, unknown>[] | undefined;
   const preparedStats = await prepareUpstreamRequest({
     config,
     protocol: "anthropic",
@@ -1206,6 +1218,8 @@ export async function runAnthropicPipeline(
     lf,
     opikTraceId: traceId,
     opikKeyId: wecomName || keyId,
+    sessionTraceDir: sessionTraceDir(config, sessionCallSeed, { spaceId, sessionInfo, authUserId: userId }),
+    ...(sessionCallSeed ? { onCompressionObservations: (o: Record<string, unknown>[]) => { compressionObservations = o; } } : {}),
     skipPrepare: costGuardMode === "cheap" || target.skipPrepare === true,
   });
 
@@ -1218,11 +1232,13 @@ export async function runAnthropicPipeline(
       `stripped ${sanitizedCount} invalid thinking block(s) from history`,
     );
   }
-  const sessionTurnCtx = buildSessionTurnContext(config, sessionTurnSeed, {
+  const sessionCallCtx = buildSessionCallContext(config, sessionCallSeed, {
     spaceId,
     sessionInfo,
     authUserId: userId,
-    upstreamBody,
+    request: upstreamBody,
+    traceId,
+    compressionObservations,
   });
 
   // Retry headers: preserve original client headers (x-request-id, user-agent,
@@ -1273,11 +1289,13 @@ export async function runAnthropicPipeline(
     );
     upstreamResp = result.resp;
     retried = result.retried;
+    if (sessionCallCtx) sessionCallCtx.request = result.sentBody;
   } catch (err: unknown) {
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
       return err.response;
     }
+    const statusMessage = err instanceof Error ? err.message : "Upstream request failed";
     langfuseReportFailure({
       lf,
       requestId: traceId,
@@ -1285,11 +1303,13 @@ export async function runAnthropicPipeline(
       startTime,
       endTime: new Date().toISOString(),
       input: traceRequestBody,
-      statusMessage: err instanceof Error ? err.message : "Upstream request failed",
+      statusMessage,
       extraTags: ["error"],
       observationMetadata: { stage: "forward", ...debugMetadata },
     });
-    return c.json({ error: "Upstream request failed" }, 502);
+    submitSessionCall(sessionCallCtx, { status: 0, response: { error: statusMessage }, model: target.model });
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Upstream request failed" }, traceId), 502);
   }
 
   // Build response headers — via shared filterResponseHeaders
@@ -1318,6 +1338,7 @@ export async function runAnthropicPipeline(
   // ── Streaming response (Anthropic SSE) ──────────────────────────────────
   if (isStream) {
     if (!upstreamResp.body) {
+      submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: "", model: effectiveModel, upstreamRequestId });
       pipe.streamDone(null);
       return new Response(null, { status: upstreamResp.status, headers: respHeaders });
     }
@@ -1326,6 +1347,7 @@ export async function runAnthropicPipeline(
     if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
       const [errStream, clientStream] = upstreamResp.body.tee();
       const errText = await new Response(errStream).text();
+      submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: responseFromText(errText), model: effectiveModel, upstreamRequestId });
       writeLog(config, {
         timestamp: new Date().toISOString(),
         event: "usage",
@@ -1357,7 +1379,10 @@ export async function runAnthropicPipeline(
       return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
-    const observedStream = withStreamIdleWarning(upstreamResp.body, {
+    const upstreamStream = upstreamResp.ok
+      ? upstreamResp.body
+      : teeErrorBodyToSessionCall(sessionCallCtx, upstreamResp.body, { status: upstreamResp.status, model: effectiveModel, upstreamRequestId });
+    const observedStream = withStreamIdleWarning(upstreamStream, {
       spaceId,
       traceId,
       requestId: traceId,
@@ -1405,7 +1430,8 @@ export async function runAnthropicPipeline(
       skipCreditReport,
       isCustomUpstream: _isCustomUpstream,
       gates: _gates,
-      sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
+      sessionCallCtx: upstreamResp.ok ? sessionCallCtx : null,
+      upstreamStatus: upstreamResp.status,
     });
 
     // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
@@ -1431,15 +1457,18 @@ export async function runAnthropicPipeline(
   // ── Non-streaming response ───────────────────────────────────────────────
   let respText = await upstreamResp.text();
   const endTime = new Date().toISOString();
+  submitSessionCall(sessionCallCtx, {
+    status: upstreamResp.status,
+    response: responseFromText(respText),
+    model: effectiveModel || requestedModel,
+    upstreamRequestId,
+  });
 
   let usage: Record<string, unknown> | null = null;
   let outputContent: string | null = null;
   let assistantMessage: Record<string, unknown> | null = null;
   try {
     const respJson = JSON.parse(respText) as Record<string, unknown>;
-    if (upstreamResp.ok) {
-      submitSessionTurn(sessionTurnCtx, anthropicReplyFromJson(respJson), effectiveModel || requestedModel);
-    }
     if (respJson.usage && typeof respJson.usage === "object") {
       usage = respJson.usage as Record<string, unknown>;
     }
@@ -1692,7 +1721,8 @@ export async function runAnthropicPipeline(
   pipe.responseDone(usage);
 
   // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-  let clientRespText = stripCfqFromResponseText(
+  // 先结算本轮 CFQ 再返回：客户端拿到响应才会发下一轮，下一轮因此一定读得到。
+  let clientRespText = await settleAndStripCfqFromResponseText(
     "anthropic",
     respText,
     preparedStats,
@@ -1874,7 +1904,8 @@ interface AnthropicTapContext {
   /** Stage-level gates from the resolved AgentStrategy. `undefined` = 100% CC behavior preserved. */
   gates?: import("../strategies/agent/types.js").StageGates;
   /** Online session trace for this call; null when it is not recorded. */
-  sessionTurnCtx: SessionTurnContext | null;
+  sessionCallCtx: SessionCallContext | null;
+  upstreamStatus: number;
 }
 
 /**
@@ -1897,13 +1928,15 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
     //   3. content_block_stop → 该块结束
     // 之前的实现只读了 (1) 里的 input（永远空）—— 现在按 index 累加 (2) 里的 partial_json。
     const toolUseAcc = new Map<number, { id: string; name: string; inputJson: string }>();
-    const replyAssembler = ctx.sessionTurnCtx ? new AnthropicMessageAssembler() : null;
+    const replyAssembler = ctx.sessionCallCtx ? new AnthropicMessageAssembler() : null;
 
     async function completeStream(): Promise<void> {
       if (streamCompleted) return;
       streamCompleted = true;
 
-      if (replyAssembler) submitSessionTurn(ctx.sessionTurnCtx, replyAssembler.result(), modelId);
+      if (replyAssembler) {
+        submitSessionCall(ctx.sessionCallCtx, { status: ctx.upstreamStatus, response: replyAssembler.result(), model: modelId, upstreamRequestId: ctx.upstreamRequestId });
+      }
 
       const endTime = new Date().toISOString();
       // Register response-side CFQ counters before building the usage row.

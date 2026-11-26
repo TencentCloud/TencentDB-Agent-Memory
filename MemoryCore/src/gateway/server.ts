@@ -66,6 +66,7 @@ import type { V2RouterDeps } from "./v2-router.js";
 import { handleV3MetaRoute, V3_PREFIX } from "../metadata/router/v3-meta-router.js";
 import { handleV3TaskSourceRoute } from "../metadata/router/v3-task-source-router.js";
 import { handleV3SessionRoute, V3_SESSION_ADD_PATH } from "./v3-session-router.js";
+import { SESSION_WRITE_TIMEOUT_MS } from "../core/session/session-record.js";
 import { handleInternalMetaRoute, V3_INTERNAL_PREFIX } from "../metadata/router/internal-meta-router.js";
 import { MetadataService } from "../metadata/service/metadata-service.js";
 import { ConfigParamService } from "../metadata/service/config-param-service.js";
@@ -186,6 +187,11 @@ import { resolveMaxBodyBytes, resolveSessionMaxBodyBytes } from "../utils/env-co
 
 const MAX_BODY_BYTES = resolveMaxBodyBytes();
 const SESSION_MAX_BODY_BYTES = resolveSessionMaxBodyBytes();
+
+/** Concurrent PUTs on the COS client dedicated to `/v3/session/add`, per Core process. */
+const SESSION_COS_FILE_PARALLEL_LIMIT = 20;
+/** Bounds how many failed session uploads the SDK keeps (with their bodies) in its task list. */
+const SESSION_COS_UPLOAD_QUEUE_SIZE = 50;
 
 /**
  * Thrown by `parseJsonBody` when the incoming body exceeds `MAX_BODY_BYTES`.
@@ -349,6 +355,9 @@ export class TdaiGateway {
   // ── COS: global shared client singleton + per-instance StorageAdapter cache ──
   private sharedCosClient: import("../integrations/cos/cos-backend.js").SharedCosClient | null = null;
   private cosStorageCache: Map<string, StorageAdapter> | null = null;
+  // Separate client for `/v3/session/add`, so trace uploads and other COS writes do not queue behind each other.
+  private sessionCosClient: import("../integrations/cos/cos-backend.js").SharedCosClient | null = null;
+  private readonly sessionStorageCache = new Map<string, StorageAdapter>();
 
   // ── Metadata (v3): shared store pool + per-instance MetadataService ──
   private metadataStorePool: MetadataStorePool | null = null;
@@ -955,7 +964,7 @@ export class TdaiGateway {
         return await this.handleInstanceDestroyV3(req, res);
       }
 
-      // ── /v3/session/add — session turn records (docs/session-api.md).
+      // ── /v3/session/add — session records (docs/session-api.md).
       //    Bearer apiKey gate only; identity headers are validated inside the
       //    router (missing → 400). Uses its own body limit (default 32 MiB).
       if (pathname === V3_SESSION_ADD_PATH) {
@@ -1461,6 +1470,7 @@ export class TdaiGateway {
     if (this.cosStorageCache?.has(instanceId)) {
       this.cosStorageCache.delete(instanceId);
     }
+    this.sessionStorageCache.delete(instanceId);
     if (this.sharedCosClient && this.configProvider) {
       try {
         const cosConfig = await this.configProvider.resolveCos();
@@ -2721,12 +2731,20 @@ export class TdaiGateway {
    * instance, never the rowfs / mongofs legs that resolveStorageForInstance
    * may select. Service mode lazily initializes COS with a single attempt so
    * a COS outage fails the request fast (503) instead of blocking on retries.
+   * With COS, writes go through the dedicated session client, under the same
+   * per-instance prefix as the main one.
    */
   private async resolveSessionStorageForInstance(instanceId: string): Promise<StorageAdapter> {
     if (!this.sharedCosClient && this.config.deployMode !== "standalone") {
       await this.initSharedCosClient(1);
     }
-    return this.resolveFileOthersForInstance(instanceId);
+    if (!this.sessionCosClient) return this.resolveFileOthersForInstance(instanceId);
+
+    const cached = this.sessionStorageCache.get(instanceId);
+    if (cached) return cached;
+    const adapter = await this.buildCosStorageForInstance(instanceId, this.sessionCosClient);
+    this.sessionStorageCache.set(instanceId, adapter);
+    return adapter;
   }
 
   /**
@@ -2750,6 +2768,17 @@ export class TdaiGateway {
     if (!this.sharedCosClient) {
       throw new Error(`SharedCosClient not initialized for instance ${instanceId}`);
     }
+    const adapter = await this.buildCosStorageForInstance(instanceId, this.sharedCosClient);
+    if (!this.cosStorageCache) this.cosStorageCache = new Map();
+    this.cosStorageCache.set(instanceId, adapter);
+    return adapter;
+  }
+
+  /** Per-instance CosStorageBackend on `sharedClient`: lightweight, only holds the `<pathPrefix>/<instanceId>/` prefix. */
+  private async buildCosStorageForInstance(
+    instanceId: string,
+    sharedClient: import("../integrations/cos/cos-backend.js").SharedCosClient,
+  ): Promise<StorageAdapter> {
     if (!this.configProvider) {
       throw new Error(`configProvider not initialized for instance ${instanceId}`);
     }
@@ -2760,18 +2789,9 @@ export class TdaiGateway {
       throw new Error(`COS config not available for instance ${instanceId} (Shark returned null or empty CosUrl)`);
     }
 
-    // Per-instance CosStorageBackend: lightweight, only holds prefix
     const { CosStorageBackend } = await import("../integrations/cos/cos-backend.js");
     const prefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${instanceId}/`;
-    const backend = new CosStorageBackend({
-      sharedClient: this.sharedCosClient,
-      prefix,
-      logger: this.logger,
-    });
-    const adapter = new StorageAdapter(backend);
-    if (!this.cosStorageCache) this.cosStorageCache = new Map();
-    this.cosStorageCache.set(instanceId, adapter);
-    return adapter;
+    return new StorageAdapter(new CosStorageBackend({ sharedClient, prefix, logger: this.logger }));
   }
 
   /**
@@ -2871,6 +2891,14 @@ export class TdaiGateway {
           cosEndpointDomain,
         });
         await this.sharedCosClient.getClient();
+        this.sessionCosClient = new SharedCosClient({
+          credentialProvider,
+          logger: this.logger,
+          cosEndpointDomain,
+          timeout: SESSION_WRITE_TIMEOUT_MS,
+          fileParallelLimit: SESSION_COS_FILE_PARALLEL_LIMIT,
+          uploadQueueSize: SESSION_COS_UPLOAD_QUEUE_SIZE,
+        });
         this.logger.info(`${TAG} SharedCosClient initialized (bucket=${bucket}, domain=${cosEndpointDomain}, attempt=${attempt})`);
         if (this.config.cos.generationLogRetentionDays > 0) {
           try {
@@ -3078,14 +3106,16 @@ export class TdaiGateway {
           }
         }
 
-        // Read L2 cursor from session state (l2_last_extraction_time)
-        // This ensures L2 only processes L1 records created after the last extraction.
+        // Read L2 cursor from session state.
+        // Prefer last_extraction_updated_time (updatedAt of the newest L1
+        // record already consumed). Fall back to l2_last_extraction_time only
+        // for sessions written by older versions that never stored the record
+        // cursor — that legacy value is the L2 completion time and can skip L1
+        // records written while the previous L2 was running.
         let cursor: string | undefined;
         if (gateway.stateBackend) {
           const state = await gateway.stateBackend.getSessionState(instanceId, task.sessionId, teamId, agentId);
-          if (state?.l2_last_extraction_time) {
-            cursor = state.l2_last_extraction_time;
-          }
+          cursor = state?.last_extraction_updated_time || state?.l2_last_extraction_time || undefined;
         }
 
         if (signal?.aborted) throw signal.reason ?? new Error("executeL2: aborted before LLM");
@@ -3131,6 +3161,15 @@ export class TdaiGateway {
         // Mark task as skipped if L2 had no new records to process
         if (result.skipped) {
           (task as any)._l2Skipped = true;
+        }
+        // Hand the consumed-records cursor to the worker so it advances the
+        // L2 cursor to the newest processed L1 record, not to the wall clock.
+        if (result.latestCursor) {
+          (task as any)._l2LatestCursor = result.latestCursor;
+        }
+        // Batch budget hit: the worker re-enqueues an L2 after releasing the lock.
+        if (result.hasMore) {
+          (task as any)._l2HasMore = true;
         }
 
         // Report credit + new scenes as memory

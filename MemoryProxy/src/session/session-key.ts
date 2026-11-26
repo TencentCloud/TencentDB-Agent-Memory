@@ -4,6 +4,59 @@
  * Shared between handler.ts and anthropicHandler.ts.
  */
 import type { Context } from "hono";
+import { log } from "../report/log.js";
+
+const SESSION_HEADER_PRIORITY = [
+  "x-parent-conversation-id",
+  "x-conversation-id",
+  "x-session-id",
+  "session-id",
+  "x-claude-code-session-id",
+  "x-deepseek-harness-session-id",
+  "x-chat-id",
+  "x-thread-id",
+] as const;
+
+/** Protocol-agnostic session extraction used by Chat, Anthropic and Responses. */
+export function extractSessionId(
+  headers: Record<string, string | undefined>,
+  body?: Record<string, unknown>,
+): string | null {
+  const normalized: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    normalized[key.toLowerCase()] = value;
+  }
+  for (const key of SESSION_HEADER_PRIORITY) {
+    const value = normalized[key]?.trim();
+    if (value) return value;
+  }
+  const metadata = body?.client_metadata;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    const value = (metadata as Record<string, unknown>).session_id;
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+/** A missing client session must be stable across requests; never use traceId. */
+export function resolveSessionKeyFallback(
+  sessionId: string | null | undefined,
+  keyId: string,
+  context?: { protocol: "anthropic" | "openai" | "responses"; agentSource?: string },
+): string {
+  const explicit = sessionId?.trim();
+  if (explicit) return explicit;
+
+  if (context) {
+    log.warn("session_key.fallback", {
+      protocol: context.protocol,
+      agentSource: context.agentSource ?? "",
+      fallbackSource: "key_id",
+      message: "no supported session id found; using stable fallback",
+    });
+  }
+  return keyId;
+}
 
 /**
  * Extract conversation ID from request headers. Returns null if no valid ID found.
@@ -24,20 +77,13 @@ import type { Context } from "hono";
  *   subagent : x-conversation-id=01a0bcff..  x-parent-conversation-id=888a1848.. purpose=subagent:general-purpose type=team
  *   → subagent.parent === 主会话.conv，故用 parent 归一到主会话身份。
  */
-export function resolveConversationId(c: Context): string | null {
-  // subagent 优先用 parent-conversation-id 归一到父（主）会话身份。
-  const parentId = c.req.header("x-parent-conversation-id");
-  if (parentId && parentId.length > 0) return parentId;
-
-  const id =
-    c.req.header("x-conversation-id") ??
-    c.req.header("x-session-id") ??
-    c.req.header("x-claude-code-session-id") ?? // Claude Code CLI sends this
-    c.req.header("x-deepseek-harness-session-id") ?? // dsh (deepseek-harness) CLI/web sends this
-    c.req.header("x-chat-id") ??
-    c.req.header("x-thread-id") ??
-    null;
-  return id && id.length > 0 ? id : null;
+export function resolveConversationId(
+  c: Context,
+  body?: Record<string, unknown>,
+): string | null {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of c.req.raw.headers.entries()) headers[key] = value;
+  return extractSessionId(headers, body);
 }
 
 /** Check whether the messages look like a fresh conversation (at most 1 user message, no assistant/tool). */

@@ -114,6 +114,13 @@ export async function recordConversation(params: {
   storage?: StorageAdapter;
 }): Promise<ConversationMessage[]> {
   const { sessionKey, sessionId, userId, agentId, rawMessages, baseDir, logger, originalUserText, afterTimestamp, originalUserMessageCount, storage } = params;
+  const l0StartMs = Date.now();
+
+  // Stage start marker: without it a hung/slow L0 left no trace in the logs —
+  // only the completion line existed, tagged `debug`.
+  logger?.info(
+    `${TAG} record start: sessionKey=${sessionKey} rawMessages=${rawMessages.length}`,
+  );
 
   // Step 1: Position slice + extract user/assistant messages.
   //
@@ -304,9 +311,13 @@ export async function recordConversation(params: {
       await fs.default.mkdir(outDir, { recursive: true });
       await fs.default.appendFile(outPath, lines.join("\n") + "\n", "utf-8");
     }
-    logger?.debug?.(`${TAG} Recorded ${filtered.length} messages to ${recordKey}`);
+    logger?.debug?.(
+      `${TAG} Recorded ${filtered.length} messages to ${recordKey} dur_ms=${Date.now() - l0StartMs}`,
+    );
   } catch (err) {
-    logger?.error(`${TAG} Failed to write L0 file: ${err instanceof Error ? err.message : String(err)}`);
+    logger?.error(
+      `【P1】${TAG} Failed to write L0 file: ${err instanceof Error ? err.message : String(err)} dur_ms=${Date.now() - l0StartMs}`,
+    );
     // Return filtered messages anyway so L1 can still process them
   }
 
@@ -368,7 +379,7 @@ export async function readConversationRecords(
         raw = await fs.default.readFile(path.default.join(baseDir, "conversations", fileName), "utf-8");
       }
     } catch {
-      logger?.warn?.(`${TAG} Failed to read L0 file: ${fileName}`);
+      logger?.warn?.(`【P1】${TAG} Failed to read L0 file: ${fileName}`);
       continue;
     }
 
@@ -401,10 +412,10 @@ export async function readConversationRecords(
             messages: [msg],
           });
         } else {
-          logger?.warn?.(`${TAG} Unrecognized JSONL line format in ${fileName}:${i + 1}`);
+          logger?.warn?.(`【P1】${TAG} Unrecognized JSONL line format in ${fileName}:${i + 1}`);
         }
       } catch {
-        logger?.warn?.(`${TAG} Skipping malformed JSONL line in ${fileName}:${i + 1}`);
+        logger?.warn?.(`【P1】${TAG} Skipping malformed JSONL line in ${fileName}:${i + 1}`);
       }
     }
   }

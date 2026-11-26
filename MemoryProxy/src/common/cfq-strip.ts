@@ -1,8 +1,9 @@
 /**
  * 回给 agent 之前，把注入的 `context_focus_question` 从 tool_call 参数里摘掉。
  *
- * 为什么要摘：注入这个字段是为了拿到压缩线索，线索在响应 tap 阶段就已经进了 Redis
- * 侧信道，下一轮由 backfill 注回**转发给上游**的请求体——agent 全程不需要看见它。
+ * 为什么要摘：注入这个字段是为了拿到压缩线索，线索在结束帧放行之前就已经结算进
+ * Redis 侧信道（见下文「结算」），下一轮由 backfill 注回**转发给上游**的请求体——
+ * agent 全程不需要看见它。
  * 而它看见了会出事：客户端按自己的 tool schema 校验参数，多出来的字段被判成
  * `InputValidationError: An unexpected parameter ... was provided`，工具拒绝执行。
  *
@@ -25,16 +26,88 @@
  * 都可能被判非法——带了又可能被按字符串累加成 `"functionfunction"`。所以它也走扣帧。
  *
  * 所有解析失败一律原样透传：坏掉的上游响应应该原样暴露给客户端，不该在这里被二次加工。
+ *
+ * ── 结算：结束帧之前把 CFQ 写完 ──────────────────────────────────────────────
+ * 客户端收到结束帧才会执行工具、发下一轮请求。所以这条流同时负责把本轮的 tool call
+ * （模型原始参数，含注入字段）交给扩展结算，并把结束帧扣到结算完成——下一轮读 Redis
+ * 时，主模型自填的和兜底补出的 CFQ 都已落盘。扩展自己保证结算有界（8s），宿主另有
+ * 守护上限。
+ *
+ * 只要求结算、不需要剥离的请求（纯兜底模式）不改任何字节，只把含结束帧的那个 chunk
+ * 扣到结算完成。
  */
 
 // 字段名归压缩扩展所有，宿主只经由 adapter 调用，扩展不在时整条链路自动退化为
 // 空操作——扩展不在就没有注入，也就没有要摘的东西。
 import {
   hasInjectedToolCleanup,
+  hasResponseSettlement,
+  settleUpstreamToolCalls,
   shouldStripInjectedTool,
   stripInjectedToolArguments as stripCfqFromArguments,
   stripInjectedToolInput as stripCfqFromInput,
 } from "../request-prepare-adapter.js";
+import {
+  collectToolCallsFromBody,
+  createToolCallCollector,
+  sseDataValue,
+  type ToolCallCollector,
+} from "./cfq-settle-collector.js";
+import { log } from "../report/log.js";
+
+/** 结束帧被扣住超过这个时长就告警：客户端能感知到的首字/收尾延迟。 */
+const SLOW_END_FRAME_HOLD_MS = 2_000;
+
+type SettleTrigger = "end_frame" | "stream_end" | "cancel";
+
+/**
+ * `Transformer.cancel`（下游取消 / 上游中止时调用）已进 Streams 规范、Node 22
+ * 已实现，但当前 TS lib 还没有这个字段。
+ */
+type BytesTransformer = Transformer<Uint8Array, Uint8Array> & {
+  cancel?: (reason: unknown) => void | Promise<void>;
+};
+
+/** 结算前：把收集过程里的异常摆出来。 */
+function reportCollect(
+  protocol: CfqStripProtocol,
+  trigger: SettleTrigger,
+  collector: ToolCallCollector,
+  calls: number,
+): void {
+  const diag = collector.diagnostics();
+  log.debug("cfq.strip.settle_start", { protocol, trigger, calls, ...diag });
+  if (trigger === "stream_end" && !diag.endFrame) {
+    // 上游没发结束帧就断流：多半是上游超时/中断，参数可能不完整。
+    log.warn("cfq.strip.no_end_frame", {
+      protocol,
+      calls,
+      blocks: diag.blocks,
+      unclosed: diag.unclosed,
+      hint: "upstream stream ended without an end frame; settling with what was received",
+    });
+  }
+  if (diag.parseErrors > 0) {
+    log.warn("cfq.strip.collect_parse_error", {
+      protocol,
+      parseErrors: diag.parseErrors,
+      blocks: diag.blocks,
+      calls,
+      hint: "some SSE data lines were not JSON objects; tool-call fragments in them were lost",
+    });
+  }
+  if (diag.unclosed > 0 && diag.endFrame) {
+    log.warn("cfq.strip.unclosed_tool_block", { protocol, unclosed: diag.unclosed, calls });
+  }
+  if (diag.droppedNoId > 0) {
+    log.warn("cfq.strip.tool_call_without_id", {
+      protocol,
+      dropped: diag.droppedNoId,
+      calls,
+      hint: "tool calls without an id cannot be backfilled next turn",
+    });
+  }
+}
 
 export type CfqStripProtocol = "anthropic" | "openai" | "responses";
 type ShouldStripTool = (toolName: string | undefined) => boolean;
@@ -144,6 +217,13 @@ function selectionHasWork(selection: CfqStripSelection): boolean {
     : hasInjectedToolCleanup(selection as Record<string, unknown> | null | undefined);
 }
 
+/** 扩展是否要求在结束帧之前结算本请求。只有宿主传入的 preparedStats 才可能要求。 */
+function selectionSettlement(selection: CfqStripSelection): Record<string, unknown> | null {
+  if (!selection || selection instanceof Set) return null;
+  const stats = selection as Record<string, unknown>;
+  return hasResponseSettlement(stats) ? stats : null;
+}
+
 function selectionMatches(selection: CfqStripSelection, toolName: string | undefined): boolean {
   if (!toolName) return false;
   return selection instanceof Set
@@ -181,25 +261,60 @@ function trackEligible(
  */
 interface SseFrame {
   lines: string[];
-  dataLineIdx: number;
+  /** 所有 `data:` 行的下标，按出现顺序。 */
+  dataLineIdxs: number[];
+  /** 按 SSE 规范用 `\n` 拼接的全部 data 值。 */
   dataStr: string;
 }
 
 function parseFrame(block: string): SseFrame | null {
   const lines = block.split(/\r?\n/);
+  const dataLineIdxs: number[] = [];
+  const values: string[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.startsWith("data: ")) return { lines, dataLineIdx: i, dataStr: line.slice(6) };
-    if (line.startsWith("data:")) return { lines, dataLineIdx: i, dataStr: line.slice(5) };
+    const value = sseDataValue(lines[i]);
+    if (value === null) continue;
+    dataLineIdxs.push(i);
+    values.push(value);
   }
-  return null;
+  return dataLineIdxs.length > 0 ? { lines, dataLineIdxs, dataStr: values.join("\n") } : null;
 }
 
-/** 用新的 data 载荷重建事件块（含结尾空行）。 */
+/**
+ * 用新的 data 载荷重建事件块（含结尾空行）。多行 data 合并成一行写在第一条
+ * data 行的位置——`JSON.stringify` 不产生换行，单行足够；其它行（`event:` 等）原样保留。
+ */
 function rebuildFrame(frame: SseFrame, data: unknown): string {
-  const lines = frame.lines.slice();
-  lines[frame.dataLineIdx] = `data: ${JSON.stringify(data)}`;
+  const [first, ...rest] = frame.dataLineIdxs;
+  const drop = new Set(rest);
+  const lines: string[] = [];
+  frame.lines.forEach((line, i) => {
+    if (i === first) lines.push(`data: ${JSON.stringify(data)}`);
+    else if (!drop.has(i)) lines.push(line);
+  });
   return `${lines.join("\n")}\n\n`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * 剥离 `holder.arguments` 里的注入字段，返回是否有改动。
+ *
+ * 规范里 `arguments` 是 JSON 字符串，但部分上游直接给对象。两种形态都要清理，
+ * 并保持原形态：字符串仍写回字符串，对象就地删字段，不改成字符串——客户端对
+ * 「没见过的形状」很挑剔。
+ */
+function stripArgumentsField(holder: Record<string, unknown>): boolean {
+  const value = holder.arguments;
+  if (typeof value === "string") {
+    const cleaned = stripCfqFromArguments(value);
+    if (cleaned === null) return false;
+    holder.arguments = cleaned;
+    return true;
+  }
+  return isPlainObject(value) && stripCfqFromInput(value);
 }
 
 // ── 非流式 ───────────────────────────────────────────────────────────────────
@@ -246,11 +361,8 @@ function stripChatBody(
       const fn = (tc as Record<string, unknown> | null)?.function as
         | Record<string, unknown>
         | undefined;
-      if (!shouldStrip(typeof fn?.name === "string" ? fn.name : undefined)) continue;
-      if (typeof fn?.arguments !== "string") continue;
-      const cleaned = stripCfqFromArguments(fn.arguments);
-      if (cleaned !== null) {
-        fn.arguments = cleaned;
+      if (!fn || !shouldStrip(typeof fn.name === "string" ? fn.name : undefined)) continue;
+      if (stripArgumentsField(fn)) {
         changed = true;
         const toolName = fn.name as string;
         const toolId = (tc as Record<string, unknown>).id;
@@ -271,11 +383,9 @@ function stripResponsesOutput(
   let changed = false;
   for (const item of output) {
     const it = item as Record<string, unknown> | null;
-    if (it?.type !== "function_call" || typeof it.arguments !== "string") continue;
+    if (it?.type !== "function_call") continue;
     if (!shouldStrip(typeof it.name === "string" ? it.name : undefined)) continue;
-    const cleaned = stripCfqFromArguments(it.arguments);
-    if (cleaned !== null) {
-      it.arguments = cleaned;
+    if (stripArgumentsField(it)) {
       changed = true;
       const toolName = it.name as string;
       const identity =
@@ -290,16 +400,40 @@ function stripResponsesOutput(
   return changed;
 }
 
+function stripResponsesSchemas(tools: unknown, matches: ShouldStripTool): boolean {
+  if (!Array.isArray(tools)) return false;
+  let changed = false;
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool) || tool.type !== "function" || !matches(tool.name)) continue;
+    const schema = tool.parameters;
+    if (!schema || typeof schema !== "object" || Array.isArray(schema)) continue;
+    if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+      if (stripCfqFromInput(schema.properties)) changed = true;
+    }
+    if (Array.isArray(schema.required)) {
+      // 注入了哪些字段只有扩展知道：它会从参数里剥掉的名字，也要从 required 里拿掉。
+      const required = schema.required.filter(
+        (name: unknown) => typeof name !== "string" || !stripCfqFromInput({ [name]: true }),
+      );
+      if (required.length !== schema.required.length) { schema.required = required; changed = true; }
+    }
+  }
+  return changed;
+}
+
 function stripResponsesBody(
   body: Record<string, unknown>,
   shouldStrip: ShouldStripTool,
   mark: MarkStripped,
+  matchesSchema: ShouldStripTool,
 ): boolean {
-  // 顶层 `output[]`，以及 `response.output[]`（SSE 终帧与部分非流式包装）。
+  // 顶层 `output[]`/`tools[]`，以及 `response.` 下的同名字段（SSE 生命周期帧与部分非流式包装）。
   const nested = body.response as Record<string, unknown> | undefined;
   const a = stripResponsesOutput(body.output, shouldStrip, mark);
   const b = nested ? stripResponsesOutput(nested.output, shouldStrip, mark) : false;
-  return a || b;
+  const c = stripResponsesSchemas(body.tools, matchesSchema);
+  const d = nested ? stripResponsesSchemas(nested.tools, matchesSchema) : false;
+  return a || b || c || d;
 }
 
 /**
@@ -330,9 +464,41 @@ export function stripCfqFromResponseText(
       ? stripAnthropicBody(body, shouldStrip, tracker.mark)
       : protocol === "openai"
         ? stripChatBody(body, shouldStrip, tracker.mark)
-        : stripResponsesBody(body, shouldStrip, tracker.mark);
+        : stripResponsesBody(body, shouldStrip, tracker.mark, name => selectionMatches(selection, name));
   tracker.report();
   return changed ? JSON.stringify(body) : text;
+}
+
+/**
+ * 非流式的最后一公里：先把本轮 tool call 交给扩展结算（整个响应体就是「结束帧」，
+ * 结算完才返回），再剥离注入字段。
+ *
+ * 结算用的是剥离前的原始响应体。扩展不要求结算时等价于 {@link stripCfqFromResponseText}。
+ */
+export async function settleAndStripCfqFromResponseText(
+  protocol: CfqStripProtocol,
+  text: string,
+  selection: CfqStripSelection,
+  observer?: CfqStripObserver,
+): Promise<string> {
+  const stats = selectionSettlement(selection);
+  if (stats) {
+    const calls = text ? collectToolCallsFromBody(protocol, text) : [];
+    const startedAt = Date.now();
+    log.debug("cfq.strip.settle_start", {
+      protocol,
+      trigger: "body",
+      calls: calls.length,
+      bodyBytes: text.length,
+    });
+    await settleUpstreamToolCalls(stats, calls);
+    const holdMs = Date.now() - startedAt;
+    log.debug("cfq.strip.body_released", { protocol, calls: calls.length, holdMs });
+    if (holdMs > SLOW_END_FRAME_HOLD_MS) {
+      log.warn("cfq.strip.slow_settle", { protocol, trigger: "body", calls: calls.length, holdMs });
+    }
+  }
+  return stripCfqFromResponseText(protocol, text, selection, observer);
 }
 
 // ── 流式 ─────────────────────────────────────────────────────────────────────
@@ -466,18 +632,17 @@ function makeAnthropicStripper(
  * Responses：按 item_id 扣帧，`function_call_arguments.done` 时结算。
  * 终帧里的 `output[]` 也要清理——客户端可能只认终帧那份完整 item。
  *
- * 三个已知缺口，当前客户端（codex）未暴露问题，暂不处理：
+ * 两个已知缺口，当前客户端（codex）未暴露问题，暂不处理：
  *   - 扣住的帧要等同一 item 的下一片才发，夹在中间的事件会插到它前面，
  *     `sequence_number` 因此非单调（并行 function_call 交错时尤其明显）。
  *   - 剥离资格只在 `output_item.added` 带 `name` 时注册；`name` 延后给出的
  *     实现里，参数分片会带着 CFQ 原样发出，只有终帧那份被清理。
- *   - 终态事件只覆盖 `completed` / `incomplete`，`response.failed` 里的
- *     `output[]` 不会被清理。
  */
 function makeResponsesStripper(
   emit: Emit,
   shouldStrip: ShouldStripTool,
   mark: MarkStripped,
+  matchesSchema: ShouldStripTool,
 ): Stripper {
   const buf = new Map<string, string>();
   const held = new Map<string, HeldDelta>();
@@ -539,10 +704,21 @@ function makeResponsesStripper(
       eligibleItemIds.has(itemId)
     ) {
       // `.done` 带的是权威全量参数；拿不到才退回自己拼的。
-      const raw = typeof evt.arguments === "string" ? evt.arguments : (buf.get(itemId) ?? "");
-      const stripped = stripCfqFromArguments(raw);
-      const cleaned = stripped ?? raw;
-      if (stripped !== null) {
+      // 对象形态：就地清理并保持对象；扣住的分片用清理后对象的序列化补齐，
+      // 这样客户端无论按分片拼还是读 `.done`，拿到的都不含注入字段。
+      const objectStripped = isPlainObject(evt.arguments) && stripCfqFromInput(evt.arguments);
+      let cleaned: string;
+      let stripped: boolean;
+      if (objectStripped) {
+        cleaned = JSON.stringify(evt.arguments);
+        stripped = true;
+      } else {
+        const raw = typeof evt.arguments === "string" ? evt.arguments : (buf.get(itemId) ?? "");
+        const result = stripCfqFromArguments(raw);
+        cleaned = result ?? raw;
+        stripped = result !== null;
+      }
+      if (stripped) {
         const meta = toolMeta.get(itemId);
         if (meta) mark(itemId, meta.name);
       }
@@ -553,14 +729,17 @@ function makeResponsesStripper(
         emit(rebuildFrame(frame, evt));
         return;
       }
+      if (objectStripped) {
+        emit(rebuildFrame(frame, evt));
+        return;
+      }
     } else if (type === "response.output_item.done") {
       if (stripResponsesOutput([evt.item], shouldStrip, mark)) {
         emit(rebuildFrame(frame, evt));
         return;
       }
-    } else if (type === "response.completed" || type === "response.incomplete") {
-      const resp = evt.response as Record<string, unknown> | undefined;
-      if (resp && stripResponsesOutput(resp.output, shouldStrip, mark)) {
+    } else if (type === "response.created" || type === "response.in_progress" || type === "response.completed" || type === "response.incomplete" || type === "response.failed") {
+      if (stripResponsesBody(evt, shouldStrip, mark, matchesSchema)) {
         emit(rebuildFrame(frame, evt));
         return;
       }
@@ -668,6 +847,8 @@ function makeChatStripper(
 
     let current: HeldChunk | null = null;
     let finished = false;
+    /** 本帧里有对象形态的参数被就地清理过，原样发出前必须重建。 */
+    let mutated = false;
     for (const choice of choices) {
       const ch = choice as Record<string, unknown> | null;
       if (!ch) continue;
@@ -690,6 +871,14 @@ function makeChatStripper(
           toolNameOf.set(key, toolName);
         }
         if (typeof t.id === "string") toolIdOf.set(key, t.id);
+        if (eligible.has(key) && fn && isPlainObject(fn.arguments)) {
+          // 对象形态是一次性给全的，不走分片扣帧：就地清理，本帧重建后发出。
+          if (stripCfqFromInput(fn.arguments)) {
+            mutated = true;
+            mark(toolIdOf.get(key) ?? key, toolNameOf.get(key)!);
+          }
+          continue;
+        }
         if (!eligible.has(key) || typeof fn?.arguments !== "string" || fn.arguments === "") {
           continue;
         }
@@ -730,7 +919,7 @@ function makeChatStripper(
 
     // 结算必须排在 finish chunk 之前，否则客户端已经收尾了。
     if (finished) flush();
-    emit(`${block}\n\n`);
+    emit(mutated ? rebuildFrame(frame, evt) : `${block}\n\n`);
   };
 
   return { onBlock, flush };
@@ -744,15 +933,79 @@ export function createCfqStripStream(
   selection: CfqStripSelection,
   observer?: CfqStripObserver,
 ): TransformStream<Uint8Array, Uint8Array> {
+  const settleStats = selectionSettlement(selection);
+  const collector = settleStats ? createToolCallCollector(protocol) : null;
+  let settled = !settleStats;
+  /** 结算本轮 tool call。只做一次；宿主侧 adapter 保证有界、不抛。 */
+  const settle = async (trigger: SettleTrigger): Promise<void> => {
+    if (settled) return;
+    settled = true;
+    // 客户端已经断开：它拿不到完整响应，也就不会执行这些 tool call。按空列表
+    // 结算，只为让观测侧拿到结果、不必空等；不写半截参数，也不跑兜底。
+    const calls = trigger === "cancel" ? [] : collector!.calls();
+    reportCollect(protocol, trigger, collector!, calls.length);
+    const startedAt = Date.now();
+    await settleUpstreamToolCalls(settleStats, calls);
+    const holdMs = Date.now() - startedAt;
+    log.debug("cfq.strip.end_frame_released", { protocol, trigger, calls: calls.length, holdMs });
+    if (holdMs > SLOW_END_FRAME_HOLD_MS) {
+      log.warn("cfq.strip.slow_settle", { protocol, trigger, calls: calls.length, holdMs });
+    }
+  };
+  /** 下游取消（客户端断开）或上游中止：结束帧之前发生时记一笔并按空列表结算。 */
+  const onCancel = (reason: unknown): void => {
+    if (settled) return;
+    log.warn("cfq.strip.cancelled_before_settle", {
+      protocol,
+      reason: reason instanceof Error ? reason.message : reason === undefined ? undefined : String(reason),
+      hint: "client went away before the end frame; this turn's CFQ is not persisted",
+    });
+    void settle("cancel").catch((err: unknown) => {
+      log.error("cfq.strip.cancel_settle_failed", { protocol, error: String(err) });
+    });
+  };
+  /** 观察一批完整事件块；其中有结束帧时返回 true。结束帧之后的块也照样收集。 */
+  const observeBlocks = (blocks: readonly string[]): boolean => {
+    if (settled || !collector) return false;
+    let end = false;
+    for (const block of blocks) {
+      if (block !== "" && collector.observe(block)) end = true;
+    }
+    return end;
+  };
+
   // No schema was extended in this request: preserve chunk boundaries and
   // bytes exactly. Besides avoiding needless buffering, this protects tools
   // that legitimately own a field with the same name.
   if (!selectionHasWork(selection)) {
-    return new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
+    if (!collector) {
+      return new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          controller.enqueue(chunk);
+        },
+      });
+    }
+    // 只结算不剥离：字节原样，只把含结束帧的 chunk 扣到结算完成。
+    const decoder = new TextDecoder();
+    let pending = "";
+    const settleOnly: BytesTransformer = {
+      async transform(chunk, controller) {
+        if (!settled) {
+          pending += decoder.decode(chunk, { stream: true });
+          const parts = pending.split(/\r?\n\r?\n/);
+          pending = parts.pop() ?? "";
+          if (observeBlocks(parts)) await settle("end_frame");
+        }
         controller.enqueue(chunk);
       },
-    });
+      async flush() {
+        // 上游没发结束帧就收尾了：用已收到的结算，免得统计侧空等。
+        observeBlocks([pending + decoder.decode()]);
+        await settle("stream_end");
+      },
+      cancel: onCancel,
+    };
+    return new TransformStream<Uint8Array, Uint8Array>(settleOnly);
   }
 
   const encoder = new TextEncoder();
@@ -768,11 +1021,11 @@ export function createCfqStripStream(
     protocol === "anthropic"
       ? makeAnthropicStripper(forward, shouldStrip, tracker.mark)
       : protocol === "responses"
-        ? makeResponsesStripper(forward, shouldStrip, tracker.mark)
+        ? makeResponsesStripper(forward, shouldStrip, tracker.mark, name => selectionMatches(selection, name))
         : makeChatStripper(forward, shouldStrip, tracker.mark);
 
-  return new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
+  const stripping: BytesTransformer = {
+    async transform(chunk, controller) {
       emit = (text) => controller.enqueue(encoder.encode(text));
       sseBuf += decoder.decode(chunk, { stream: true });
 
@@ -781,16 +1034,25 @@ export function createCfqStripStream(
       const parts = sseBuf.split(/\r?\n\r?\n/);
       sseBuf = parts.pop() ?? "";
       for (const part of parts) {
-        if (part !== "") stripper.onBlock(part);
+        if (part === "") continue;
+        // 结束帧交给剥离器（进而发给客户端）之前先结算；剥离器扣住的帧也一并延后。
+        if (observeBlocks([part])) await settle("end_frame");
+        stripper.onBlock(part);
       }
     },
-    flush(controller) {
+    async flush(controller) {
       emit = (text) => controller.enqueue(encoder.encode(text));
+      sseBuf += decoder.decode();
+      // 上游没发结束帧就收尾了：扣住的帧发出去之前，用已收到的结算。
+      observeBlocks([sseBuf]);
+      await settle("stream_end");
       // 先结清扣住的帧，再把残留的半截帧原样吐出去——残留的必然是个不完整事件，
       // 交给剥离器只会给它补上一个不该有的事件结束符。
       stripper.flush();
       if (sseBuf) controller.enqueue(encoder.encode(sseBuf));
       tracker.report();
     },
-  });
+    cancel: onCancel,
+  };
+  return new TransformStream<Uint8Array, Uint8Array>(stripping);
 }

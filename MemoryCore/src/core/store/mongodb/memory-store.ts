@@ -71,6 +71,7 @@ import type {
   MemoryPromptSource,
   MemoryPromptTargetType,
 } from "../../memory-prompt/types.js";
+import { normalizeMemoryPromptMode } from "../../memory-prompt/types.js";
 import { DEFAULT_ISOLATION_ID } from "../isolation.js";
 import { mongoSearchScoreToScore } from "../tokenize.js";
 import { COLLECTIONS } from "./collections.js";
@@ -949,11 +950,13 @@ export class MongoMemoryStore implements IMemoryStore {
   // ─────────────────────────────────────────────────────────
 
   private promptFromDoc(doc: Record<string, unknown>): MemoryPromptRecord {
+    const mode = normalizeMemoryPromptMode(doc.mode);
     return {
       memory_prompt_id: String(doc._id ?? doc.memory_prompt_id ?? ""),
       name: String(doc.name ?? ""),
       layer: (doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1") as MemoryPromptLayer,
       prompt: String(doc.prompt ?? ""),
+      ...(mode ? { mode } : {}),
       version: Number(doc.version ?? 1),
       status: doc.status === "deleting" ? "deleting" : "active",
       created_by: String(doc.created_by ?? "") || undefined,
@@ -1004,6 +1007,8 @@ export class MongoMemoryStore implements IMemoryStore {
       updated_by: record.updated_by ?? "",
       created_at_ms: record.created_at_ms,
       updated_at_ms: record.updated_at_ms,
+      // Written only for template records: append docs stay identical to legacy docs.
+      ...(normalizeMemoryPromptMode(record.mode) ? { mode: "template" } : {}),
     };
   }
 

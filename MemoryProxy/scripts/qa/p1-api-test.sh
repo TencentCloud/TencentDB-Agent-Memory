@@ -311,17 +311,17 @@ head_ "P1-N 限流 + 计费 (4 可自动)"
 ##############################################################################
 
 # P1-N1 enforceRateLimit 拦截: 本实例 QPM=100，需打满 → 用低 QPM 实例不可得
-# 改为验证 rate-limit 日志存在 + 计数递增
+# 改为验证 rate-limit 记账日志存在 (rate_limit.decision 只在被拒绝时打印)
 before=$(log_lines)
 req "/claude-code/$SPACE/v1/messages" \
   "{\"model\":\"$MODEL\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
 delta=$(log_delta "$before")
-if printf '%s' "$delta" | grep -q "rate_limit.decision"; then
-  ok "P1-N1" "rate-limit 判定生效: $(printf '%s' "$delta" | grep -oE '\"allowed\":\w+' | head -1)"
-elif [[ -f "$PROXY_STDOUT" ]] && grep -q "rate_limit.decision" "$PROXY_STDOUT"; then
-  ok "P1-N1" "rate-limit 判定生效 (日志在别处)"
+if printf '%s' "$delta" | grep -q "rate_limit.usage_recorded"; then
+  ok "P1-N1" "rate-limit 记账生效: $(printf '%s' "$delta" | grep -oE '\"inputTokens\":[0-9]+' | head -1)"
+elif [[ -f "$PROXY_STDOUT" ]] && grep -q "rate_limit.usage_recorded" "$PROXY_STDOUT"; then
+  ok "P1-N1" "rate-limit 记账生效 (日志在别处)"
 else
-  skip "P1-N1" "未见 rate_limit.decision（可能写 proxy.log）"
+  skip "P1-N1" "未见 rate_limit.usage_recorded（可能写 proxy.log）"
 fi
 
 # P1-N3 custom upstream 不限流：本实例 CC 走 instance 覆盖

@@ -1,10 +1,13 @@
+import { File as NodeFile } from 'node:buffer';
+import { strToU8, zipSync } from 'fflate';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ImportSkillDialog from '../src/pages/SkillsPage/components/ImportSkillDialog';
 import GitHubSkillForm from '../src/pages/SkillsPage/components/GitHubSkillForm';
-import { previewGitHubSkill, applyGitHubSkill, detachGitHubSkill } from '../src/lib/api/skill-api';
+import { createSkill, previewGitHubSkill, applyGitHubSkill, detachGitHubSkill } from '../src/lib/api/skill-api';
 vi.mock('../src/lib/api/skill-api', () => ({
+  createSkill: vi.fn(),
   previewGitHubSkill: vi.fn(),
   applyGitHubSkill: vi.fn(),
   detachGitHubSkill: vi.fn(),
@@ -44,6 +47,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 function button(key: string) {
@@ -158,6 +162,54 @@ describe('GitHub Skill confirmation UI', () => {
     );
     expect(done).toHaveBeenCalledTimes(1);
   });
+  it('keeps directory, ZIP and conversation entry points available beside GitHub', async () => {
+    vi.stubGlobal('File', NodeFile);
+    const submitted = Promise.withResolvers<Awaited<ReturnType<typeof createSkill>>>();
+    vi.mocked(createSkill).mockReturnValueOnce(submitted.promise);
+    const done = vi.fn();
+    await act(async () => root.render(
+      <ImportSkillDialog onClose={vi.fn()} onImported={done} teamId="team-a" userId="user-a" target="fixed" agentId="agent-a" />,
+    ));
+    const mode = (label: string) =>
+      [...document.querySelectorAll<HTMLElement>('button[role="radio"]')].find(el => el.textContent === label)!;
+    const action = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')].find(el => el.textContent === label)!;
+
+    expect(document.querySelector('input[webkitdirectory]')).not.toBeNull();
+    await click(mode('importSkill.mode.session'));
+    expect(document.querySelector('textarea')).not.toBeNull();
+    await click(mode('GitHub'));
+    expect(document.querySelector('input[placeholder="https://github.com/owner/repository"]')).not.toBeNull();
+
+    await click(mode('importSkill.mode.zip'));
+    expect(action('importSkill.zip.submit').disabled).toBe(true);
+    const archiveInput = document.querySelector('input[accept*=".zip"]')!;
+    const main = '---\nname: zip-demo\ndescription: ZIP fixture\n---\n\nExample skill\n';
+    const bytes = zipSync({
+      'zip-demo/SKILL.md': strToU8(main),
+      'zip-demo/references/guide.md': strToU8('Example guide'),
+    }, { level: 0 });
+    const archive = new NodeFile([bytes], 'zip-demo.zip', { type: 'application/zip' });
+    Object.defineProperty(archiveInput, 'files', { value: [archive] });
+    await act(async () => archiveInput.dispatchEvent(new Event('change', { bubbles: true })));
+    await vi.waitFor(() => expect(action('importSkill.zip.submit').disabled).toBe(false));
+    await click(action('importSkill.zip.submit'));
+    expect(createSkill).toHaveBeenCalledExactlyOnceWith({
+      agent_id: 'agent-a',
+      team_id: 'team-a',
+      user_id: 'user-a',
+      name: 'zip-demo',
+      content: main,
+      resources: [{ path: 'references/guide.md', content: 'Example guide', encoding: 'utf-8' }],
+    });
+    expect(previewGitHubSkill).not.toHaveBeenCalled();
+    expect(mode('GitHub').hasAttribute('disabled')).toBe(true);
+    expect(done).not.toHaveBeenCalled();
+    await act(async () => submitted.resolve({} as never));
+    await click(action('importSkill.zip.done'));
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
   it('expands first-install review and prevents outer dismissal while publishing', async () => {
     vi.mocked(previewGitHubSkill).mockResolvedValue({
       ...preview,

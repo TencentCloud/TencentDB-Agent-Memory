@@ -67,7 +67,7 @@ export async function logStandaloneUpstreamError(args: {
   if (args.response.status < 400) return;
   const upstreamRequestId = args.response.headers.get("x-request-id") ?? "";
   const body = await errorBodyPreview(args.response);
-  log.error(args.event ?? "upstream.error", {
+  log.error(`【P0】${args.event ?? "upstream.error"}`, {
     requestId: args.requestId,
     clientRequestId: args.clientRequestId,
     upstreamRequestId,

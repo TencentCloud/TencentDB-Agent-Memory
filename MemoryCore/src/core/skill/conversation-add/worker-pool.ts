@@ -135,7 +135,7 @@ export class SkillWorkerPool {
         });
       } catch (err) {
         this.logger.warn(
-          `[skill-worker-pool] self-heal cold scan failed: ${(err as Error).message}`,
+          `【P2】[skill-worker-pool] self-heal cold scan failed: ${(err as Error).message}`,
         );
       }
     })();
@@ -166,7 +166,7 @@ export class SkillWorkerPool {
             });
           } catch (err) {
             this.logger.warn(
-              `[skill-worker-pool] periodic self-heal failed: ${(err as Error).message}`,
+              `【P2】[skill-worker-pool] periodic self-heal failed: ${(err as Error).message}`,
             );
           }
         })();
@@ -283,7 +283,7 @@ export class SkillWorkerPool {
         agent = await this.opts.queue.peekAgent(blockMs);
       } catch (err) {
         if (this.closed) break;
-        this.logger.warn(`[skill-worker-pool] ${workerId} peek error: ${(err as Error).message}`);
+        this.logger.warn(`【P2】[skill-worker-pool] ${workerId} peek error: ${(err as Error).message}`);
         await sleep(200);
         continue;
       }
@@ -312,7 +312,7 @@ export class SkillWorkerPool {
       if (agent.instance_id === LEGACY_INSTANCE_ID) {
         const legacyRaw = `${agent.space_id}|${agent.user_id}|${agent.team_id}|${agent.agent_id}`;
         this.logger.error(
-          `[skill-worker-pool] ${workerId} legacy 4-segment tuple detected, purging: ${legacyRaw}`,
+          `【P2】[skill-worker-pool] ${workerId} legacy 4-segment tuple detected, purging: ${legacyRaw}`,
         );
         obsLogger.warn("skill.worker.legacy_tuple_dropped", {
           worker_id: workerId,
@@ -325,7 +325,7 @@ export class SkillWorkerPool {
           await this.opts.queue.purgeRawAgent(legacyRaw);
         } catch (err) {
           this.logger.warn(
-            `[skill-worker-pool] ${workerId} purgeRawAgent(legacy) failed: ${(err as Error).message}`,
+            `【P2】[skill-worker-pool] ${workerId} purgeRawAgent(legacy) failed: ${(err as Error).message}`,
           );
         }
         continue;
@@ -338,7 +338,7 @@ export class SkillWorkerPool {
         if (result?.lockContended) suppressAgent(agent);
       } catch (err) {
         this.logger.error(
-          `[skill-worker-pool] ${workerId} consumeAgent error: ${(err as Error).message}`,
+          `【P2】[skill-worker-pool] ${workerId} consumeAgent error: ${(err as Error).message}`,
         );
         // consumeAgent 抛出 (通常是 resolver 抛错) → 抑制该 agent 一段时间,
         // 让本 loop 拿别的 agent。抑制过期后如果问题没解决还会再试。

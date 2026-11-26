@@ -1,5 +1,6 @@
 import type { ProxyConfig } from "../types.js";
 import { getRedisClient } from "../db/redis-client.js";
+import { writeRateLimitLogRow, type RateLimitLogDecision } from "../clickhouse.js";
 import { log } from "../report/log.js";
 import { RedisRateLimitStore, type RateLimitDecision } from "./redis-store.js";
 import { getActualInputTokens, type UsageProtocol } from "./usage.js";
@@ -35,13 +36,29 @@ export async function enforceRateLimit(params: {
   const { config, instanceId, modelId, protocol } = params;
   if (!config.rateLimit || (config.rateLimit.tpm <= 0 && config.rateLimit.qpm <= 0) || !instanceId) return;
 
-  const decision = await getRateLimitStore(config).checkRequest(instanceId, modelId);
+  const rateLimitStore = getRateLimitStore(config);
+  const decision = await rateLimitStore.checkRequest(instanceId, modelId);
+
+  // Without a Redis client every request is degraded; logging those would only
+  // drown out the degraded rows that signal a real Redis outage.
+  if (rateLimitStore.isAvailable()) {
+    writeRateLimitLogRow({
+      timestamp: new Date().toISOString(),
+      spaceId: instanceId,
+      modelId,
+      decision: logDecision(decision),
+      windowRequests: decision.usedRequests,
+      windowTokens: decision.usedTokens,
+      limitQpm: decision.qpm,
+      limitTpm: decision.tpm,
+    });
+  }
 
   if (decision.degraded) {
     const now = Date.now();
     if (now - lastDegradedWarningAt >= 30_000) {
       lastDegradedWarningAt = now;
-      log.warn("rate_limit.fail_open", {
+      log.warn("【P1】rate_limit.fail_open", {
         instanceId,
         modelId,
         reason: decision.degradedReason ?? "redis_unavailable",
@@ -50,20 +67,19 @@ export async function enforceRateLimit(params: {
     return;
   }
 
-  log.info("rate_limit.decision", {
-    instanceId,
-    modelId,
-    tpm: decision.tpm,
-    qpm: decision.qpm,
-    usedTokens: decision.usedTokens,
-    usedRequests: decision.usedRequests,
-    remainingTokens: decision.remainingTokens,
-    remainingRequests: decision.remainingRequests,
-    allowed: decision.allowed,
-    reason: decision.reason,
-  });
-
   if (!decision.allowed) {
+    log.info("rate_limit.decision", {
+      instanceId,
+      modelId,
+      tpm: decision.tpm,
+      qpm: decision.qpm,
+      usedTokens: decision.usedTokens,
+      usedRequests: decision.usedRequests,
+      remainingTokens: decision.remainingTokens,
+      remainingRequests: decision.remainingRequests,
+      allowed: decision.allowed,
+      reason: decision.reason,
+    });
     throw new RateLimitExceededError(buildRateLimitResponse(protocol, decision));
   }
 }
@@ -120,6 +136,12 @@ export function buildRateLimitResponse(
       "x-ratelimit-reset-seconds": String(Math.max(1, decision.retryAfterSeconds)),
     },
   });
+}
+
+function logDecision(decision: RateLimitDecision): RateLimitLogDecision {
+  if (decision.degraded) return "degraded";
+  if (decision.allowed) return "allowed";
+  return decision.reason === "qpm" ? "rejected_qpm" : "rejected_tpm";
 }
 
 export function isRateLimitExceededError(error: unknown): error is RateLimitExceededError {

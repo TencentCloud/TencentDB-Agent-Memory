@@ -45,6 +45,7 @@ import type { Context } from "hono";
 import { logStandaloneUpstreamError } from "./upstream-error-log.js";
 import { writeLog } from "./logger.js";
 import { log } from "./report/log.js";
+import { readIncomingRequestId, safeTraceIds, withRequestId } from "./request-id.js";
 import { joinUrl } from "./guard-adapter.js";
 import { extractSpaceIdFromPath, tryReportCreditFromPath } from "./credit-reporter.js";
 import { extractSseUsage } from "./pipeline/runners/openai-chat.js";
@@ -251,6 +252,7 @@ async function recordTracesAndUsage(params: {
       });
     } catch (err: unknown) {
       log.warn("systemUser.usage_log_failed", {
+        ...safeTraceIds({ traceId, upstreamRequestId }),
         systemUser: match.name,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -272,12 +274,14 @@ async function recordTracesAndUsage(params: {
     );
     if (outcome.attempted && !outcome.ok) {
       log.warn("systemUser.credit_report_failed", {
+        ...safeTraceIds({ traceId, upstreamRequestId }),
         systemUser: match.name,
         error: outcome.errorMessage ?? "unknown",
       });
     }
   } catch (err: unknown) {
     log.warn("systemUser.credit_report_error", {
+      ...safeTraceIds({ traceId, upstreamRequestId }),
       systemUser: match.name,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -348,6 +352,7 @@ async function recordTracesAndUsage(params: {
     });
   } catch (err: unknown) {
     log.warn("systemUser.opik_report_failed", {
+      ...safeTraceIds({ traceId, upstreamRequestId }),
       systemUser: match.name,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -415,6 +420,7 @@ async function recordTracesAndUsage(params: {
     }
   } catch (err: unknown) {
     log.warn("systemUser.langfuse_report_failed", {
+      ...safeTraceIds({ traceId, upstreamRequestId }),
       systemUser: match.name,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -485,7 +491,8 @@ export async function handleSystemUserPassthrough(
   rewrittenBody?: Record<string, unknown>,
 ): Promise<Response> {
   const startTime = new Date().toISOString();
-  const traceId = uuidv7();
+  // 客户端/网关 x-request-id 作为 trace 主键，缺失才走 uuidv7。see request-id.ts。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
   const path = c.req.path;
   let upstreamUrl = joinUrl(config.upstream.url, path);
   const spaceId = extractSpaceIdFromPath(path) ?? "";
@@ -600,6 +607,9 @@ export async function handleSystemUserPassthrough(
       "systemUser.forward_failed",
       {
         requestId: traceId,
+        traceId,
+        // fetch 失败时上游没响应过，自然空串；保持字段存在便于看板 group-by。
+        upstreamRequestId: "",
         clientRequestId: c.req.header("x-request-id"),
         systemUser: match.name,
         upstreamUrl,
@@ -619,7 +629,8 @@ export async function handleSystemUserPassthrough(
       isCustomExtraction,
     }).catch(() => { /* best-effort */ });
 
-    return c.json({ error: "Upstream request failed", detail: message }, 502);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Upstream request failed", detail: message }, traceId), 502);
   }
 
   const upstreamRequestId = upstreamResp.headers.get("x-request-id") ?? undefined;
@@ -653,6 +664,7 @@ export async function handleSystemUserPassthrough(
       tapStream = b;
     } catch (err: unknown) {
       log.warn("systemUser.stream_tee_failed", {
+        ...safeTraceIds({ traceId, upstreamRequestId }),
         systemUser: match.name,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -678,6 +690,7 @@ export async function handleSystemUserPassthrough(
         })
         .catch((err: unknown) => {
           log.warn("systemUser.stream_consume_failed", {
+            ...safeTraceIds({ traceId, upstreamRequestId }),
             systemUser: match.name,
             error: err instanceof Error ? err.message : String(err),
           });

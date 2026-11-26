@@ -1,8 +1,9 @@
 /**
  * v3 session route (`POST /v3/session/add`).
  *
- * Contract: docs/session-api.md. Writes one turn record per call through
- * the per-instance StorageAdapter (standalone → local FS, service → COS).
+ * Contract: docs/session-api.md. Writes one record per call — an LLM call
+ * for `online`, a turn for `offline` — through the per-instance
+ * StorageAdapter (standalone → local FS, service → COS).
  *
  * Deliberately not part of handleV2Route: identity comes from headers only
  * (no agent, body must not carry user/session), a missing header is 400
@@ -16,11 +17,12 @@ import { classifyError, sanitize } from "./error-handler.js";
 import type { Logger } from "../core/types.js";
 import type { StorageAdapter } from "../core/storage/adapter.js";
 import {
+  SESSION_WRITE_TIMEOUT_MS,
   SessionValidationError,
   UNASSIGNED_TEAM,
   validatePathSegment,
   validateSessionAddBody,
-  writeSessionTurn,
+  writeSessionRecord,
   type SessionAddInput,
   type SessionIdentity,
 } from "../core/session/session-record.js";
@@ -32,6 +34,8 @@ export interface V3SessionRouterDeps {
   /** Per-instance storage; throwing means storage is unavailable (503). */
   resolveStorage: (instanceId: string) => Promise<StorageAdapter>;
   logger: Logger;
+  /** Write deadline; defaults to {@link SESSION_WRITE_TIMEOUT_MS}. */
+  writeTimeoutMs?: number;
 }
 
 function headerValue(headers: http.IncomingHttpHeaders, name: string): string | undefined {
@@ -53,7 +57,7 @@ function parseIdentity(headers: http.IncomingHttpHeaders): { instanceId: string;
   const rawTeam = headerValue(headers, "x-tdai-team-id");
   const team = rawTeam === undefined || rawTeam === "" ? UNASSIGNED_TEAM : rawTeam;
   if (team !== UNASSIGNED_TEAM) validatePathSegment("x-tdai-team-id", team);
-  return { instanceId, identity: { team, user, session } };
+  return { instanceId, identity: { instance: instanceId, team, user, session } };
 }
 
 export async function handleV3SessionRoute(
@@ -95,14 +99,20 @@ export async function handleV3SessionRoute(
     return true;
   }
 
+  const writeTimeoutMs = deps.writeTimeoutMs ?? SESSION_WRITE_TIMEOUT_MS;
+  const signal = AbortSignal.timeout(writeTimeoutMs);
   try {
     const storage = await deps.resolveStorage(instanceId);
-    const result = await writeSessionTurn(storage, identity, input);
+    const result = await writeSessionRecord(storage, identity, input, { signal });
     sendJson(res, 200, successEnvelope(result, requestId));
   } catch (err) {
-    deps.logger.error(
-      `${TAG} write failed (instance=${instanceId}): ${sanitize(err instanceof Error ? err.message : String(err))}`,
-    );
+    if (signal.aborted && err === signal.reason) {
+      deps.logger.error(`${TAG} write timed out after ${writeTimeoutMs}ms (instance=${instanceId})`);
+    } else {
+      deps.logger.error(
+        `${TAG} write failed (instance=${instanceId}): ${sanitize(err instanceof Error ? err.message : String(err))}`,
+      );
+    }
     fail(503, "Session storage unavailable");
   }
   return true;

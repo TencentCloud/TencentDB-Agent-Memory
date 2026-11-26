@@ -15,10 +15,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { MemoryTdaiConfig } from "../config.js";
+import { sliceL2Batch } from "./l2-batch.js";
 import { MemoryPipelineManager } from "./pipeline-manager.js";
 import type { L2Runner } from "./pipeline-manager.js";
 import { SessionFilter } from "./session-filter.js";
 import { extractL1Memories } from "../core/record/l1-extractor.js";
+import { latestTimestamp } from "../core/record/l1-writer.js";
 import { readConversationMessagesGroupedBySessionId } from "../core/conversation/l0-recorder.js";
 import type { ConversationMessage } from "../core/conversation/l0-recorder.js";
 import { CheckpointManager } from "./checkpoint.js";
@@ -365,12 +367,12 @@ async function _doInitStores(
           }
         }
       } catch (err) {
-        logger.warn(`${TAG} Failed to read/write manifest (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(`【P1】${TAG} Failed to read/write manifest (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   } catch (err) {
     logger.warn(
-      `${TAG} Store init failed; vector/FTS recall and dedup conflict detection will be unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      `【P1】${TAG} Store init failed; vector/FTS recall and dedup conflict detection will be unavailable: ${err instanceof Error ? err.message : String(err)}`,
     );
     vectorStore = undefined;
     embeddingService = undefined;
@@ -430,6 +432,7 @@ export function createL1Runner(opts: {
       return { processedCount: 0, storedCount: 0, hasMore: false, hasFullBacklog: false, profileScopes: [] };
     }
 
+    const l1RunStartMs = Date.now();
     const checkpoint = new CheckpointManager(pluginDataDir, logger, storage, checkpointLock);
     const cp = await checkpoint.read();
     const runnerState = checkpoint.getRunnerState(cp, sessionKey);
@@ -668,12 +671,14 @@ export function createL1Runner(opts: {
       // skip same-ms siblings on the next round.
       await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
       logger.info(
-        `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`,
+        `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s)) dur_ms=${Date.now() - l1RunStartMs}`,
       );
 
       return { processedCount: totalMessages, storedCount: totalStored, hasMore, hasFullBacklog, profileScopes: Array.from(profileScopes) };
     } catch (err) {
-      logger.error(`${TAG} [l1] L1 failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+      logger.error(
+        `【P1】${TAG} [l1] L1 failed: ${err instanceof Error ? err.stack ?? err.message : String(err)} dur_ms=${Date.now() - l1RunStartMs}`,
+      );
       throw err;
     }
   };
@@ -737,6 +742,7 @@ export function createL2Runner(opts: {
     const jevGateId = opts.executionContext?.jevGateId ?? randomUUID();
     let latestSceneDiff: L2SceneDiffDiagnostic | undefined;
     const profileFilter = parseProfileL2Key(sessionKey);
+    const l2RunStartMs = Date.now();
     logger.debug?.(
       `${TAG} [L2] session=${sessionKey}, profile=${profileFilter ? buildIsolationScope(profileFilter) : "(legacy-session)"}, updatedAfter=${cursor ?? "(full)"}`,
     );
@@ -746,7 +752,8 @@ export function createL2Runner(opts: {
       return;
     }
 
-    let records: Array<{ content: string; created_at: string; id: string; updatedAt: string; teamId?: string; userId?: string; agentId?: string; sessionId?: string; taskId?: string }>;
+    let records: Array<{ content: string; created_at: string; event_time: string; id: string; updatedAt: string; teamId?: string; userId?: string; agentId?: string; sessionId?: string; taskId?: string }>;
+    let hasMore = false;
 
     if (vectorStore && !vectorStore.isDegraded()) {
       const { queryMemoryRecords } = await import("../core/record/l1-reader.js");
@@ -772,9 +779,25 @@ export function createL2Runner(opts: {
         `${TAG} [L2] Incremental query returned ${memRecords.length} record(s) (session=${sessionKey})`,
       );
 
-      records = memRecords.map((r) => ({
+      // 分批：积压很大时一次全部交给 LLM 会每次都超时。按 updatedAt 升序取前一批，
+      // 剩下的留在游标之后，由 worker 立即续排的 L2 继续处理。
+      // 游标是严格大于（updatedAfter >），所以切点不能把同一 updatedAt 的记录拆开，
+      // 否则下一批会永久跳过同时间戳的剩余记录。
+      memRecords.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+      const batch = sliceL2Batch(memRecords, cfg.persona.l2MaxRecordsPerRun, cfg.persona.l2MaxCharsPerRun);
+      if (batch.length < memRecords.length) {
+        hasMore = true;
+        logger.info(
+          `${TAG} [L2] Backlog split (session=${sessionKey}): processing ${batch.length}/${memRecords.length} record(s) this run`,
+        );
+      }
+
+      records = batch.map((r) => ({
         content: r.content,
         created_at: r.createdAt,
+        // 对话发生时间：取该记忆时间线中最晚的一个；旧数据的 timestamps
+        // 是抽取时间，没有时退回写入时间，与升级前行为一致。
+        event_time: latestTimestamp(r.timestamps) ?? r.createdAt,
         id: r.id,
         updatedAt: r.updatedAt,
         teamId: r.teamId,
@@ -783,6 +806,8 @@ export function createL2Runner(opts: {
         sessionId: r.sessionId,
         taskId: r.taskId,
       }));
+      // 按对话时间升序交给 L2，而不是按写入时间：积压乱序时 LLM 仍按真实先后阅读。
+      records.sort((a, b) => a.event_time.localeCompare(b.event_time));
     } else {
       throw new Error(`${TAG} [L2] VectorStore unavailable — cannot read L1 memories for scene extraction (session=${sessionKey})`);
     }
@@ -829,6 +854,8 @@ export function createL2Runner(opts: {
           layer: "l2",
         })),
         maxScenes: cfg.persona.maxScenes,
+        maxSceneBytes: cfg.persona.maxSceneBytes,
+        timeoutMs: cfg.persona.sceneTimeoutMs,
         sceneBackupCount: cfg.persona.sceneBackupCount,
         logger,
         instanceId,
@@ -841,6 +868,7 @@ export function createL2Runner(opts: {
       const memories = groupRecords.map((r) => ({
         content: r.content,
         created_at: r.created_at,
+        event_time: r.event_time,
         id: r.id,
       }));
 
@@ -856,7 +884,17 @@ export function createL2Runner(opts: {
         layer: "l2",
       }));
       const extractResult = await extractor.extract(memories);
-      if (!(extractResult.success && extractResult.memoriesProcessed > 0)) continue;
+      if (!(extractResult.success && extractResult.memoriesProcessed > 0)) {
+        // A failed batch used to be swallowed here with a bare `continue`, so
+        // the orchestration layer logged nothing at all. Surface the stage and
+        // the propagated reason (the extractor already logged the stack).
+        logger.warn(
+          `【P1】${TAG} [L2] Extraction failed, skipping group: session=${sessionKey} ` +
+          `success=${extractResult.success} processed=${extractResult.memoriesProcessed} ` +
+          `err=${extractResult.error ?? "(none)"} dur_ms=${Date.now() - l2RunStartMs}`,
+        );
+        continue;
+      }
       if (extractResult.emptyExtraction) {
         anyEmptyExtraction = true;
         logger.warn(`${TAG} [L2] Extraction produced no file changes (empty run), skipping checkpoint increment`);
@@ -1019,9 +1057,15 @@ export function createL2Runner(opts: {
 
     if (processedTotal > 0) {
       const latestCursor = records.reduce((latest, r) => r.updatedAt > latest ? r.updatedAt : latest, "");
-      logger.debug?.(`${TAG} [L2] Extraction complete: processed=${processedTotal}, latestCursor=${latestCursor}`);
+      // Completion was debug-only: a successful L2 run left no info-level trace
+      // and carried no duration, so a slow scene extraction was invisible.
+      logger.info(
+        `${TAG} [L2] Extraction complete: session=${sessionKey} processed=${processedTotal} ` +
+        `latestCursor=${latestCursor} dur_ms=${Date.now() - l2RunStartMs}`,
+      );
       return {
         latestCursor: latestCursor || undefined,
+        hasMore,
         sceneDiff: latestSceneDiff,
         jevGateId,
       };
@@ -1234,6 +1278,12 @@ export function createL3Runner(opts: {
           personaAfterHash: await readPersonaBodyHash(scopedDir, scopedStore),
           scopeStartedAt, jevAddedLockMs,
         });
+        // The generator logs its own error without the orchestration scope, and
+        // this throw used to leave the L3 stage with no stage-level error line.
+        logger.error(
+          `【P1】${TAG} [L3] Persona generation failed: scope=${scope} reason=${generationReason} ` +
+          `dur_ms=${Date.now() - l3StartMs}`,
+        );
         throw new Error(`${TAG} [L3] Persona generation failed (scope=${scope})`);
       }
       if (genResult === "unchanged") {

@@ -21,6 +21,7 @@ import {
 import { matchWhitelistEndpoint, type WhitelistEndpoint } from "../../routes/whitelist.js";
 import { joinUrl } from "../../guard-adapter.js";
 import { log } from "../../report/log.js";
+import { readIncomingRequestId, withRequestId } from "../../request-id.js";
 import { verifyUserKey } from "../../auth.js";
 import { stageAuth } from "../stages/auth.js";
 import { stageSystemUser } from "../stages/system-user.js";
@@ -89,12 +90,16 @@ function extractUsageFromResponse(
  * 与 handleAuxiliaryEndpoint 语义等价。
  */
 export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promise<Response> {
-  const traceId = uuidv7();
+  // 客户端/网关 x-request-id 作为 trace 主键，缺失才走 uuidv7。see request-id.ts。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
   const startTime = new Date().toISOString();
   const requestStartMono = performance.now();
 
   const entry = matchWhitelistEndpoint(c.req.path);
-  if (!entry) return c.json({ error: "Unregistered endpoint" }, 404);
+  if (!entry) {
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Unregistered endpoint" }, traceId), 404);
+  }
 
   // 1. Auth (via shared stageAuth)
   // 老 auxiliary 是 x-api-key 优先 (与 stage 的 Bearer 优先反过来), 但两者结果集合等价
@@ -105,7 +110,8 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
   const spaceId = auth.spaceId;
   const userId = auth.userId;
   if (auth.rejected) {
-    return c.json({ error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` }, 401);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` }, traceId), auth.failureStatus ?? 401);
   }
   const keyId = auth.keyId;
 
@@ -167,10 +173,11 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
     });
   } catch (err: unknown) {
     pipe.error("AUX_FORWARD", err instanceof Error ? err : new Error(String(err)));
-    return c.json({
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({
       error: "Upstream request failed",
       detail: err instanceof Error ? err.message : String(err),
-    }, 502);
+    }, traceId), 502);
   }
   pipe.forwardDone(upstreamResp.status, upstreamResp.headers.get("x-request-id") ?? undefined);
   await logPipelineUpstreamError(pipe, upstreamResp);
@@ -221,8 +228,8 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
           { ...pipe.ids(), sessionKey: keyId },
         );
       } catch (err: unknown) {
-        log.error("aux.credit_report_failed",
-          { path: c.req.path, upstreamUrl },
+        log.error("【P2】aux.credit_report_failed",
+          { ...pipe.ids(), path: c.req.path, upstreamUrl },
           err instanceof Error ? err : new Error(String(err)));
       }
     }

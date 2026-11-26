@@ -39,6 +39,8 @@ export interface ForwardWithRetryInput {
 export interface ForwardWithRetryResult {
   resp: Response;
   retried: boolean;
+  /** The body `resp` answers: `upstreamBody`, or the retry body after a retry. */
+  sentBody: Record<string, unknown>;
 }
 
 /**
@@ -142,7 +144,7 @@ export async function stageForwardWithRetry(
       } else {
         input.pipe.error("RETRY_FAILED", `Retry returned ${upstreamResp.status}`);
       }
-      return { resp: upstreamResp, retried: true };
+      return { resp: upstreamResp, retried: true, sentBody: retryBody };
     } catch (retryErr: unknown) {
       if (isRateLimitExceededError(retryErr)) throw retryErr;
       if (retryErr instanceof DOMException && retryErr.name === "TimeoutError") {
@@ -162,5 +164,5 @@ export async function stageForwardWithRetry(
     throw new Error("No upstream response available");
   }
 
-  return { resp: upstreamResp, retried: false };
+  return { resp: upstreamResp, retried: false, sentBody: input.upstreamBody };
 }

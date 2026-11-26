@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, Copy, Form, Input, Justify, MetricsBoard, Modal, SearchBox, Segment, Select, StatusTip, Table, Text } from 'tea-component';
 import { ChevronRightIcon, CodeIcon, DeleteIcon, RefreshIcon, UsergroupIcon, ViewListIcon, ViewModuleIcon } from 'tea-icons-react';
 import { knowledgeApi } from '@/lib/api/knowledge-api';
+import { isTerminalFailure } from '@/lib/codeGraphPolling';
 import { tea } from '@/lib/tea-bridge';
 import AllocateAssetDialog from '@/components/asset/AllocateAssetDialog';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
@@ -249,6 +250,9 @@ export default function CodeSourcesPanel() {
                       )}
                       <span>{formatShortTime(source.last_sync_at)}</span>
                     </div>
+                    {isTerminalFailure(source.status) && source.sync_error && (
+                      <div className="_codelist-card-error">{source.sync_error}</div>
+                    )}
                     <div className="_codelist-card-owner">
                       <UsergroupIcon size={12} />
                       {scopeTab === 'fixed' ? (
@@ -336,7 +340,16 @@ export default function CodeSourcesPanel() {
                   key: 'status',
                   header: t('code.table.status'),
                   width: 120,
-                  render: (source) => statusLabel(t, source.status),
+                  render: (source) => (
+                    <>
+                      {statusLabel(t, source.status)}
+                      {isTerminalFailure(source.status) && source.sync_error && (
+                        <div className="_codelist-table-error" title={source.sync_error}>
+                          {source.sync_error}
+                        </div>
+                      )}
+                    </>
+                  ),
                 },
                 {
                   key: 'branch',

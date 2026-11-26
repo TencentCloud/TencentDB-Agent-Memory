@@ -4,8 +4,9 @@ import type { Context } from "hono";
 import { verifyUserKey } from "./auth.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { poolServiceFor } from "./guard-adapter.js";
-import { extractBearerToken } from "./opik.js";
+import { extractBearerToken, uuidv7 } from "./opik.js";
 import { normalizePublicModelName } from "./pricing.js";
+import { readIncomingRequestId, withRequestId } from "./request-id.js";
 import type { CreditPricingConfig, ProxyConfig } from "./types.js";
 
 export interface OpenAIModel {
@@ -43,18 +44,21 @@ export function buildModelsResponse(pricing: CreditPricingConfig, extraIds: stri
 
 /** Handles the tenant-scoped OpenAI-compatible `GET /v1/models` endpoint locally. */
 export async function handleModels(c: Context, config: ProxyConfig): Promise<Response> {
+  // trace id: 透传客户端/网关的 x-request-id，缺失才新生成；错误响应 header + body 都带上，便于后端对账。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
+  c.header("x-request-id", traceId);
   const spaceId = extractSpaceIdFromPath(c.req.path);
   if (!spaceId) {
-    return c.json({ error: "spaceId is required in the request path" }, 400);
+    return c.json(withRequestId({ error: "spaceId is required in the request path" }, traceId), 400);
   }
 
   const apiKey = c.req.header("x-api-key")
     ?? extractBearerToken(c.req.header("authorization") ?? c.req.header("Authorization") ?? "")
     ?? "";
-  const { rejected, rejectReason } = await verifyUserKey(apiKey, spaceId);
+  const { rejected, rejectReason, failureStatus } = await verifyUserKey(apiKey, spaceId);
 
   if (rejected) {
-    return c.json({ error: `Authentication failed: ${rejectReason ?? "unknown"}` }, 401);
+    return c.json(withRequestId({ error: `Authentication failed: ${rejectReason ?? "unknown"}` }, traceId), failureStatus ?? 401);
   }
 
   c.header("cache-control", "no-store");

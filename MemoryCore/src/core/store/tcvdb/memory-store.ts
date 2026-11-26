@@ -59,6 +59,7 @@ import type {
   MemoryPromptSettingRecord,
   MemoryPromptTargetType,
 } from "../../memory-prompt/types.js";
+import { normalizeMemoryPromptMode } from "../../memory-prompt/types.js";
 import {
   buildMemoryGenerationRefId,
   type MemoryGenerationLayer,
@@ -106,6 +107,8 @@ const MEMORY_GENERATION_REF_OUTPUT_FIELDS = [
 const MEMORY_PROMPT_OUTPUT_FIELDS = [
   "id", "name", "layer", "prompt", "version", "status",
   "created_by", "updated_by", "created_at_ms", "updated_at_ms",
+  // Undeclared scalar field (no filter index needed). Absent on legacy docs → append.
+  "mode",
 ];
 const MEMORY_PROMPT_SETTING_OUTPUT_FIELDS = [
   "id", "target_type", "team_id", "agent_id", "layer",
@@ -2169,11 +2172,13 @@ export class TcvdbMemoryStore implements IMemoryStore {
   // ─────────────────────────────────────────────────────────
 
   private promptFromDoc(doc: Record<string, unknown>): MemoryPromptRecord {
+    const mode = normalizeMemoryPromptMode(doc.mode);
     return {
       memory_prompt_id: String(doc.id ?? ""),
       name: String(doc.name ?? ""),
       layer: (doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1"),
       prompt: String(doc.prompt ?? ""),
+      ...(mode ? { mode } : {}),
       version: Number(doc.version ?? 1),
       status: doc.status === "deleting" ? "deleting" : "active",
       created_by: String(doc.created_by ?? "") || undefined,
@@ -2225,6 +2230,8 @@ export class TcvdbMemoryStore implements IMemoryStore {
       updated_by: record.updated_by ?? "",
       created_at_ms: record.created_at_ms,
       updated_at_ms: record.updated_at_ms,
+      // Written only for template records: append docs stay identical to legacy docs.
+      ...(normalizeMemoryPromptMode(record.mode) ? { mode: "template" } : {}),
     };
   }
 

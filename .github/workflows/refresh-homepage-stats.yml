@@ -1,0 +1,35 @@
+name: Refresh homepage stats.json
+
+# 定时刷新官网（GitHub Pages）根目录的 stats.json，让版本号 / star / fork
+# 在两次部署之间保持较新。前端（useLiveStats）请求同域 stats.json，
+# 失败时回退构建快照，因此本任务失败不影响线上站点。
+on:
+  schedule:
+    # 每天两次：UTC 02:00（北京 10:00）、UTC 14:00（北京 22:00）
+    - cron: '0 2,14 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-homepage-stats
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/refresh-homepage-stats.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Refresh stats.json on gh-pages
+        run: node scripts/refresh-homepage-stats.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATS_REPO: TencentCloud/TencentDB-Agent-Memory
+          STATS_BRANCH: gh-pages

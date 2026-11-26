@@ -23,12 +23,13 @@
 import type { Context } from "hono";
 import { getSessionStore } from "../session/store.js";
 import type { BindingRepo } from "../db/binding-repo.js";
+import { DependencyError, dependencyStatus, upstreamFailure } from "../common/dependency-error.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
-import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
+import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey, logCoreAuthFailed } from "./bridge-telemetry.js";
 
 const TAG = "[memory-bridge]";
 
@@ -178,14 +179,11 @@ async function loadSessionIdsL2(
   sessionId: string,
 ): Promise<SessionIdFields | null> {
   if (!bindingRepo) return null;
-  try {
-    const binding = await bindingRepo.getBinding(spaceId, sessionId);
-    if (!binding) return null;
-    return bindingToIdFields(binding, spaceId, sessionId);
-  } catch (err) {
-    console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
-    return null;
-  }
+  const binding = await bindingRepo.getBinding(spaceId, sessionId, { strict: true });
+  if (!binding || binding.outcome === "bypassed") return null;
+  const ids = bindingToIdFields(binding, spaceId, sessionId);
+  if (!ids) throw new DependencyError(500, "Invalid stored session binding");
+  return ids;
 }
 
 function envelope(code: number, message: string, httpStatus = 200): Response {
@@ -323,7 +321,12 @@ export function createMemoryBridgeHandler(
     let ids = loadSessionIdsL1(sessionKey);
     if (!ids && bindingRepo && spaceId) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
-      ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey);
+      try {
+        ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey);
+      } catch (err) {
+        const status = dependencyStatus(err, err instanceof SyntaxError ? 500 : 503);
+        return envelope(status, `${TAG} session binding unavailable`, status);
+      }
     }
     if (!ids) {
       emitBridgeRejectTelemetry({
@@ -348,6 +351,7 @@ export function createMemoryBridgeHandler(
         userKey: ids.user_key ?? null,
         userId: ids.user_id,
         timeoutMs: config.tdai.memory.timeoutMs,
+        strict: true,
       });
       if (!teamMemoryEnabled) {
         emitBridgeRejectTelemetry({
@@ -358,8 +362,8 @@ export function createMemoryBridgeHandler(
         return envelope(50301, `${TAG} team memory disabled for this instance`, 503);
       }
     } catch (err) {
-      // Fail-open: a transient Core error must not block existing LLM tool calls.
-      console.warn(`${TAG} team-memory gate error (allowing through):`, err instanceof Error ? err.message : String(err));
+      const status = dependencyStatus(err, 503);
+      return envelope(status, `${TAG} team memory configuration unavailable`, status);
     }
 
     let inboundBody: Record<string, unknown> = {};
@@ -441,7 +445,7 @@ export function createMemoryBridgeHandler(
           signal: AbortSignal.timeout(Math.max(5000, config.coreSkill.timeoutMs * 4)),
         });
         status = resp.status;
-        text = await resp.text().catch(() => "");
+        text = await resp.text();
         contentType = resp.headers.get("content-type") ?? "application/json";
         return { status, text, contentType };
       } finally {
@@ -478,13 +482,23 @@ export function createMemoryBridgeHandler(
       const collected: Record<string, unknown>[] = [];
       let okCount = 0;
       for (const r of settled) {
-        if (r.status !== "fulfilled" || r.value.status < 200 || r.value.status >= 300) continue;
-        okCount++;
+        if (r.status !== "fulfilled") {
+          const status = dependencyStatus(r.reason, 503);
+          return envelope(status, `${TAG} memory search dependency failed`, status);
+        }
+        if (r.value.status < 200 || r.value.status >= 300) {
+          return new Response(r.value.text, { status: r.value.status, headers: { "content-type": r.value.contentType } });
+        }
         try {
           const env = JSON.parse(r.value.text) as {
+            code?: number;
             data?: { items?: unknown[]; messages?: unknown[] };
           };
-          const rows = (isConversationSearch ? env.data?.messages : env.data?.items) ?? [];
+          if (!env || typeof env.code !== "number") throw new DependencyError(502, "Invalid memory response");
+          if (env.code !== 0) throw upstreamFailure(env.code);
+          const rows = isConversationSearch ? env.data?.messages : env.data?.items;
+          if (!Array.isArray(rows)) throw new DependencyError(502, "Invalid memory search results");
+          okCount++;
           for (const item of rows) {
             if (!item || typeof item !== "object") continue;
             collected.push({
@@ -494,8 +508,9 @@ export function createMemoryBridgeHandler(
               source_agent_role: r.value.target.isSelf ? "self" : "imported_from",
             });
           }
-        } catch {
-          // ignore malformed upstream response from this target
+        } catch (err) {
+          const status = dependencyStatus(err);
+          return envelope(status, `${TAG} invalid memory search response`, status);
         }
       }
       collected.sort((a, b) => (typeof b.score === "number" ? b.score : 0) - (typeof a.score === "number" ? a.score : 0));
@@ -526,15 +541,18 @@ export function createMemoryBridgeHandler(
     try {
       upstream = await callUpstream(selectTargetCtx(ctxs, inboundBody.agent_id));
     } catch (err) {
-      console.warn(
-        `${TAG} upstream fetch failed sub=${sub} err=${(err as Error).message}`,
-      );
-      return envelope(50301, `${TAG} upstream unavailable: ${(err as Error).message}`, 502);
+      const status = dependencyStatus(err, 503);
+      return envelope(status, `${TAG} upstream unavailable`, status);
     }
 
     const respText = upstream.text;
     const elapsed = (deps.now ?? Date.now)() - t0;
     console.log(`${TAG} sub=${sub} status=${upstream.status} elapsed=${elapsed}ms`);
+
+    // core 拒绝（内部鉴权失败）→ 结构化 warn，透传行为不变
+    if (upstream.status === 401 || upstream.status === 403) {
+      logCoreAuthFailed({ status: upstream.status, sub, spaceId: ids.space_id });
+    }
 
     return new Response(respText, {
       status: upstream.status,

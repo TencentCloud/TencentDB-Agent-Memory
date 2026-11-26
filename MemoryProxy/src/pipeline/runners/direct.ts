@@ -21,6 +21,7 @@ import type { Context } from "hono";
 import type { ProxyConfig } from "../../types.js";
 import { writeLog } from "../../logger.js";
 import { log } from "../../report/log.js";
+import { readIncomingRequestId, safeTraceIds, withRequestId } from "../../request-id.js";
 import { buildSafeTraceRequestBody, writeRequestLog } from "../../requestLog.js";
 import { logStandaloneUpstreamError } from "../../upstream-error-log.js";
 import {
@@ -110,7 +111,7 @@ function reportUsage(
       upstreamRequestId: ctx.upstreamRequestId,
     });
   } catch (err: unknown) {
-    log.warn("direct.usage_log_failed", { error: String(err) });
+    log.warn("【P2】direct.usage_log_failed", { ...safeTraceIds(ctx), error: String(err) });
   }
   try {
     opikCreateLlmSpan(ctx.config, {
@@ -126,7 +127,7 @@ function reportUsage(
       tags: ["direct", `protocol:${ctx.protocol}`],
     });
   } catch (err: unknown) {
-    log.warn("direct.opik_span_failed", { error: String(err) });
+    log.warn("【P2】direct.opik_span_failed", { ...safeTraceIds(ctx), error: String(err) });
   }
 }
 
@@ -170,13 +171,13 @@ function consumeAnthropicStreamForObs(stream: ReadableStream<Uint8Array>, ctx: D
         }
       }
     } catch (err: unknown) {
-      log.warn("direct.stream_read_failed", { protocol: "anthropic", error: String(err) });
+      log.warn("direct.stream_read_failed", { ...safeTraceIds(ctx), protocol: "anthropic", error: String(err) });
     }
     if (Object.keys(usage).length === 0) return;
     reportUsage(ctx, usage, new Date().toISOString(), true,
       outputText ? { role: "assistant", content: outputText } : null);
   })().catch((err: unknown) => {
-    log.warn("direct.stream_consume_failed", { protocol: "anthropic", error: String(err) });
+    log.warn("direct.stream_consume_failed", { ...safeTraceIds(ctx), protocol: "anthropic", error: String(err) });
   });
 }
 
@@ -213,13 +214,13 @@ function consumeOpenAiStreamForObs(stream: ReadableStream<Uint8Array>, ctx: Dire
         }
       }
     } catch (err: unknown) {
-      log.warn("direct.stream_read_failed", { protocol: "openai", error: String(err) });
+      log.warn("direct.stream_read_failed", { ...safeTraceIds(ctx), protocol: "openai", error: String(err) });
     }
     if (!lastUsage || Object.keys(lastUsage).length === 0) return;
     reportUsage(ctx, lastUsage, new Date().toISOString(), true,
       outputText ? { role: "assistant", content: outputText } : null);
   })().catch((err: unknown) => {
-    log.warn("direct.stream_consume_failed", { protocol: "openai", error: String(err) });
+    log.warn("direct.stream_consume_failed", { ...safeTraceIds(ctx), protocol: "openai", error: String(err) });
   });
 }
 
@@ -282,7 +283,8 @@ function parseOpenAiResponse(respText: string): {
  *   - agent === null (passthrough 不绑 agent)
  */
 export async function runDirectPipeline(c: Context, config: ProxyConfig): Promise<Response> {
-  const traceId = uuidv7();
+  // 优先采纳客户端/网关带来的 x-request-id 作为 trace 主键，让上下游日志能对齐。缺失才走 uuidv7。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
   const startTime = new Date().toISOString();
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 3_600_000;
 
@@ -307,19 +309,23 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
         ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
       } as RequestInit);
     } catch (err: unknown) {
-      log.error("direct.forward_failed",
+      log.error("【P0】direct.forward_failed",
         {
           requestId: traceId,
+          traceId,
+          // fetch 失败时上游没响应过，自然为空字符串；保持字段存在以便看板 group-by。
+          upstreamRequestId: "",
           clientRequestId: c.req.header("x-request-id"),
           method,
           requestPath: c.req.path,
           upstreamUrl,
         },
         err instanceof Error ? err : new Error(String(err)));
-      return c.json({
+      c.header("x-request-id", traceId);
+      return c.json(withRequestId({
         error: "Upstream request failed",
         detail: err instanceof Error ? err.message : String(err),
-      }, 502);
+      }, traceId), 502);
     }
     log.debug("direct.forward_done", {
       requestId: traceId,
@@ -349,7 +355,10 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
     parsedBody = JSON.parse(bodyText) as Record<string, unknown>;
   } catch { /* non-JSON → 降级为纯透传 (不做观测) */ }
   const poolRejection = poolServiceRejection(config, parsedBody?.model);
-  if (poolRejection) return c.json(poolRejection, 400);
+  if (poolRejection) {
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId(poolRejection, traceId), 400);
+  }
 
   const modelId = parsedBody && typeof parsedBody.model === "string" ? parsedBody.model : "unknown";
   const messages = parsedBody && Array.isArray(parsedBody.messages) ? parsedBody.messages : [];
@@ -367,7 +376,8 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
     );
     if (wecomIdentity.kind === "rejected") return wecomIdentity.response;
     if (wecomIdentity.kind === "intercept") {
-      return c.json({ error: "企业微信名称为必填项；该路由不支持交互式填写" }, 428);
+      c.header("x-request-id", traceId);
+      return c.json(withRequestId({ error: "企业微信名称为必填项；该路由不支持交互式填写" }, traceId), 428);
     }
     projectName = wecomIdentity.name || keyId;
   }
@@ -396,9 +406,11 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
       ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
     });
   } catch (err: unknown) {
-    log.error("direct.forward_failed",
+    log.error("【P0】direct.forward_failed",
       {
         requestId: traceId,
+        traceId,
+        upstreamRequestId: "",
         clientRequestId: c.req.header("x-request-id"),
         method,
         requestPath: c.req.path,
@@ -406,10 +418,11 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
         protocol,
       },
       err instanceof Error ? err : new Error(String(err)));
-    return c.json({
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({
       error: "Upstream request failed",
       detail: err instanceof Error ? err.message : String(err),
-    }, 502);
+    }, traceId), 502);
   }
   log.debug("direct.forward_done", {
     requestId: traceId,

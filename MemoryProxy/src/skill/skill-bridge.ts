@@ -23,6 +23,7 @@ import { getSessionStore } from "../session/store.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { RedisBindingRepo } from "../db/binding-repo.js";
+import { DependencyError, dependencyStatus } from "../common/dependency-error.js";
 // getSkillExtractTrigger / KvExtractStore 已随老链路一起删除。
 // 详见 handler-glue.ts 顶部注释 —— skill_extract 触发路径当前不可用,
 // core 侧后续会出手动归档接口, 到时 agent 工具再重新指向那个接口。
@@ -32,7 +33,7 @@ import { KvVersionPinRepo } from "./kv-version-pin-repo.js";
 import { getProxyStorage } from "../storage/factory.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { ProxyConfig } from "../types.js";
-import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, emitSkillUsageTelemetry, agentSourceFromSessionKey } from "../memory/bridge-telemetry.js";
+import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, emitSkillUsageTelemetry, agentSourceFromSessionKey, logCoreAuthFailed } from "../memory/bridge-telemetry.js";
 import { getCoreSkillClient, type CoreSkillClient } from "./core-client.js";
 import { renderSkillResult } from "./selection/query.js";
 
@@ -328,14 +329,11 @@ async function loadSessionIdsL2(
   sessionId: string,
 ): Promise<SessionIdFields | null> {
   if (!bindingRepo) return null;
-  try {
-    const binding = await bindingRepo.getBinding(spaceId, sessionId);
-    if (!binding) return null;
-    return bindingToIdFields(binding, spaceId, sessionId);
-  } catch (err) {
-    console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
-    return null;
-  }
+  const binding = await bindingRepo.getBinding(spaceId, sessionId, { strict: true });
+  if (!binding || binding.outcome === "bypassed") return null;
+  const ids = bindingToIdFields(binding, spaceId, sessionId);
+  if (!ids) throw new DependencyError(500, "Invalid stored session binding");
+  return ids;
 }
 
 function envelope(code: number, message: string, httpStatus = 200) {
@@ -523,7 +521,12 @@ export function createSkillBridgeHandler(
     let ids = loadSessionIdsL1(sessionKey);
     if (!ids && bindingRepoInline && spaceId) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
-      ids = await loadSessionIdsL2(bindingRepoInline, spaceId, sessionKey);
+      try {
+        ids = await loadSessionIdsL2(bindingRepoInline, spaceId, sessionKey);
+      } catch (err) {
+        const status = dependencyStatus(err, err instanceof SyntaxError ? 500 : 503);
+        return envelope(status, `${TAG} session binding unavailable`, status);
+      }
     }
     if (!ids) {
       emitBridgeRejectTelemetry({
@@ -548,6 +551,7 @@ export function createSkillBridgeHandler(
         userKey: ids.user_key ?? null,
         userId: ids.user_id,
         timeoutMs: config.tdai.memory.timeoutMs,
+        strict: true,
       });
       if (!teamMemoryEnabled) {
         emitBridgeRejectTelemetry({
@@ -560,8 +564,8 @@ export function createSkillBridgeHandler(
         return envelope(50301, `${TAG} team memory disabled for this instance`, 503);
       }
     } catch (err) {
-      // Fail-open: a transient Core error must not block existing LLM tool calls.
-      console.warn(`${TAG} team-memory gate error (allowing through):`, err instanceof Error ? err.message : String(err));
+      const status = dependencyStatus(err, 503);
+      return envelope(status, `${TAG} team memory configuration unavailable`, status);
     }
 
     // backing.redis 之前给老链路 SkillExtractTrigger 用, 老链路已删,
@@ -836,22 +840,17 @@ export function createSkillBridgeHandler(
             pagination: { limit: 1000 },
           },
           { serviceId: ids.space_id },
-        ).then(r => r.items.map(s => s.skill_id))
-          .catch(err => {
-            console.warn(`${TAG} team search B (list) failed, treating as empty: ${(err as Error).message}`);
-            return [] as string[];
-          });
+        ).then(r => ({ ok: true as const, ids: r.items.map(s => s.skill_id) }))
+          .catch(err => ({ ok: false as const, err }));
 
-        const [aResult, bIds] = await Promise.all([promiseA, promiseB]);
+        const [aResult, bResult] = await Promise.all([promiseA, promiseB]);
 
-        if (!aResult.ok) {
-          // Fail-closed: A 挂掉不能降级到不过滤搜索。
-          console.warn(`${TAG} team search whitelist resolver (A) failed, fail-closed: ${aResult.err.message}`);
-          return new Response(
-            JSON.stringify({ code: 0, message: "ok", request_id: `bridge-${(deps.now ?? Date.now)()}`, data: { items: [] } }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
+        if (!aResult.ok || !bResult.ok) {
+          const error = !aResult.ok ? aResult.err : !bResult.ok ? bResult.err : undefined;
+          const status = dependencyStatus(error);
+          return envelope(status, `${TAG} skill visibility unavailable`, status);
         }
+        const bIds = bResult.ids;
 
         const whitelist: string[] = Array.from(new Set<string>([...aResult.ids, ...bIds]));
         console.log(
@@ -961,6 +960,11 @@ export function createSkillBridgeHandler(
     console.log(
       `${TAG} sub=${sub} status=${resp.status} elapsed=${elapsed}ms`,
     );
+
+    // core 拒绝（内部鉴权失败）→ 结构化 warn，透传行为不变
+    if (resp.status === 401 || resp.status === 403) {
+      logCoreAuthFailed({ status: resp.status, sub, spaceId: ids.space_id });
+    }
 
     // 埋点：upstream 已响应（含 4xx/5xx），记录实际状态与耗时
     const emitKey = ids.composite_key ?? sessionKey;

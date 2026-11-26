@@ -15,6 +15,16 @@ import {
 } from '../utils/wiki-upload-utils';
 import { maxBytesForFile } from '../utils/wiki-format-store';
 import {
+  INGEST_POLL_INTERVAL_MS,
+  INITIAL_INGEST_POLL_HEALTH,
+  advanceIngestPollHealth,
+  ingestPollWindowMinutes,
+  shouldReleaseTakeover,
+  TAKEOVER_MAX_HOLD_MS,
+  type IngestPollPauseReason,
+  type TakeoverRecord,
+} from '../utils/ingest-poll-policy';
+import {
   RAW_PREVIEW_ERROR_KEYS,
   type DetailTab,
   type SearchResult,
@@ -333,17 +343,166 @@ export function useWikiSources() {
   /** 本轮轮询的检查次数（每次成功轮询 +1），展示"第 N 次检查 / 已实际查询 N 次"。 */
   const [pollCount, setPollCount] = useState(0);
   /**
-   * 已提交、但新任务尚未真正开跑（还没进入 processing）的 wiki id 集合。
+   * 因预算耗尽 / 连续读取失败而**暂停**自动检查的 wiki，值为暂停原因。
    *
-   * 这是「只显示最后一次提交的状态」的关键屏蔽：提交后到新任务被 dequeue
-   * 之前，wiki 行上仍是上一个任务写下的状态（可能是 ready/failed）。若不加
-   * 屏蔽，前端会把上一个任务的终态漏给用户 —— 表现为"刚提交却显示就绪""显示
-   * 前一个任务的完成页数"等中间态。
-   *
-   * 处于该集合时：终态一律当作"加工中"展示（沿用 KS 的加工中文案与进度），
-   * 直到轮询看到该 wiki 真正进入 processing（新任务已接管）后解除。
+   * 暂停只停轮询，不改变状态展示：若此时读到的是真实终态，卡片会按终态渲染
+   * （附「重新检查」入口只是为了让用户能主动再拉一次，而不是被无限空转绑架）。
    */
-  const [pendingTakeover, setPendingTakeover] = useState<Set<string>>(new Set());
+  const [pollPause, setPollPause] = useState<Record<string, IngestPollPauseReason>>({});
+  /**
+   * `pollPause` 的镜像 ref。
+   *
+   * 为什么需要：暂停是**立即生效**的语义 —— 判定 timeout 的那一刻就必须停止
+   * 发请求。但 `setPollPause` 触发的重渲染与 effect 清理是异步的（React 批处理
+   * 下尤其明显），在这段窗口里 setInterval 仍会继续 tick。若只靠 state 过滤，
+   * 暂停后还会白白多发若干请求（实测 300 次上限却打出 307 次）。
+   * ref 在同一 tick 内即可见，保证"判停即停"。
+   */
+  const pollPauseRef = useRef<Record<string, IngestPollPauseReason>>({});
+  /**
+   * 每个 wiki 的轮询预算（ref，不触发渲染）。跨阶段 scanning→ingesting→
+   * rebuilding 保留，避免每次 internal_status 变化都重新计数。
+   */
+  const pollHealthRef = useRef<Map<string, typeof INITIAL_INGEST_POLL_HEALTH>>(new Map());
+  /**
+   * 每个 wiki 的「resume 版本号」。
+   *
+   * 场景：用户在 poll 回调已经计算出 `newlyPaused={X:'timeout'}` 但 `setPollPause`
+   * 还没 flush 的那短暂窗口里点了「重新检查」—— `resetPollBudget(X)` 会清 ref 并
+   * `setPollPause(prev=>去掉 X)`，但 poll 回调里排在队列后的 `setPollPause(prev=>
+   * {...prev, X:'timeout'})` 会把 pause 加回来。用户看到 UI 短暂暂停。
+   *
+   * 修复：resume 时版本号 +1；poll 回调在**读 attempts 之前**记录当前版本，在
+   * **写 pause 之前**对比 —— 若版本已变，则本轮 attempts 结果和 pause 判定全部
+   * 丢弃（重 arm 的意图比陈旧的预算判定优先）。
+   */
+  const pollResumeTickRef = useRef<Map<string, number>>(new Map());
+  /**
+   * 已提交、但新任务尚未被观察到的 wiki。
+   *
+   * 这是「只显示最后一次提交的状态」的屏蔽：提交后到新任务真正开跑之间，
+   * wiki 行上可能仍是上一个任务写下的状态（ready/failed）。若不加屏蔽，前端
+   * 会把上一个任务的终态漏给用户 —— 表现为"刚提交却显示就绪"。
+   *
+   * ⚠️ 历史缺陷（issue #1917）：解除条件曾经只有「轮询采样到 processing」。
+   * `processing` 是毫秒级瞬态（重复导入走 sha256 跳过 → 秒级 ready；LLM 未配置
+   * → 直接 failed），2s 采样必然错过，于是屏蔽永久残留 → 真实终态被伪装成
+   * "加工中"（失败原因看不到）+ 轮询永不停止。
+   * 现在改为 `shouldReleaseTakeover(rec, observed, now)`：processing / 读数比
+   * 提交前基线更新 / 兜底超时，任一成立即解除。
+   */
+  const [pendingTakeover, setPendingTakeover] = useState<Map<string, TakeoverRecord>>(
+    () => new Map(),
+  );
+  /**
+   * `pendingTakeover` 的镜像 ref。
+   *
+   * 轮询回调里需要**同步**判断"哪些该解除"（以便同时清掉兜底定时器），
+   * 而 state 在闭包里可能是旧值、也不便读。ref 与 state 始终同步维护。
+   */
+  const takeoverRef = useRef<Map<string, TakeoverRecord>>(new Map());
+
+  /** 统一写入口：同时更新 ref / state / 兜底定时器，避免三处各写一份。 */
+  const commitTakeover = useCallback(
+    (updater: (prev: Map<string, TakeoverRecord>) => Map<string, TakeoverRecord>) => {
+      const next = updater(takeoverRef.current);
+      if (next === takeoverRef.current) return next;
+      takeoverRef.current = next;
+      setPendingTakeover(next);
+      return next;
+    },
+    [],
+  );
+
+  /**
+   * 屏蔽的兜底解除定时器（per wiki）。
+   *
+   * 为什么需要真定时器，而不只靠渲染期判超时：一旦轮询停止（终态、或 network
+   * 暂停、或用户离开详情页），就不会再有 setState 驱动重渲染，渲染期的超时判断
+   * 永远得不到执行 —— 屏蔽又会变成"不可达退出条件"。这里在**提交时**就挂一个
+   * 定时器，到点无条件解除，保证任何路径下都不会永久屏蔽。
+   */
+  const takeoverTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  /** 解除若干 wiki 的屏蔽，并清掉各自的兜底定时器。 */
+  const releaseTakeover = useCallback(
+    (wikiIds: readonly string[]) => {
+      if (wikiIds.length === 0) return;
+      for (const id of wikiIds) {
+        const timer = takeoverTimersRef.current.get(id);
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          takeoverTimersRef.current.delete(id);
+        }
+      }
+      commitTakeover((prev) => {
+        if (!wikiIds.some((id) => prev.has(id))) return prev;
+        const next = new Map(prev);
+        for (const id of wikiIds) next.delete(id);
+        return next;
+      });
+    },
+    [commitTakeover],
+  );
+
+  /**
+   * 登记一次屏蔽，并挂上兜底定时器（到点无条件解除）。
+   *
+   * 定时器是"绝不永久屏蔽"的最终保证：即使之后轮询停止（终态 / 暂停 / 用户切走）
+   * 导致不再有重渲染，兜底时间一到 UI 也必须回到真实状态。
+   */
+  const armTakeover = useCallback(
+    (wikiId: string, baselineUpdatedAt: string) => {
+      commitTakeover((prev) => {
+        const next = new Map(prev);
+        next.set(wikiId, { baselineUpdatedAt, submittedAt: Date.now() });
+        return next;
+      });
+      const existing = takeoverTimersRef.current.get(wikiId);
+      if (existing !== undefined) clearTimeout(existing);
+      const timer = setTimeout(() => {
+        takeoverTimersRef.current.delete(wikiId);
+        commitTakeover((prev) => {
+          if (!prev.has(wikiId)) return prev;
+          const next = new Map(prev);
+          next.delete(wikiId);
+          return next;
+        });
+      }, TAKEOVER_MAX_HOLD_MS);
+      takeoverTimersRef.current.set(wikiId, timer);
+    },
+    [commitTakeover],
+  );
+
+  // 卸载时清掉所有兜底定时器（避免测试/热重载下的 timer 泄漏）
+  useEffect(() => {
+    const timers = takeoverTimersRef.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
+
+  /** 清除某 wiki 的预算与暂停标记（提交新任务 / 手动重新检查时调用）。 */
+  const resetPollBudget = useCallback((wikiId: string) => {
+    pollHealthRef.current.delete(wikiId);
+    // Bump resume 版本：挤掉 poll 回调里排在本次 reset 之后 flush 的陈旧 pause 写入。
+    pollResumeTickRef.current.set(
+      wikiId,
+      (pollResumeTickRef.current.get(wikiId) ?? 0) + 1,
+    );
+    if (wikiId in pollPauseRef.current) {
+      const next = { ...pollPauseRef.current };
+      delete next[wikiId];
+      pollPauseRef.current = next;
+    }
+    setPollPause((prev) => {
+      if (!(wikiId in prev)) return prev;
+      const next = { ...prev };
+      delete next[wikiId];
+      return next;
+    });
+  }, []);
 
   // Detail view state（Wiki 详情：图谱 / 页面 / 搜索 Tab）
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
@@ -465,70 +624,155 @@ export function useWikiSources() {
     if (hadError) tea.notify.error(t('wiki.notify.loadDetailFailed'));
   }, []);
 
-  const runningWikiKey = useMemo(
+  /**
+   * 需要轮询的 wiki 集合。
+   *
+   * 三类来源：
+   *   1. 后端真值 pending / processing；
+   *   2. pendingTakeover 中「已提交、新任务尚未被观察到」的（行上可能还是旧终态）；
+   *   3. 排除已暂停自动检查的（预算耗尽 / 连续失败）。
+   *
+   * 一旦某 wiki 变成终态且已解除屏蔽，它就会从本集合消失 → key 变化 → effect
+   * 清理定时器 → **轮询真正停止**（issue #1917 的核心诉求）。
+   */
+  const pollTargets = useMemo(
     () =>
-      sources
-        .filter((s) => s.status === 'pending' || s.status === 'processing')
+      sources.filter(
+        (s) =>
+          s.wiki_id &&
+          (s.status === 'pending' || s.status === 'processing' || pendingTakeover.has(s.wiki_id)) &&
+          !pollPause[s.wiki_id],
+      ),
+    [sources, pendingTakeover, pollPause],
+  );
+
+  /** 参与轮询的 wiki + 状态签名；只有它变化才重建定时器（避免每次 setSources 重启）。 */
+  const pollTargetsKey = useMemo(
+    () =>
+      pollTargets
         .map((s) => `${s.wiki_id}:${s.status}:${s.internal_status ?? ''}`)
         .join('|'),
-    [sources],
+    [pollTargets],
   );
 
   useEffect(() => {
-    const running = sources.filter(
-      (s) =>
-        s.wiki_id &&
-        // 除了 pending/processing，还要覆盖"已提交但新任务尚未接管"的 wiki：
-        // 它表面上是终态（上一个任务留下的），实际还有新任务在排队，必须继续
-        // 轮询才能观察到新任务真正开跑的时刻。
-        (s.status === 'pending' || s.status === 'processing' || pendingTakeover.has(s.wiki_id)),
-    );
-    if (running.length === 0) return;
+    if (pollTargets.length === 0) return;
+    // 只取 wiki_id：effect 刻意不依赖 sources 的其余字段，避免每轮 setSources
+    // 都把定时器重建一次（那会让「预算」跟着抖动，且高频抖动 clearInterval）。
+    const targetIds = pollTargets.map((s) => s.wiki_id);
     let cancelled = false;
+
     const poll = async () => {
-      const items = await Promise.all(
-        running.map(async (s) => {
+      // 暂停判定必须在**发请求之前**用 ref 读：state 要等重渲染才可见，
+      // 中间窗口会让 setInterval 继续空转（实测会超出预算若干次）。
+      const live = targetIds.filter((id) => !pollPauseRef.current[id]);
+      if (live.length === 0) return;
+
+      // 记录本轮开始时每个 wiki 的 resume 版本。后续写 health / pause 之前比对；
+      // 若用户在 await 期间点了「重新检查」，resetPollBudget 会 bump 这个 wiki
+      // 的版本，本轮关于它的 health/pause 判定作废（否则 pause 会被加回去，
+      // UI 闪回暂停态）。
+      const resumeTickAtStart = new Map(
+        live.map((id) => [id, pollResumeTickRef.current.get(id) ?? 0]),
+      );
+
+      const results = await Promise.all(
+        live.map(async (wikiId) => {
           try {
-            return await knowledgeApi.wiki.get(s.wiki_id);
+            return { ok: true as const, detail: await knowledgeApi.wiki.get(wikiId) };
           } catch {
-            return null;
+            return { ok: false as const, detail: null };
           }
         }),
       );
       if (cancelled) return;
-      const map = new Map(items.filter(Boolean).map((w) => [w!.wiki_id, w!]));
-      setSources((prev) =>
-        prev.map((s) => (map.get(s.wiki_id) ? { ...s, ...map.get(s.wiki_id)! } : s)),
-      );
-      // 新任务真正开跑（processing）→ 解除该 wiki 的屏蔽，之后就展示它的真实进度。
-      setPendingTakeover((prev) => {
-        if (prev.size === 0) return prev;
-        let changed = false;
-        const next = new Set(prev);
-        for (const w of map.values()) {
-          if (w && next.has(w.wiki_id) && w.status === 'processing') {
-            next.delete(w.wiki_id);
-            changed = true;
-          }
+
+      // ① 推进每个 wiki 的轮询预算（跨阶段保留；失败即累计，成功即清零）
+      const newlyPaused: Record<string, IngestPollPauseReason> = {};
+      live.forEach((wikiId, i) => {
+        // 本轮期间该 wiki 被 resume 过 → 跳过 health 和 pause 写入
+        // （health 已被 resetPollBudget 清零，别再写回；pause 本就该空）
+        if ((pollResumeTickRef.current.get(wikiId) ?? 0) !== resumeTickAtStart.get(wikiId)) {
+          return;
         }
-        return changed ? next : prev;
+        const health = pollHealthRef.current.get(wikiId) ?? INITIAL_INGEST_POLL_HEALTH;
+        const next = advanceIngestPollHealth(health, results[i].ok);
+        pollHealthRef.current.set(wikiId, {
+          attempts: next.attempts,
+          consecutiveFailures: next.consecutiveFailures,
+        });
+        if (next.pauseReason) newlyPaused[wikiId] = next.pauseReason;
       });
-      // 每次成功轮询递增检查计数 + 记录时间 —— 进度卡片据此展示
-      // "第 N 次检查：…"与"已实际查询 N 次，最近 HH:MM:SS"，让用户确认进度在动。
-      setPollCount((n) => n + 1);
-      setPollAt(new Date().toLocaleTimeString());
+
+      // ② 合并 KS 真值
+      const map = new Map(
+        results
+          .map((r) => r.detail)
+          .filter((d): d is WikiDetail => !!d)
+          .map((d) => [d.wiki_id, d]),
+      );
+      if (map.size > 0) {
+        setSources((prev) =>
+          prev.map((s) => (map.get(s.wiki_id) ? { ...s, ...map.get(s.wiki_id)! } : s)),
+        );
+      }
+
+      // ③ 解除屏蔽：processing / 读数比提交前基线更新 / 兜底超时，任一成立即可。
+      //    旧实现只认 processing，快速成功（sha256 跳过）与快速失败（LLM 未配置）
+      //    都会永久卡在屏蔽态 —— 那是 #1917 的根因。
+      const now = Date.now();
+      const releaseNow: string[] = [];
+      for (const [wikiId, rec] of takeoverRef.current) {
+        if (shouldReleaseTakeover(rec, map.get(wikiId) ?? null, now)) releaseNow.push(wikiId);
+      }
+      // timeout 暂停时也强制解除屏蔽（`network` 保留，见下方说明）
+      const pausedIds = Object.keys(newlyPaused);
+      const timeoutIds = pausedIds.filter((id) => newlyPaused[id] === 'timeout');
+
+      // ④ 记录暂停（停止后续轮询；展示仍按 KS 真值，不做伪装）
+      if (pausedIds.length > 0) {
+        // 先写 ref：下一个 tick 立刻生效，不等重渲染
+        pollPauseRef.current = { ...pollPauseRef.current, ...newlyPaused };
+        setPollPause((prev) => ({ ...prev, ...newlyPaused }));
+      }
+      /**
+       * timeout 暂停时强制解除屏蔽，`network` 保留：
+       * 暂停后该 wiki 被移出轮询目标集合，此后**再也观察不到它**。若继续屏蔽，
+       * UI 会永久停在"加工中"，正是 #1917 要消灭的现象；而 timeout 说明已观察
+       * 10 分钟且多数读数有效，此时展示的终态不可能是"上一个任务的残留"。
+       * `network` 相反：最后一次读数不可信，保持"加工中 + 暂停说明"更诚实。
+       * （另有一道兜底定时器，见 armTakeover。）
+       */
+      releaseTakeover([...releaseNow, ...timeoutIds]);
+
+      // ⑤ 计数与详情刷新：本轮已暂停的不再刷新「最近检查」，否则会误导用户
+      //    「自动检查还在跑」。
+      const pausedThisRound = pausedIds.length > 0;
+      if (!pausedThisRound) {
+        setPollCount((n) => n + 1);
+        setPollAt(new Date().toLocaleTimeString());
+      }
       if (selectedWikiId && map.has(selectedWikiId)) {
         const d = map.get(selectedWikiId)!;
-        if (d.status === 'ready' || d.status === 'failed') void fetchDetail(selectedWikiId);
+        if (d.status === 'ready' || d.status === 'failed') {
+          pollHealthRef.current.delete(selectedWikiId);
+          void fetchDetail(selectedWikiId);
+        }
       }
     };
+
     void poll();
-    const timer = window.setInterval(poll, 2000);
+    const timer = window.setInterval(poll, INGEST_POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [runningWikiKey, selectedWikiId, fetchDetail]);
+    // effect 只依赖 pollTargetsKey（id+status+internal_status 签名）而**不**依赖
+    // pollTargets 本身：每轮 setSources 都会产生新的数组引用，若依赖它，定时器
+    // 会被每 2 秒重建一次（预算抖动 + 节奏漂移）。key 相同说明参与轮询的成员
+    // 与状态完全一致，用旧闭包里的 targetIds 是安全的。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollTargetsKey, selectedWikiId, fetchDetail]);
 
   /**
    * 详情页进度卡片的会话阶段机（纯派生，不引入独立数据源）。
@@ -543,20 +787,42 @@ export function useWikiSources() {
     const name = wiki?.name ?? '';
     const rawStatus = wiki?.status ?? 'draft';
     /**
-     * 屏蔽"上一个任务留下的终态"：已提交但新任务尚未接管（pendingTakeover）
-     * 时，wiki 行上的 ready/failed 属于上一个任务，绝不能展示给用户。
-     * 这段时间一律按"加工中"呈现（沿用 KS 的加工中文案与档位进度），
-     * 直到新任务真正进入 processing 解除屏蔽、展示它的真实进度。
+     * 屏蔽「上一个任务留下的终态」。
+     *
+     * 判据统一收敛到 `shouldReleaseTakeover`（与轮询 effect 共用同一函数）：
+     *   - 读到 processing            → 新任务在跑，无需屏蔽；
+     *   - 读数 updated_at 比基线新   → 必产生于提交之后，不可能是旧任务；
+     *   - 超过 TAKEOVER_MAX_HOLD_MS  → 兜底解除。
+     *
+     * 在**渲染期**也算一次（而不只在轮询回调里）：若轮询压根没启动（快速终态
+     * 导致 key 未变化），这里仍能靠 updated_at / 兜底超时解除，不会永久卡住。
      */
-    const awaitingTakeover = selectedWikiId ? pendingTakeover.has(selectedWikiId) : false;
+    const takeoverRec = selectedWikiId ? pendingTakeover.get(selectedWikiId) : undefined;
+    const awaitingTakeover = !!takeoverRec &&
+      !shouldReleaseTakeover(
+        takeoverRec,
+        { status: rawStatus, updated_at: wiki?.updated_at ?? null },
+        Date.now(),
+      );
     const staleTerminal =
       awaitingTakeover && (rawStatus === 'ready' || rawStatus === 'failed');
     const status = staleTerminal ? 'processing' : rawStatus;
     // 陈旧终态不展示上一个任务的 internal_status / page_count（那属于旧任务）
     const internalStatus = staleTerminal ? null : (wiki?.internal_status ?? null);
     const pageCount = staleTerminal ? null : (wiki?.page_count ?? null);
+    /**
+     * 自动检查已暂停的原因。
+     *
+     * ⚠️ 判据必须用**展示态**（`status`，已含屏蔽），不能用 `staleTerminal`：
+     * 长任务真实处于 processing 时同样会耗尽预算，那种情况下卡片也必须说明
+     * 「已停止自动检查」，否则用户盯着不再更新的"第 N 次检查"无从判断。
+     * 真实终态（ready/failed）不展示暂停文案 —— 结论比过程重要。
+     */
+    const showingInFlight = status === 'pending' || status === 'processing';
+    const pauseReason: IngestPollPauseReason | undefined =
+      showingInFlight && selectedWikiId ? pollPause[selectedWikiId] : undefined;
 
-    const inFlight = status === 'pending' || status === 'processing';
+    const inFlight = showingInFlight;
     const isTerminal = status === 'ready' || status === 'failed';
     // 会话迁移：active → （终态）→ done。
     // 注：ready 之后进度卡片会自动收起（终态由标题栏徽章 + 页数体现），
@@ -574,13 +840,22 @@ export function useWikiSources() {
         ? t('wiki.ingest.currentPage', { count: pageCount })
         : '';
 
+    // 文案优先级：暂停说明 > 终态 > 加工中。
+    //
+    // 暂停说明放最前，是因为此时"第 N 次检查"已经不再更新，继续展示会让用户
+    // 误以为自动检查还在跑。文案必须如实说明「已停止自动检查 + 后台可能仍在
+    // 处理 + 可重新检查」，而不是宣称任务完成或失败。
+    //
     // 加工中的文案必须带"第 N 次检查"与页数提示 —— 这是用户判断"进度真的在动"
     // 的唯一依据，任何重构都不得省略 attempt / pageHint 模板参数（历史回归教训）。
-    //
-    // pending / draft 同样按正常阶段文案展示（"扫描文件"档位），不再自造
-    // "排队中，等待上一次任务让位"之类文案 —— 状态行只描述 KS 真实状态。
     let detail: string;
-    if (status === 'ready') {
+    if (pauseReason === 'timeout') {
+      detail = t('wiki.ingest.pollPaused.timeout', {
+        minutes: ingestPollWindowMinutes(),
+      });
+    } else if (pauseReason === 'network') {
+      detail = t('wiki.ingest.pollPaused.network');
+    } else if (status === 'ready') {
       detail = t('wiki.ingest.done', { count: pageCount ?? 0 });
     } else if (status === 'failed') {
       detail = wiki?.sync_error || t('wiki.ingest.failed');
@@ -594,6 +869,9 @@ export function useWikiSources() {
       session,
       /** 屏蔽后的展示状态 —— 徽章与卡片共用，保证两者永远一致。 */
       status: status as WikiDetail['status'],
+      /** true = 自动检查已暂停（卡片需展示暂停说明与「重新检查」）。 */
+      paused: !!pauseReason,
+      pauseReason,
       wikiId: selectedWikiId,
       wiki: name,
       currentFile: '',
@@ -604,7 +882,7 @@ export function useWikiSources() {
       lastCheckedAt: session === 'active' ? pollAt : '',
       log: [] as { file: string; status: 'error' | 'done'; error?: string }[],
     };
-  }, [sources, selectedWikiId, pollAt, pollCount, pendingTakeover]);
+  }, [sources, selectedWikiId, pollAt, pollCount, pendingTakeover, pollPause, t]);
 
   async function handleUnbindWiki(wikiId: string) {
     if (!agentFilter) return;
@@ -726,7 +1004,7 @@ export function useWikiSources() {
    * onBusy:'replace' 在后台完成，用户不可感知（无 confirm、无 Alert）。
    *
    * 本函数不自己轮询进度 —— 提交后立即 fetchSources 拿到新状态（KS 真值，
-   * pending/processing），由 runningWikiKey 轮询 effect 接管后续刷新。
+   * pending/processing），由 pollTargets 驱动的轮询 effect 接管后续刷新。
    */
   const submitAddAndIngest = async (params: {
     wikiId: string;
@@ -742,6 +1020,18 @@ export function useWikiSources() {
     const { wikiId, mode } = params;
     if (!wikiId) return;
 
+    /**
+     * 提交前抓该 wiki 行上的 `updated_at` 作为基线。
+     *
+     * 用途：`import-and-ingest` 在返回前 KS 已把行写成 `pending` 并刷新
+     * `updated_at`，所以轮询读到的任何「比基线新」的行都必然来自**新任务**，
+     * 可以安全解除屏蔽；而提交之前就已发出、在飞的那次 `wiki/get` 拿回的是
+     * 旧任务的读数（updated_at 不会比基线新），仍会被正确屏蔽 —— 既不会永久
+     * 卡住，也不会闪一下旧终态。
+     */
+    const baselineUpdatedAt =
+      sources.find((s) => s.wiki_id === wikiId)?.updated_at ?? '';
+
     try {
       const res = await knowledgeApi.wiki.importAndIngest({
         wiki_id: wikiId,
@@ -755,7 +1045,7 @@ export function useWikiSources() {
 
       // 复合请求已回执：无论成功与否都可能改动 raw。
       // fetchSources 拉回新状态（pending/processing）—— sources 是唯一真相源，
-      // runningWikiKey 轮询 effect 会据它自动启动 2s 轮询直到终态。
+      // pollTargets 驱动的轮询 effect 会据它自动启动 2s 轮询，直到终态或有界暂停。
       setRawRefreshKey((k) => k + 1);
       await fetchSources();
 
@@ -776,13 +1066,12 @@ export function useWikiSources() {
       setIngestCardCleared(false);
       setPollCount(0);
       setPollAt('');
-      // 屏蔽"上一个任务留下的终态"：从现在起直到新任务真正进入 processing，
-      // 该 wiki 上任何 ready/failed 都视为陈旧值、不展示给用户。
-      setPendingTakeover((prev) => {
-        const next = new Set(prev);
-        next.add(wikiId);
-        return next;
-      });
+      // 提交新任务 → 预算与暂停标记全部作废，从头计数（否则上一轮耗尽的
+      // 300 次预算会让新任务一提交就被判 timeout）。
+      resetPollBudget(wikiId);
+      // 屏蔽"上一个任务留下的终态"：记录基线 updated_at + 提交时刻，并挂上
+      // 兜底定时器（到点无条件解除）—— 解除判据见 shouldReleaseTakeover。
+      armTakeover(wikiId, baselineUpdatedAt);
 
       // 触发一次立即刷新，避免等下一拍轮询才反映新状态
       fetchDetail(wikiId);
@@ -793,6 +1082,46 @@ export function useWikiSources() {
       fetchDetail(wikiId);
     }
   };
+
+  /**
+   * 手动「重新检查」：清掉暂停标记与预算，立刻拉一次真值并恢复轮询。
+   *
+   * 与「重新抽取」的区别：本函数**不触发 ingest**，只是重新开始观察。用户的
+   * 诉求通常是"到底跑完没有"，不该被迫重启一轮 LLM 抽取（既慢又花钱）。
+   */
+  const resumeIngestPolling = useCallback(
+    (wikiId: string) => {
+      if (!wikiId) return;
+      resetPollBudget(wikiId);
+      setPollCount(0);
+      setPollAt('');
+      // 立刻拉一次，避免用户再等 2s 才看到变化
+      void knowledgeApi.wiki
+        .get(wikiId)
+        .then((detail) => {
+          setSources((prev) =>
+            prev.map((s) => (s.wiki_id === wikiId ? { ...s, ...detail } : s)),
+          );
+          // 读到终态时**不能**无条件解除屏蔽：若新任务未真正开跑（KS 的 updated_at
+          // 没刷新），这个 ready/failed 其实是上一次任务的残留 —— 直接 release
+          // 就会把陈旧终态漏给用户，正是 #1917 的原始症状。
+          // 统一走 shouldReleaseTakeover：updated_at > baseline / 兜底超时任一满足
+          // 才解除；否则保留屏蔽（渲染层仍按"加工中 + 暂停说明"展示），由后续
+          // 轮询 / 兜底定时器处理。
+          if (detail.status === 'ready' || detail.status === 'failed') {
+            const rec = takeoverRef.current.get(wikiId);
+            if (shouldReleaseTakeover(rec, detail, Date.now())) {
+              releaseTakeover([wikiId]);
+              void fetchDetail(wikiId);
+            }
+          }
+        })
+        .catch((e: unknown) => {
+          tea.notify.error((e instanceof Error ? e.message : String(e)) || t('wiki.notify.loadDetailFailed'));
+        });
+    },
+    [resetPollBudget, releaseTakeover, fetchDetail, t],
+  );
 
   const handleIngest = async (wikiId: string) => {
     if (!wikiId) return;
@@ -1274,6 +1603,8 @@ export function useWikiSources() {
     handleIngest,
     isCurrentWikiIngesting,
     submitAddAndIngest,
+    /** 手动「重新检查」：清预算并立即拉一次真值（不触发 ingest）。 */
+    resumeIngestPolling,
     handleDelete,
     openDetail,
     handleReadPage,
