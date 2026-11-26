@@ -992,17 +992,17 @@ class MemoryTencentdbProvider(MemoryProvider):
     # -- Tools ----------------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        # Optimistically return tool schemas if Gateway is configured or running.
-        # This is critical because MemoryManager.add_provider() calls
-        # get_tool_schemas() BEFORE initialize() to build the _tool_to_provider
-        # routing table. If we return [] here, tools won't be routable
-        # even after initialize() succeeds (despite _refresh_tool_registration).
-        if self._gateway_available or self._initialized:
-            return [MEMORY_SEARCH_SCHEMA, CONVERSATION_SEARCH_SCHEMA]
-        # Pre-init: check if Gateway is likely to be available
-        if os.environ.get("MEMORY_TENCENTDB_GATEWAY_CMD") or os.environ.get("MEMORY_TENCENTDB_GATEWAY_PORT"):
-            return [MEMORY_SEARCH_SCHEMA, CONVERSATION_SEARCH_SCHEMA]
-        return []
+        # ALWAYS advertise both search tools.
+        #
+        # MemoryManager.add_provider() indexes get_tool_schemas() into
+        # _tool_to_provider BEFORE initialize(). Returning [] here left the
+        # routing table empty forever (initialize_all never re-indexes), so
+        # the model saw tools via inject/system prompt but every call hit
+        # registry.dispatch -> "Unknown tool: memory_tencentdb_*".
+        #
+        # Schemas are static; Gateway health is enforced in handle_tool_call /
+        # _ensure_alive_for_request, not by hiding the tools.
+        return [MEMORY_SEARCH_SCHEMA, CONVERSATION_SEARCH_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         # Lazy probe — gives tool-call path the same self-heal opportunity
