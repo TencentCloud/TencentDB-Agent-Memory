@@ -1050,10 +1050,28 @@ export function useWikiSources() {
       await fetchSources();
 
       if (!res.ok) {
-        const msg = res.error_message || t('wiki.notify.ingestFailed');
-        tea.notify.error(msg);
+        // 外部源零页导入成功（#1795）：后端未排 ingest，展示失败摘要，不启动进度。
+        if (res.error_code === 'WIKI_SOURCE_IMPORT_FAILED') {
+          tea.notify.error({
+            title: t('wiki.notify.sourceImportFailed', { failed: res.failed?.length ?? 0 }),
+            detail: res.error_message,
+          });
+        } else {
+          const msg = res.error_message || t('wiki.notify.ingestFailed');
+          tea.notify.error(msg);
+        }
         fetchDetail(wikiId);
         return;
+      }
+
+      // 外部源部分成功：ingest 已照常排队，但需提示有页未导入。
+      if (res.failed && res.failed.length > 0) {
+        tea.notify.warning(
+          t('wiki.notify.sourceImportPartial', {
+            imported: res.imported ?? 0,
+            failed: res.failed.length,
+          }),
+        );
       }
 
       // ✅ 复合请求被接受（任务真的排上了）才显示进度卡片：

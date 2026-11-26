@@ -18,6 +18,7 @@ import { loadPanelConfig } from '../../../config/panel-config.js';
 import type {
   WikiRawWriteFile,
   WikiFileFormat,
+  WikiSourceImportResult,
 } from '../../../kernel/ports/knowledge-client-port.js';
 import { respondEnvelope } from '../../envelope.js';
 import {
@@ -417,6 +418,9 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     let rawPersisted = false;
     let writeMs = 0;
     let yieldMs = 0;
+    // external 模式：导入调用已返回（无论是否有页落盘），后续失败归为 ingest 阶段。
+    let writeCompleted = false;
+    let importSummary: SourceImportSummary | null = null;
 
     try {
       // ⓪ 无等待让位：KS 的 rawWrite/rawWriteMany 已放行 processing 状态写入
@@ -455,7 +459,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           : undefined;
 
         const w0 = Date.now();
-        await kc.wikiSourceImport({
+        const result = await kc.wikiSourceImport({
           wikiId,
           sourceUrl,
           providerId,
@@ -463,7 +467,41 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           actor: { teamId, userId: gate.userId },
         });
         writeMs = Date.now() - w0;
-        rawPersisted = true;
+        importSummary = summarizeSourceImport(result);
+        writeCompleted = true;
+        // raw_persisted 反映真实落盘情况：只有至少一页导入成功才算写入了 raw。
+        rawPersisted = importSummary.imported > 0;
+
+        // 零页导入成功且存在失败：raw 未发生任何变化，此时再触发 ingest 只会
+        // 重抽旧 raw 并向前端假报成功（#1795）。直接返回失败摘要，不排 ingest。
+        if (importSummary.imported === 0 && importSummary.failed.length > 0) {
+          const message = formatSourceImportFailure(importSummary);
+          deps.logger.warn('[wiki.import_and_ingest] failed', {
+            wiki_id: wikiId,
+            mode,
+            write_ms: writeMs,
+            yield_ms: yieldMs,
+            total_ms: Date.now() - startedAt,
+            failed_at: 'write',
+            raw_persisted: rawPersisted,
+            imported: importSummary.imported,
+            failed_count: importSummary.failed.length,
+            warning_count: importSummary.warnings.length,
+            error: message,
+          });
+          return respondEnvelope(
+            c,
+            okEnvelope(c, {
+              ok: false,
+              wiki_id: wikiId,
+              failed_at: 'write',
+              error_code: 'WIKI_SOURCE_IMPORT_FAILED',
+              error_message: message,
+              raw_persisted: rawPersisted,
+              ...importSummary,
+            }),
+          );
+        }
       }
 
       // ② 触发 ingest：onBusy='replace' 让 KS 原子完成"取消旧任务 + 排队新任务"
@@ -480,6 +518,13 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
         is_replace: task.queued === true,
         yield_ms: yieldMs,
         raw_persisted: rawPersisted,
+        ...(importSummary
+          ? {
+              imported: importSummary.imported,
+              failed_count: importSummary.failed.length,
+              warning_count: importSummary.warnings.length,
+            }
+          : {}),
       });
 
       return respondEnvelope(
@@ -490,10 +535,12 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           ingest_task_id: task.wiki_id,
           status: task.status,
           queued: task.queued === true,
+          // external 模式附带导入摘要（部分成功时前端据 failed 提示失败页数）。
+          ...(importSummary ? { raw_persisted: rawPersisted, ...importSummary } : {}),
         }),
       );
     } catch (err) {
-      const failedAt = rawPersisted ? 'ingest' : 'write';
+      const failedAt = rawPersisted || writeCompleted ? 'ingest' : 'write';
       const message = err instanceof Error ? err.message : String(err);
       deps.logger.error('[wiki.import_and_ingest] failed', {
         wiki_id: wikiId,
@@ -514,8 +561,47 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           error_code: 'IMPORT_AND_INGEST_FAILED',
           error_message: message,
           raw_persisted: rawPersisted,
+          ...(importSummary ?? {}),
         }),
       );
     }
   });
+}
+
+/** import-and-ingest 响应中携带的外部源导入摘要（snake_case，对齐 HTTP 契约风格）。 */
+interface SourceImportSummary {
+  imported: number;
+  skipped_dirs: number;
+  failed: Array<{ id: string; error: string }>;
+  warnings: string[];
+}
+
+/** 规整 KS 返回：字段缺失/类型异常时按"无"处理，避免把畸形结果当成功。 */
+function summarizeSourceImport(result: Partial<WikiSourceImportResult> | null | undefined): SourceImportSummary {
+  const failed = Array.isArray(result?.failed)
+    ? result.failed
+        .filter((f) => f && typeof f === 'object')
+        .map((f) => ({ id: String(f.id ?? ''), error: String(f.error ?? '') }))
+    : [];
+  const warnings = Array.isArray(result?.warnings)
+    ? result.warnings.filter((w): w is string => typeof w === 'string')
+    : [];
+  return {
+    imported: typeof result?.imported === 'number' && result.imported > 0 ? result.imported : 0,
+    skipped_dirs: typeof result?.skippedDirs === 'number' ? result.skippedDirs : 0,
+    failed,
+    warnings,
+  };
+}
+
+/** 可读失败摘要：列出前若干条失败页，其余以计数概括。 */
+const FAILURE_DETAIL_LIMIT = 3;
+function formatSourceImportFailure(s: SourceImportSummary): string {
+  const head = s.failed
+    .slice(0, FAILURE_DETAIL_LIMIT)
+    .map((f) => `${f.id || '(unknown)'}: ${f.error || 'unknown error'}`)
+    .join('; ');
+  const more = s.failed.length > FAILURE_DETAIL_LIMIT ? `; +${s.failed.length - FAILURE_DETAIL_LIMIT} more` : '';
+  const warn = s.warnings.length > 0 ? `; ${s.warnings.length} warning(s)` : '';
+  return `wiki source import failed: imported ${s.imported}, failed ${s.failed.length} (${head}${more})${warn}`;
 }

@@ -414,6 +414,8 @@ export const zhCN = {
   'wiki.notify.created': 'Wiki「{{name}}」已创建',
   'wiki.notify.ingestComplete': 'Wiki 抽取完成，共 {{count}} 页',
   'wiki.notify.ingestFailed': 'Wiki 抽取失败',
+  'wiki.notify.sourceImportFailed': '外部源导入失败：{{failed}} 页未导入，未触发抽取',
+  'wiki.notify.sourceImportPartial': '外部源部分导入：成功 {{imported}} 页，失败 {{failed}} 页；已对成功部分启动抽取',
   'wiki.notify.allocated': '已分配到 Agent',
   'wiki.notify.pageDeleted': '已删除页面',
   'wiki.notify.pageDeleteFailed': '删除页面失败',
