@@ -8,102 +8,108 @@
  *   看起来像"自动聚焦回默认视图，进度没了"。
  *
  * 做法：
- *   - 用 `useOutlet()` 拿到当前路由元素，首次访问时按 pathname 存进 Map；
- *   - 所有已打开的页签常驻渲染，非激活帧用 `visibility: hidden` 隐藏
- *     （不用 display:none：隐藏帧会失去布局盒，图谱/虚拟化等读尺寸的组件
- *     在切回瞬间会拿到 0×0，且每次显隐都要整子树 relayout，列表高度会跳）；
- *   - 每个帧是独立的滚动容器（见 tea-override.css 的 `._memory-page-frame`），
- *     所以隐藏/显示天然保留滚动位置；
+ *   - 用 `useOutlet()` 拿到当前路由元素，首次访问时按 PageId 存进缓存；
+ *   - 渲染顺序直接跟随 `pages`（已打开页签），常驻挂载，非激活帧用
+ *     `visibility: hidden` 隐藏 —— 不用 display:none：隐藏帧会失去布局盒，
+ *     图谱 / 虚拟化等读尺寸的组件在切回瞬间会拿到 0×0，且每次显隐都要整子树
+ *     relayout，列表高度会跳；
+ *   - 每个帧是独立滚动容器（见 tea-override.css 的 `._memory-page-frame`），
+ *     所以隐藏 / 显示天然保留滚动位置；
  *   - 关闭页签（从 `pages` 移除）即丢弃该帧，语义是"关标签 = 重置页面"；
- *   - `/guide`（使用说明）为独立页，不进入缓存，也不占用页签栏。
+ *   - `/guide`（使用说明）为独立页：不进入缓存、不占页签栏，但**不销毁**
+ *     已有帧 —— 用户看完说明点回任意页签，之前的进度仍在。
  *
  * 副作用约束：
- *   页面常驻后，隐藏页里的定时轮询会继续跑（白白消耗请求、还会干扰日志）。
- *   页面内需要用 `usePageActive()` 判断自己是否可见，并据此暂停轮询。
+ *   页面常驻后，隐藏页里的定时轮询会继续跑（白白消耗请求、还会干扰观测）。
+ *   页面内用 `usePageActive()`（lib/page-active）判断自己是否可见。
  */
-import { createContext, useContext, useRef, type ReactNode } from 'react';
+import { memo, useRef, type ReactNode } from 'react';
 import { useOutlet } from 'react-router-dom';
 import { resolveActivePage } from '@/constants/routes';
 import type { PageId } from '@/constants/menu';
-
-interface PageFrameContextValue {
-  /** 本帧对应的 pathname */
-  framePath: string;
-  /** 当前激活的 pathname */
-  activePath: string;
-}
-
-/**
- * 默认 null 而不是「空字符串」：没有 Provider（独立渲染 / 单测 / 未来其他壳层）
- * 时按「激活」处理，避免页面误以为自己在后台而整个不加载数据。
- */
-const PageFrameContext = createContext<PageFrameContextValue | null>(null);
-
-/** 当前页面是否处于激活（可见）状态。后台页面应据此暂停轮询类副作用。 */
-export function usePageActive(): boolean {
-  const ctx = useContext(PageFrameContext);
-  if (!ctx) return true;
-  return ctx.framePath === ctx.activePath;
-}
+import { PageFrameActiveContext } from '@/lib/page-active';
 
 export interface KeepAlivePagesProps {
   /** 已打开的页签（顺序即渲染顺序） */
   pages: PageId[];
   /** 当前路由 pathname */
   activePath: string;
-  /** 是否处于独立页（/guide）—— 独立页不进缓存、不常驻 */
+  /** 是否处于独立页（/guide）—— 独立页不参与缓存与页签帧 */
   isGuide?: boolean;
 }
 
+/**
+ * 单帧：memo 包裹，只有自己的 active 变化才重渲染。
+ * 帧内是重量级页面（图谱 / 大表格），切页签时不该被父级连带重渲染。
+ *
+ * 隐藏只用 `visibility: hidden`（CSS class），**不加 aria-hidden**：
+ *   - visibility:hidden 已把整棵子树移出无障碍树，无需再补 aria-hidden；
+ *   - 实测（Chrome）：给仍持有焦点的子树直接加 aria-hidden 会报
+ *     "Blocked aria-hidden on an element because its descendant retained focus"。
+ *     React 的 effect 在 DOM 变更之后才跑，事后补 blur 已经来不及 —— 所以
+ *     不要写这种"事后守卫"，让浏览器自己处理。
+ *   - 实测：visibility:hidden 生效后 activeElement 会自动回到 body，
+ *     不需要手写焦点迁移。
+ */
+const Frame = memo(function Frame({ element, active }: { element: ReactNode; active: boolean }) {
+  return (
+    <main
+      className={`_memory-page-frame${active ? ' _memory-page-frame--active' : ''}`}
+      data-frame-active={active ? 'true' : 'false'}
+    >
+      {/* 值只放布尔：页签切换时若把 pathname 塞进 context，所有常驻页面的
+          context 值都会换新引用，隐藏页也跟着重渲染。 */}
+      <PageFrameActiveContext.Provider value={active}>{element}</PageFrameActiveContext.Provider>
+    </main>
+  );
+});
+
 export function KeepAlivePages({ pages, activePath, isGuide = false }: KeepAlivePagesProps) {
   const outlet = useOutlet();
-  const cacheRef = useRef(new Map<string, ReactNode>());
+  const activePage = resolveActivePage(activePath);
 
-  // 关闭的页签直接丢帧。放在 render 期做（幂等），避免 effect 里删完不触发重渲染。
-  // 用 resolveActivePage 归一化再比对：将来若出现 /wiki/123 这类子路由，
-  // 它的 PageId 仍是 wiki，不能因为 pathname 与 PAGE_TO_PATH 不相等就误删。
-  const alivePages = new Set(pages);
+  // 元素缓存：只在首次访问该页时写入。`useOutlet()` 每次 render 都返回新的
+  // 元素对象，无条件覆盖虽不影响实例复用，但会让"只在首次写入"的语义失效。
+  // 用 ref 而非 state：`pages` / `activePath` 的变化已经驱动了重渲染（正是新增
+  // 页签那一刻），这里不需要再额外触发一次，也就不会出现"render 期 setState →
+  // 返回 null → 帧被卸载"的抖动。
+  const cacheRef = useRef(new Map<PageId, ReactNode>());
+
+  if (!isGuide && outlet != null && !cacheRef.current.has(activePage)) {
+    cacheRef.current.set(activePage, outlet);
+  }
+
+  // 关闭的页签丢帧（"关标签 = 重置"）。按 PageId 比对：/skills 与 /skills/
+  // 是同一个页面，不能因为 pathname 字面不同就当成两帧。
+  const livePages = new Set(pages);
   for (const key of [...cacheRef.current.keys()]) {
-    if (!alivePages.has(resolveActivePage(key))) cacheRef.current.delete(key);
+    if (!livePages.has(key)) cacheRef.current.delete(key);
   }
 
-  if (isGuide) {
-    return (
-      <div className="_memory-frames">
-        <main className="_memory-page-frame _memory-page-frame--active" data-frame-active="true">
-          <PageFrameContext.Provider value={{ framePath: activePath, activePath }}>
-            {outlet}
-          </PageFrameContext.Provider>
-        </main>
-      </div>
-    );
-  }
-
-  // 首次访问该 path 才写入。`useOutlet()` 每次 render 都返回新的元素对象，
-  // 若无条件覆盖，缓存里的元素会被换成"新的" —— 虽然 React 仍按 key 复用
-  // 组件实例，但会让"只在首次写入"的语义失效，也更容易在后续重构中误伤。
-  if (!cacheRef.current.has(activePath)) {
-    cacheRef.current.set(activePath, outlet);
-  }
+  // ConsoleLayout 是「先用 effect 把新页 append 进 openPages」，所以新页的首帧
+  // pages 里还没有它。这里补一下，避免首帧闪白（下一帧 pages 就到了）。
+  const renderOrder: PageId[] =
+    !isGuide && activePage && !pages.includes(activePage) ? [...pages, activePage] : pages;
 
   return (
     <div className="_memory-frames">
-      {[...cacheRef.current.entries()].map(([path, element]) => {
-        const active = path === activePath;
+      {renderOrder.map((page) => {
+        const element = cacheRef.current.get(page);
+        if (element == null) return null;
         return (
-          <main
-            key={path}
-            className={`_memory-page-frame${active ? ' _memory-page-frame--active' : ''}`}
-            data-frame-active={active ? 'true' : 'false'}
-            // 隐藏帧对辅助技术不可见（visibility:hidden 已移出 tab 焦点顺序，这里补语义）
-            aria-hidden={active ? undefined : true}
-          >
-            <PageFrameContext.Provider value={{ framePath: path, activePath }}>
-              {element}
-            </PageFrameContext.Provider>
-          </main>
+          <Frame
+            key={page}
+            element={element}
+            // /guide 时把所有页签帧都标为非激活（隐藏但不销毁），回来后恢复
+            active={!isGuide && page === activePage}
+          />
         );
       })}
+      {isGuide && (
+        <main className="_memory-page-frame _memory-page-frame--active" data-frame-active="true">
+          <PageFrameActiveContext.Provider value={true}>{outlet}</PageFrameActiveContext.Provider>
+        </main>
+      )}
     </div>
   );
 }

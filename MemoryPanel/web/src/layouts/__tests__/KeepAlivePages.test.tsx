@@ -2,17 +2,19 @@
  * KeepAlivePages 用例。
  *
  * 覆盖需求「面板各标签页交替切换保留进度」的核心契约：
- *   1. 切走再切回，页面内状态（输入值 / 滚动位置等 useState 的代理）不丢；
- *   2. 非激活帧被标记为 data-frame-active="false" + aria-hidden；
+ *   1. 切走再切回，页面内状态（输入值，代表一切 useState）不丢；
+ *   2. 非激活帧被标记为 data-frame-active="false"（visibility 由 CSS 负责隐藏）；
  *   3. 关闭页签后重新打开，状态归零（关标签 = 重置页面）；
- *   4. /guide 独立页不进缓存，也不污染页签帧；
+ *   4. /guide 独立页不占页签帧，但也不销毁已缓存的帧；
  *   5. usePageActive() 能准确反映可见性（后台轮询据此暂停）。
  */
 import { useEffect, useState } from 'react';
 import { createMemoryRouter, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
 import { render, screen, act } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { KeepAlivePages, usePageActive } from '@/layouts/KeepAlivePages';
+import { KeepAlivePages } from '@/layouts/KeepAlivePages';
+import { usePageActive } from '@/lib/page-active';
+import { resolveActivePage } from '@/constants/routes';
 import type { PageId } from '@/constants/menu';
 
 /** 被测页面：一个受控输入 + 可见性展示，用来观测 remount 是否会丢状态。 */
@@ -37,16 +39,15 @@ function TestShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const isGuide = location.pathname === '/guide';
-  const [pages, setPages] = useState<PageId[]>(() =>
-    isGuide ? [] : [location.pathname === '/code' ? 'code' : 'wiki'],
-  );
+  const activePage = resolveActivePage(location.pathname);
 
-  // 与 ConsoleLayout 的 activePage effect 同构
+  // 与 ConsoleLayout 同构：首次进入时 openPages 初始化为当前页，
+  // 之后由 effect 追加。
+  const [pages, setPages] = useState<PageId[]>(() => (isGuide ? [] : [activePage]));
   useEffect(() => {
     if (isGuide) return;
-    const id: PageId = location.pathname === '/code' ? 'code' : 'wiki';
-    setPages((prev) => (prev.includes(id) ? prev : [...prev, id]));
-  }, [location.pathname, isGuide]);
+    setPages((prev) => (prev.includes(activePage) ? prev : [...prev, activePage]));
+  }, [activePage, isGuide]);
 
   return (
     <div>
@@ -94,41 +95,36 @@ function frameOf(label: string): HTMLElement {
   return el as HTMLElement;
 }
 
+/** 往受控 input 里写值（绕过 userEvent 的事件序列开销）。 */
+async function typeInto(label: string, text: string) {
+  const input = screen.getByLabelText(label) as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+  await act(async () => {
+    setter?.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 describe('KeepAlivePages', () => {
   it('切走再切回时保留页面内状态', async () => {
-    const { container } = renderShell('/wiki');
-    const input = screen.getByLabelText('wiki-input') as HTMLInputElement;
-
-    await act(async () => {
-      input.focus();
-      // 直接派发 input 事件走受控组件路径
-      const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        'value',
-      )?.set;
-      setter?.call(input, 'draft-text');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    renderShell('/wiki');
+    await typeInto('wiki-input', 'draft-text');
     expect((screen.getByLabelText('wiki-input') as HTMLInputElement).value).toBe('draft-text');
 
-    // 切到 code
     await act(async () => {
       screen.getByText('go-code').click();
     });
-    // 再切回 wiki
     await act(async () => {
       screen.getByText('go-wiki').click();
     });
 
-    // 状态未丢（若被 remount 过，value 会回到空串）
+    // 未丢（若被 remount 过，value 会回到空串）
     expect((screen.getByLabelText('wiki-input') as HTMLInputElement).value).toBe('draft-text');
-    expect(container.querySelectorAll('main').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('非激活帧带 data-frame-active="false" 且 aria-hidden', async () => {
+  it('非激活帧带 data-frame-active="false"', async () => {
     renderShell('/wiki');
     expect(frameOf('wiki').getAttribute('data-frame-active')).toBe('true');
-    expect(frameOf('wiki').getAttribute('aria-hidden')).toBeNull();
 
     await act(async () => {
       screen.getByText('go-code').click();
@@ -136,54 +132,47 @@ describe('KeepAlivePages', () => {
 
     expect(frameOf('code').getAttribute('data-frame-active')).toBe('true');
     expect(frameOf('wiki').getAttribute('data-frame-active')).toBe('false');
-    expect(frameOf('wiki').getAttribute('aria-hidden')).toBe('true');
   });
 
   it('关闭页签后重新打开，状态归零', async () => {
     renderShell('/wiki');
-    const input = screen.getByLabelText('wiki-input') as HTMLInputElement;
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        'value',
-      )?.set;
-      setter?.call(input, 'typed');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await typeInto('wiki-input', 'typed');
     expect((screen.getByLabelText('wiki-input') as HTMLInputElement).value).toBe('typed');
 
-    // 先切走，再关闭 wiki 页签
+    // 先切走（否则关掉当前页签没有落点），再关闭 wiki 页签
     await act(async () => {
       screen.getByText('go-code').click();
     });
     await act(async () => {
       screen.getByText('close-wiki').click();
     });
+    expect(screen.queryByLabelText('wiki-input')).toBeNull();
+
     // 重新打开
     await act(async () => {
       screen.getByText('go-wiki').click();
     });
-
     expect((screen.getByLabelText('wiki-input') as HTMLInputElement).value).toBe('');
   });
 
-  it('/guide 独立页不进页签帧，也不影响既有帧', async () => {
+  it('/guide 不占页签帧，但保留已缓存帧', async () => {
     renderShell('/wiki');
+    await typeInto('wiki-input', 'keep-me');
+
     await act(async () => {
       screen.getByText('go-guide').click();
     });
 
     expect(screen.getByText('guide content')).toBeInTheDocument();
-    // 独立页只有一个 main，且是激活态
-    const frames = document.querySelectorAll('main');
-    expect(frames).toHaveLength(1);
-    expect(frames[0].getAttribute('data-frame-active')).toBe('true');
+    // 已缓存的 wiki 帧仍在 DOM（隐藏），只是被标为非激活
+    expect(frameOf('wiki').getAttribute('data-frame-active')).toBe('false');
 
-    // 从 guide 返回 wiki，原帧仍在
+    // 从 guide 返回 wiki，进度仍在
     await act(async () => {
       screen.getByText('go-wiki').click();
     });
-    expect(screen.getByLabelText('wiki-input')).toBeInTheDocument();
+    expect((screen.getByLabelText('wiki-input') as HTMLInputElement).value).toBe('keep-me');
+    expect(frameOf('wiki').getAttribute('data-frame-active')).toBe('true');
   });
 
   it('usePageActive 在隐藏帧内返回 false', async () => {
