@@ -5,6 +5,8 @@ description: "memory-tencentdb four-layer memory — L0 conversation recording, 
 hooks:
   - on_memory_write
   - on_session_end
+  - on_pre_compress
+  - on_session_switch
 # Legacy provider name — kept so that users whose config still says
 # `memory.provider: tdai` continue to resolve to this provider.
 aliases:
