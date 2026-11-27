@@ -92,6 +92,11 @@ export async function initLangfuse(config: ProxyConfig): Promise<boolean> {
   }
 }
 
+/** 上报是否已启用；未启用时 turn traceId 在 Langfuse 上不存在。 */
+export function isLangfuseEnabled(): boolean {
+  return _enabled;
+}
+
 /**
  * 优雅关闭 Langfuse 上报，确保所有待发送 span 已 flush。
  */

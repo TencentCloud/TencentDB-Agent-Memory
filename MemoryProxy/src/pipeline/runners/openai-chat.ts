@@ -3,6 +3,7 @@
 import type { Context } from "hono";
 import { createHash } from "node:crypto";
 import { writeLog, createPipeline } from "../../logger.js";
+import { readIncomingRequestId, withRequestId } from "../../request-id.js";
 import { applyMainModel } from "../../mainModel.js";
 import { applyPoolService, poolRouteReason } from "../../pool-service.js";
 import {
@@ -37,7 +38,7 @@ import { prepareUpstreamRequest, notifyUpstreamResponse } from "../../request-pr
 import {
   createCfqStripStream,
   createCfqStripObserver,
-  stripCfqFromResponseText,
+  settleAndStripCfqFromResponseText,
 } from "../../common/cfq-strip.js";
 import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "../../credit-reporter.js";
@@ -78,7 +79,7 @@ import { stageInstanceUpstreamEarly } from "../stages/instance-upstream-early.js
 import { stageInstanceUpstreamOverride } from "../stages/instance-upstream-override.js";
 import { stageResolveTargetFull } from "../stages/resolve-target-full.js";
 import { stageResolveUserId } from "../stages/resolve-user-id.js";
-import { stageForwardWithRetry } from "../stages/forward-with-retry.js";
+import { stageForwardWithRetry, type ForwardWithRetryResult } from "../stages/forward-with-retry.js";
 import {
   prependNoticeToOpenAIStream,
   prependNoticeToOpenAIJson,
@@ -95,12 +96,14 @@ import { trackWrite, withL0Retry } from "../../tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "../../tdai/types.js";
 import {
   OpenAIChatAssembler,
-  buildSessionTurnContext,
-  createSessionTurnSeed,
-  openaiReplyFromJson,
+  buildSessionCallContext,
+  createSessionCallSeed,
+  sessionTraceDir,
   parseSseData,
-  submitSessionTurn,
-  type SessionTurnContext,
+  responseFromText,
+  submitSessionCall,
+  teeErrorBodyToSessionCall,
+  type SessionCallContext,
 } from "../../session-trace/index.js";
 import { triggerSkillExtractIfReady } from "../../skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "../../session/model-intent-telemetry.js";
@@ -341,7 +344,7 @@ async function forwardWithRetry(
   forwardTimeoutMs: number,
   sessionKeyForDebug?: string,
   rateLimitContext?: { config: ProxyConfig; instanceId?: string },
-): Promise<{ resp: Response; retried: boolean }> {
+): Promise<ForwardWithRetryResult> {
   // ── Optional full-body dump (dev only) ── PROXY_DEBUG_DUMP_BODY=/tmp/xxx
   if (process.env.PROXY_DEBUG_DUMP_BODY) {
     try {
@@ -391,7 +394,8 @@ export async function runOpenaiChatPipeline(
 ): Promise<Response> {
   const startTime = new Date().toISOString();
   const requestStartMono = performance.now();
-  const traceId = uuidv7();
+  // 客户端/网关 x-request-id 作为 trace 主键，缺失才走 uuidv7。see request-id.ts。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
 
   // ── Early auth (via shared stageAuth) ────────────────────────────────────
   // Verify BEFORE parsing the body so a rejected caller never triggers body
@@ -403,7 +407,8 @@ export async function runOpenaiChatPipeline(
   const earlySpaceId = earlyAuth.spaceId;
   const earlyVerify = { userId: earlyAuth.userId, rejected: earlyAuth.rejected, rejectReason: earlyAuth.rejectReason };
   if (earlyAuth.rejected) {
-    return c.json({ error: `Authentication failed: ${earlyAuth.rejectReason ?? "unknown"}` }, 401);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: `Authentication failed: ${earlyAuth.rejectReason ?? "unknown"}` }, traceId), earlyAuth.failureStatus ?? 401);
   }
 
   // ── Parse body ──────────────────────────────────────────────────────────
@@ -414,7 +419,8 @@ export async function runOpenaiChatPipeline(
   // Parse via shared stage (also handles PROXY_DEBUG_DUMP_INBOUND dev-only dump)
   const parseResult = await stageParseBody(c);
   if (!parseResult.ok) {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Invalid JSON body" }, traceId), 400);
   }
   // eslint-disable-next-line prefer-const
   let body = parseResult.body;
@@ -555,7 +561,8 @@ export async function runOpenaiChatPipeline(
   } else if (_gates.modelGate) {
     const gateResult = stageModelGate(requestedModel, config, _isCustomUpstream);
     if (!gateResult.ok) {
-      return c.json(buildUnregisteredModelErrorBody(requestedModel), 400);
+      c.header("x-request-id", traceId);
+      return c.json(withRequestId(buildUnregisteredModelErrorBody(requestedModel), traceId), 400);
     }
     modelId = gateResult.modelId;
     const modelAliasApplied = gateResult.aliasApplied && typeof body.model === "string";
@@ -634,9 +641,14 @@ export async function runOpenaiChatPipeline(
   }
 
   // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("../../session/session-key.js");
-  const conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  const { resolveConversationId, resolveSessionKeyFallback } = await import("../../session/session-key.js");
+  const conversationId = resolveConversationId(c, body);
+  const profileSessionId = resolveSessionKey(config, lcHeaders, c.req.path, body, "");
+  const sessionKey = resolveSessionKeyFallback(
+    conversationId ?? profileSessionId,
+    keyId,
+    { protocol: "openai", agentSource },
+  );
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -669,7 +681,7 @@ export async function runOpenaiChatPipeline(
     console.log(`[request-classify] session=${sessionKey} agent=${agentSource} → ${_reason} (skip session-init/mem/injection/L0/skill)`);
   }
 
-  const sessionTurnSeed = createSessionTurnSeed(config, {
+  const sessionCallSeed = createSessionCallSeed(config, {
     agent: agentSource,
     path: c.req.path,
     protocol: "openai",
@@ -1194,6 +1206,7 @@ export async function runOpenaiChatPipeline(
   // place, so it has to land after every host-side mutation (injection, agent
   // overrides) and before the upstream body is assembled below. The host does
   // not interpret the returned stats — see request-prepare-adapter.ts.
+  let compressionObservations: Record<string, unknown>[] | undefined;
   const preparedStats = await prepareUpstreamRequest({
     config,
     protocol: "openai",
@@ -1213,17 +1226,21 @@ export async function runOpenaiChatPipeline(
     lf,
     opikTraceId: traceId,
     opikKeyId: wecomName || keyId,
+    sessionTraceDir: sessionTraceDir(config, sessionCallSeed, { spaceId, sessionInfo, authUserId: userId }),
+    ...(sessionCallSeed ? { onCompressionObservations: (o: Record<string, unknown>[]) => { compressionObservations = o; } } : {}),
     skipPrepare: costGuardMode === "cheap" || target.skipPrepare === true,
   });
 
   const upstreamBody = buildUpstreamBody(body, target);
   traceRequestBody = buildSafeTraceRequestBody(upstreamBody);
   writeRequestLog(config, upstreamBody, traceId, c.req.header("x-request-id"));
-  const sessionTurnCtx = buildSessionTurnContext(config, sessionTurnSeed, {
+  const sessionCallCtx = buildSessionCallContext(config, sessionCallSeed, {
     spaceId,
     sessionInfo,
     authUserId: userId,
-    upstreamBody,
+    request: upstreamBody,
+    traceId,
+    compressionObservations,
   });
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
@@ -1277,11 +1294,13 @@ export async function runOpenaiChatPipeline(
     );
     upstreamResp = result.resp;
     retried = result.retried;
+    if (sessionCallCtx) sessionCallCtx.request = result.sentBody;
   } catch (err: unknown) {
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
       return err.response;
     }
+    const statusMessage = err instanceof Error ? err.message : "Upstream request failed";
     langfuseReportFailure({
       lf,
       requestId: traceId,
@@ -1289,11 +1308,13 @@ export async function runOpenaiChatPipeline(
       startTime,
       endTime: new Date().toISOString(),
       input: traceRequestBody,
-      statusMessage: err instanceof Error ? err.message : "Upstream request failed",
+      statusMessage,
       extraTags: ["error"],
       observationMetadata: { stage: "forward", ...debugMetadata },
     });
-    return c.json({ error: "Upstream request failed" }, 502);
+    submitSessionCall(sessionCallCtx, { status: 0, response: { error: statusMessage }, model: target.model });
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Upstream request failed" }, traceId), 502);
   }
 
   // Build response headers (strip hop-by-hop) — via shared filterResponseHeaders
@@ -1325,6 +1346,7 @@ export async function runOpenaiChatPipeline(
   // ── Streaming response ───────────────────────────────────────────────────
   if (isStream) {
     if (!upstreamResp.body) {
+      submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: "", model: effectiveModel, upstreamRequestId });
       pipe.streamDone(null);
       return new Response(null, { status: upstreamResp.status, headers: respHeaders });
     }
@@ -1333,6 +1355,7 @@ export async function runOpenaiChatPipeline(
     if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
       const [errBodyStream, clientPassStream] = upstreamResp.body.tee();
       const errText = await new Response(errBodyStream).text();
+      submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: responseFromText(errText), model: effectiveModel, upstreamRequestId });
       writeLog(config, {
         timestamp: new Date().toISOString(),
         event: "usage",
@@ -1401,11 +1424,15 @@ export async function runOpenaiChatPipeline(
       skipCreditReport,
       isCustomUpstream: _isCustomUpstream,
       gates: _gates,
-      sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
+      sessionCallCtx: upstreamResp.ok ? sessionCallCtx : null,
+      upstreamStatus: upstreamResp.status,
     };
     const passthrough = createUsageTapTransform(tapCtx);
+    const upstreamStream = upstreamResp.ok
+      ? upstreamResp.body
+      : teeErrorBodyToSessionCall(sessionCallCtx, upstreamResp.body, { status: upstreamResp.status, model: effectiveModel, upstreamRequestId });
     // 顺序要紧：tap 在前，读到的是模型原始输出；剥离在后，只影响客户端那一份。
-    const observedStream = withStreamIdleWarning(upstreamResp.body, {
+    const observedStream = withStreamIdleWarning(upstreamStream, {
       spaceId,
       traceId,
       requestId: traceId,
@@ -1437,6 +1464,12 @@ export async function runOpenaiChatPipeline(
   // ── Non-streaming response ───────────────────────────────────────────────
   const respText = await upstreamResp.text();
   const endTime = new Date().toISOString();
+  submitSessionCall(sessionCallCtx, {
+    status: upstreamResp.status,
+    response: responseFromText(respText),
+    model: effectiveModel || requestedModel,
+    upstreamRequestId,
+  });
 
   let usage: Record<string, unknown> | null = null;
   let assistantMessage: Record<string, unknown> | null = null;
@@ -1451,9 +1484,6 @@ export async function runOpenaiChatPipeline(
       if (msg && typeof msg === "object") {
         assistantMessage = msg as Record<string, unknown>;
       }
-    }
-    if (upstreamResp.ok) {
-      submitSessionTurn(sessionTurnCtx, openaiReplyFromJson(respJson), effectiveModel || requestedModel);
     }
   } catch {
     // non-JSON upstream response
@@ -1696,7 +1726,8 @@ export async function runOpenaiChatPipeline(
   pipe.responseDone(usage);
 
   // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-  const clientRespText = stripCfqFromResponseText(
+  // 先结算本轮 CFQ 再返回：客户端拿到响应才会发下一轮，下一轮因此一定读得到。
+  const clientRespText = await settleAndStripCfqFromResponseText(
     "openai",
     respText,
     preparedStats,
@@ -1797,7 +1828,8 @@ interface TapContext {
   /** stageGates — 决定 stream 尾部各 stage 是否触发 */
   gates?: import("../strategies/agent/types.js").StageGates;
   /** Online session trace for this call; null when it is not recorded. */
-  sessionTurnCtx: SessionTurnContext | null;
+  sessionCallCtx: SessionCallContext | null;
+  upstreamStatus: number;
 }
 
 /** Accumulated tool call state during SSE streaming. */
@@ -1884,7 +1916,14 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
   let lastUsage: Record<string, unknown> | null = null;
   let assistantContent = "";
   const toolCallAccumulators = new Map<number, ToolCallAccumulator>();
-  const replyAssembler = ctx.sessionTurnCtx ? new OpenAIChatAssembler() : null;
+  const replyAssembler = ctx.sessionCallCtx ? new OpenAIChatAssembler() : null;
+  let sessionCallSubmitted = false;
+
+  function submitSessionRecord(): void {
+    if (!replyAssembler || sessionCallSubmitted) return;
+    sessionCallSubmitted = true;
+    submitSessionCall(ctx.sessionCallCtx, { status: ctx.upstreamStatus, response: replyAssembler.result(), model: modelId, upstreamRequestId: ctx.upstreamRequestId });
+  }
 
   function processSseChunk(chunk: string): void {
     sseBuf += chunk;
@@ -1910,7 +1949,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       if (replyAssembler) parseSseData(sseBuf).forEach((evt) => replyAssembler.push(evt));
     }
 
-    if (replyAssembler) submitSessionTurn(ctx.sessionTurnCtx, replyAssembler.result(), modelId);
+    submitSessionRecord();
 
     const endTime = new Date().toISOString();
 
@@ -2093,7 +2132,9 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     pipe.streamDone(lastUsage);
   }
 
-  return new TransformStream<Uint8Array, Uint8Array>({
+  // `cancel` is part of the Streams spec and implemented by Node 22, but not yet
+  // declared in the bundled `Transformer` type.
+  const transformer: Transformer<Uint8Array, Uint8Array> & { cancel?: (reason: unknown) => void } = {
     transform(chunk, controller) {
       controller.enqueue(chunk);
       try {
@@ -2109,5 +2150,15 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         pipe.error("STREAM_FINALIZE", err);
       }
     },
-  });
+    // A client disconnect or an upstream stream error skips flush(); the
+    // session record still keeps the part of the reply that arrived.
+    cancel() {
+      try {
+        submitSessionRecord();
+      } catch (err: unknown) {
+        pipe.error("STREAM_CANCEL", err);
+      }
+    },
+  };
+  return new TransformStream<Uint8Array, Uint8Array>(transformer);
 }

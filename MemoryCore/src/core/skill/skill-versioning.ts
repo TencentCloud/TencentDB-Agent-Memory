@@ -188,7 +188,7 @@ export class SkillVersioning {
           await this.deleteSkill(skillId, ctx.team_id, { reportVdbDelta: false });
         } catch (rollbackErr) {
           this.logger?.error(
-            `[skill-tx] rollback deleteSkill failed for ${skillId} (team=${ctx.team_id ?? "-"}): ` +
+            `【P2】[skill-tx] rollback deleteSkill failed for ${skillId} (team=${ctx.team_id ?? "-"}): ` +
               (rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)),
           );
         }
@@ -363,7 +363,7 @@ export class SkillVersioning {
       try {
         await this.storage.rmdir(v.storage_dir);
       } catch {
-        this.logger?.warn(`[skill-delete] storage rmdir failed for ${v.storage_dir}`);
+        this.logger?.warn(`【P2】[skill-delete] storage rmdir failed for ${v.storage_dir}`);
       }
     }
 
@@ -474,7 +474,7 @@ export class SkillVersioning {
       try {
         await this.storage.rmdir(v.storage_dir);
       } catch {
-        this.logger?.warn(`[skill-ttl] storage rmdir failed for ${v.storage_dir}`);
+        this.logger?.warn(`【P2】[skill-ttl] storage rmdir failed for ${v.storage_dir}`);
       }
     }
   }

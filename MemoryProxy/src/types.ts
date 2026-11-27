@@ -327,7 +327,7 @@ export interface TdaiConfig {
   };
   /** Online session trace uploads to `/v3/session/add`. */
   sessionTrace?: {
-    /** Byte budget for in-flight uploads; turns beyond it are dropped. Default 1 GiB. */
+    /** Byte budget for in-flight uploads; records beyond it are dropped. Default 1 GiB. */
     maxQueuedBytes?: number;
   };
 }
@@ -565,6 +565,16 @@ export interface ProxyConfig {
     port: number; // default: 8096
     /** Upstream forward timeout in ms. 0 = no timeout. Default: 3_600_000 (1 hour). */
     forwardTimeoutMs?: number;
+    /**
+     * Max gap between response-body bytes from any upstream (undici `bodyTimeout`).
+     * 0 = no limit. Default: 1_800_000 (30 min). Applied at startup only.
+     */
+    upstreamBodyTimeoutMs?: number;
+    /**
+     * Max wait for upstream response headers (undici `headersTimeout`).
+     * 0 = no limit. Default: 600_000 (10 min). Applied at startup only.
+     */
+    upstreamHeadersTimeoutMs?: number;
   };
   upstream: {
     url: string; // OpenAI-compatible upstream URL
@@ -608,6 +618,11 @@ export interface ProxyConfig {
     flushThreshold: number;  // Buffer flush threshold in rows
     /** Data retention TTL in days. 0 = no TTL. Default: 0. */
     ttlDays: number;
+    /**
+     * ClickHouse 集群名。非空时 compress_filter_logs 用 `ON CLUSTER` +
+     * `ReplicatedMergeTree()` 建表（线上副本模式）；空串用普通 MergeTree（本机单节点）。
+     */
+    cluster?: string;
   };
   /** Optional API-key-hash → 企业微信名称 attribution gate. */
   wecomIdentity?: WecomIdentityConfig;
@@ -955,6 +970,8 @@ export interface RawYamlConfig {
     host?: string;
     port?: number;
     forwardTimeoutMs?: number;
+    upstreamBodyTimeoutMs?: number;
+    upstreamHeadersTimeoutMs?: number;
   };
   upstream?: {
     url?: string;
@@ -1031,6 +1048,7 @@ export interface RawYamlConfig {
     flushIntervalMs?: number;
     flushThreshold?: number;
     ttlDays?: number;
+    cluster?: string;
   };
   wecomIdentity?: {
     enabled?: boolean;

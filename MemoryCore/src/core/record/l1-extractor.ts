@@ -13,9 +13,9 @@
  */
 
 import type { ConversationMessage } from "../conversation/l0-recorder.js";
-import { formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryPromptMode } from "../prompts/l1-extraction.js";
+import { applyL1Template, formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryPromptMode } from "../prompts/l1-extraction.js";
 import { batchDedup } from "./l1-dedup.js";
-import { writeMemory, generateMemoryId } from "./l1-writer.js";
+import { writeMemory, generateMemoryId, resolveMemoryEventTime } from "./l1-writer.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse, shouldExtractL1 } from "../../utils/sanitize.js";
@@ -28,7 +28,7 @@ import type { LLMRunner, Logger, TraceContext } from "../types.js";
 import { buildTraceParams } from "../types.js";
 import { StorageAdapter } from "../storage/adapter.js";
 import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
-import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
+import { composeMemorySystemPrompt, resolveTemplateContext } from "../memory-prompt/composer.js";
 import { LocalStorageBackend } from "../storage/local-backend.js";
 import {
   buildGenerationLogIdentity,
@@ -181,7 +181,9 @@ export async function extractL1Memories(params: {
     ? qualifiedMessages.slice(Math.max(0, bgEndIdx - maxBgMessages), bgEndIdx)
     : [];
 
-  logger?.debug?.(`${TAG} Extracting from ${newMessages.length} new messages (+ ${backgroundMessages.length} background) [${qualifiedMessages.length} qualified from ${messages.length} input]`);
+  logger?.info(
+    `${TAG} extract start: sessionKey=${sessionKey} new=${newMessages.length} background=${backgroundMessages.length} qualified=${qualifiedMessages.length} input=${messages.length}`,
+  );
 
   // Step 1: LLM extraction (scene segmentation + memory extraction)
   //
@@ -204,14 +206,15 @@ export async function extractL1Memories(params: {
       memoryPrompt: options.memoryPrompt,
       traceContext: { teamId, userId, agentId, sessionId },
       llmRunner: options.llmRunner,
+      instanceId: metricInstanceId,
     });
     scenes = outcome.scenes;
     earlyEmptyReason = outcome.emptyReason;
     logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
   } catch (err) {
-    logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+    logger?.error(`【P1】${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
     logger?.warn?.(
-      `${TAG} l1-empty reason=llm_error sessionKey=${sessionKey} msg=${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`,
+      `【P1】${TAG} l1-empty reason=llm_error sessionKey=${sessionKey} msg=${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`,
     );
     return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
   }
@@ -219,6 +222,11 @@ export async function extractL1Memories(params: {
   // Flatten all memories across scenes
   const allExtracted: ExtractedMemory[] = [];
   const sceneNames: string[] = [];
+  // 消息 ID → 对话发生时间。仅用本轮的新消息（背景消息已在之前的批次产出过记忆）。
+  const messageTime = new Map<string, number>();
+  for (const m of newMessages) {
+    if (m.id && typeof m.timestamp === "number") messageTime.set(m.id, m.timestamp);
+  }
 
   for (const scene of scenes) {
     sceneNames.push(scene.scene_name);
@@ -228,13 +236,15 @@ export async function extractL1Memories(params: {
         logger?.warn?.(`${TAG} Skipping memory with invalid type "${mem.type}"`);
         continue;
       }
+      const sourceIds = Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [];
       allExtracted.push({
         content: mem.content,
         type: memType,
         priority: typeof mem.priority === "number" ? mem.priority : 50,
-        source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
+        source_message_ids: sourceIds,
         metadata: mem.metadata ?? {},
         scene_name: scene.scene_name,
+        event_time: resolveMemoryEventTime(sourceIds, scene.message_ids, messageTime),
       });
     }
   }
@@ -359,7 +369,7 @@ export async function extractL1Memories(params: {
       });
 
     } catch (err) {
-      logger?.warn?.(`${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
+      logger?.warn?.(`【P1】${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
       storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage);
     }
   } else {
@@ -405,7 +415,9 @@ export async function extractL1Memories(params: {
       : undefined,
   });
 
-  logger?.info(`${TAG} Extraction complete: extracted=${extracted.length}, stored=${storedRecords.length}`);
+  logger?.info(
+    `${TAG} extract complete: sessionKey=${sessionKey} extracted=${extracted.length} stored=${storedRecords.length} dur_ms=${Date.now() - l1StartMs}`,
+  );
 
   // ── l1_extraction metric ──
   if (metricInstanceId && logger) {
@@ -488,10 +500,17 @@ async function callLlmExtraction(params: {
   llmRunner?: LLMRunner;
   /** langfuse 上报身份四元组（team/user/agent/session）。 */
   traceContext?: TraceContext;
+  /** 实例 ID，用于 runner 日志前缀与 telemetry 元数据。 */
+  instanceId?: string;
 }): Promise<ParseExtractionOutcome> {
-  const { newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", memoryPrompt, llmRunner, traceContext } = params;
+  const { newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", memoryPrompt, llmRunner, traceContext, instanceId } = params;
 
-  const systemPrompt = composeMemorySystemPrompt(getExtractMemoriesSystemPrompt(promptMode), memoryPrompt);
+  const baseSystemPrompt = getExtractMemoriesSystemPrompt(promptMode);
+  const templateCtx = resolveTemplateContext(memoryPrompt);
+  const systemPrompt = composeMemorySystemPrompt(
+    templateCtx ? applyL1Template(baseSystemPrompt, templateCtx, promptMode) : baseSystemPrompt,
+    memoryPrompt,
+  );
   const userPrompt = formatExtractionPrompt({
     newMessages,
     backgroundMessages,
@@ -515,6 +534,7 @@ async function callLlmExtraction(params: {
       prompt: userPrompt,
       systemPrompt,
       taskId: "l1-extraction",
+      instanceId,
       timeoutMs: 180_000,
       ...traceParams,
     });
@@ -605,12 +625,12 @@ function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOut
     // Try to extract JSON array
     const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
     if (!arrayMatch) {
-      logger?.warn?.(`${TAG} No JSON array found in extraction response`);
+      logger?.warn?.(`【P1】${TAG} No JSON array found in extraction response`);
       // [l1-debug] NO_JSON — dump the full ORIGINAL raw (not the stripped
       // version), otherwise a broken <think> variant would leave no trace.
       const rawPreview = raw.slice(0, 2048);
       logger?.warn?.(
-        `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, strippedLen=${stripped.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
+        `【P1】${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, strippedLen=${stripped.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
       return { scenes: [], emptyReason: "no_json" };
     }
@@ -631,7 +651,7 @@ function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOut
     }
 
     if (!Array.isArray(parsed)) {
-      logger?.warn?.(`${TAG} Extraction response is not an array`);
+      logger?.warn?.(`【P1】${TAG} Extraction response is not an array`);
       return { scenes: [], emptyReason: "not_array" };
     }
 
@@ -663,9 +683,9 @@ function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOut
       emptyReason: totalMemories === 0 ? "empty_scenes" : undefined,
     };
   } catch (err) {
-    logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
+    logger?.warn?.(`【P1】${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
     logger?.warn?.(
-      `${TAG} [l1-debug] PARSE_FAIL rawLen=${raw.length}, rawFull=${JSON.stringify(raw)}`,
+      `【P1】${TAG} [l1-debug] PARSE_FAIL rawLen=${raw.length}, rawFull=${JSON.stringify(raw)}`,
     );
     return { scenes: [], emptyReason: "parse_fail" };
   }
@@ -740,7 +760,7 @@ async function applyDecisions(params: {
       }
     } catch (err) {
       logger?.warn?.(
-        `${TAG} Write failed for memory "${memoryWithId.content.slice(0, 50)}...": ${err instanceof Error ? err.message : String(err)}`,
+        `【P1】${TAG} Write failed for memory "${memoryWithId.content.slice(0, 50)}...": ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -793,7 +813,7 @@ async function storeAllDirectly(
       }
     } catch (err) {
       logger?.warn?.(
-        `${TAG} Write failed for memory "${memoryWithId.content.slice(0, 50)}...": ${err instanceof Error ? err.message : String(err)}`,
+        `【P1】${TAG} Write failed for memory "${memoryWithId.content.slice(0, 50)}...": ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

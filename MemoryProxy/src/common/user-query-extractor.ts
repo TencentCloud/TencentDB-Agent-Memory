@@ -83,6 +83,22 @@ function isClaudeCodeInternalPrompt(text: string): boolean {
  */
 export const DSH_RUNTIME_CONTEXT_PREFIX = "Current runtime context.";
 
+/**
+ * MEMORY.md 风格 yaml frontmatter 块：`---` 开头，若干 key / 缩进 / 空行，
+ * 遇到 name / description / metadata / node_type / originSessionId 关键字后
+ * 一直到下一个顶格 `---`。
+ *
+ * 必须保持线性复杂度 —— 它对每条主请求的用户原文同步执行，且早于压缩阶段：
+ *   - 每行只能被一个分支匹配，且分支内切分唯一：key 行 `word:` / 缩进行
+ *     `[ \t]+\S`（必须含非空白，与空行分支互斥）/ 空行 `[ \t\r]*\n`。
+ *     旧写法 `key:\s*.*\n` 里冒号后的空白可归 `\s*` 也可归 `.*`，n 行就是 2^n
+ *     种切分；`---` 后接 ~25 行 `key: value` 且未闭合即可卡死事件循环数十秒。
+ *   - opener 后先 lookahead 确认存在闭合 `---`：没有闭合时 O(n) 直接失败，
+ *     有闭合时第一个关键字就能匹配成功，不会逐行重扫到文本末尾。
+ */
+const FRONTMATTER_BLOCK_RE =
+  /(?:^|\n)---[ \t\r]*\n(?=[\s\S]*?\n---[ \t\r]*(?:\n|$))(?:(?:[a-z_][a-z0-9_]*:|[ \t]+\S)[^\n]*\n|[ \t\r]*\n)*?(?:name|description|metadata|node_type|originSessionId):[\s\S]*?\n---\s*(?:\n|$)/gi;
+
 export function isDshRuntimeContextSnapshot(text: string): boolean {
   return text.trimStart().startsWith(DSH_RUNTIME_CONTEXT_PREFIX);
 }
@@ -178,10 +194,7 @@ export function extractUserQueryText(raw: string): string {
   //       ---
   //     只匹配"至少含 name / description / metadata / node_type 关键字"的 frontmatter
   //     以避免误伤 markdown 分割线。
-  text = text.replace(
-    /(?:^|\n)---\s*\n(?:[a-z_][a-z0-9_]*:\s*.*\n)*?(?:name|description|metadata|node_type|originSessionId):[\s\S]*?\n---\s*(?:\n|$)/gi,
-    "\n",
-  );
+  text = text.replace(FRONTMATTER_BLOCK_RE, "\n");
 
   // 2e) 残留的会话初始化表单标题行（如「会话初始化 — 选择 Agent 与任务」）
   text = text

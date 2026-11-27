@@ -63,19 +63,18 @@ export class TapdMcpClient {
       timeoutMs: this.opts.timeoutMs ?? 30_000,
     });
 
-    if (res.status === 401 || res.status === 403) {
-      throw new TaskSourceError("task_source_unauthorized", "credential rejected by TAPD");
-    }
-    if (!res.ok) {
-      throw new TaskSourceError("task_source_upstream_error", `TAPD returned HTTP ${res.status}`);
-    }
+    if (res.status === 401) throw new TaskSourceError("task_source_unauthorized", "credential rejected by TAPD");
+    if (res.status === 403) throw new TaskSourceError("task_source_forbidden", "TAPD permission denied");
+    if (res.status === 503) throw new TaskSourceError("task_source_unavailable", "TAPD unavailable");
+    if (res.status === 504) throw new TaskSourceError("task_source_timeout", "TAPD request timed out");
+    if (!res.ok) throw new TaskSourceError("task_source_upstream_error", `TAPD returned HTTP ${res.status}`);
 
-    const json = (await res.json()) as JsonRpcResponse;
+    let json: JsonRpcResponse;
+    try { json = await res.json() as JsonRpcResponse; }
+    catch { throw new TaskSourceError("task_source_invalid_response", "Invalid TAPD JSON response"); }
+    if (!json || typeof json !== "object" || Array.isArray(json)) throw new TaskSourceError("task_source_invalid_response", "Invalid TAPD RPC response");
     if (json.error) {
-      throw new TaskSourceError(
-        "task_source_upstream_error",
-        json.error.message ?? "TAPD MCP error",
-      );
+      throw new TaskSourceError(json.error.code === -32602 ? "task_source_invalid_params" : "task_source_upstream_error", "TAPD RPC request failed");
     }
     /**
      * **业务层失败**：JSON-RPC 成功（无 error）、HTTP 也是 200，但
@@ -87,21 +86,17 @@ export class TapdMcpClient {
      * 若不拦截，错误文本会被当成 task 描述导入看板。
      */
     if (json.result?.isError === true) {
-      const detail =
-        json.result.content
-          ?.map((c) => (typeof c?.text === "string" ? c.text : ""))
-          .join("\n")
-          .trim() || "unknown TAPD MCP tool error";
-      throw new TaskSourceError("task_source_upstream_error", detail.slice(0, 200));
+      throw new TaskSourceError("task_source_upstream_error", "TAPD MCP tool failed");
     }
 
-    const text = json.result?.content?.[0]?.text ?? "";
+    const text = json.result?.content?.[0]?.text;
+    if (!Array.isArray(json.result?.content) || typeof text !== "string") throw new TaskSourceError("task_source_invalid_response", "Invalid TAPD tool content");
     // 服务端参数校验失败时返回中文错误文本（如「参数X不存在于工具Y的参数定义中」），
     // 而非 JSON 包络。若静默当成「0 条结果」，会把配置错误伪装成空列表，极难排查。
     if (looksLikeUpstreamError(text)) {
-      throw new TaskSourceError("task_source_upstream_error", text.trim().slice(0, 200));
+      throw new TaskSourceError("task_source_upstream_error", "TAPD returned an error instead of data");
     }
-    // 二次解析：text 可能仍是 JSON 字符串；解析失败则按纯文本返回。
+    // 工具数据必须是合法 JSON，损坏响应不能作为空结果返回。
     return parseMaybeJson(text);
   }
 }
@@ -148,13 +143,10 @@ function looksLikeUpstreamError(text: string): boolean {
 }
 
 function parseMaybeJson(text: string): unknown {
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text;
   try {
-    return JSON.parse(trimmed);
+    return JSON.parse(text);
   } catch {
-    return text;
+    throw new TaskSourceError("task_source_invalid_response", "Invalid TAPD tool JSON");
   }
 }
 
@@ -166,14 +158,20 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...rest, signal: controller.signal });
+    const response = await fetch(url, { ...rest, signal: controller.signal });
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      return response;
+    }
+    const body = await response.text();
+    return new Response(body, { status: response.status, headers: { "content-type": "application/json" } });
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (controller.signal.aborted || err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
       throw new TaskSourceError("task_source_timeout", "TAPD request timed out");
     }
     throw new TaskSourceError(
-      "task_source_upstream_error",
-      err instanceof Error ? err.message : "network error",
+      "task_source_network_error",
+      "TAPD connection failed",
     );
   } finally {
     clearTimeout(timer);

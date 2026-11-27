@@ -22,18 +22,31 @@
  */
 
 import type { MemoryPromptMode } from "../../config.js";
+import { renderL2TemplateSlot, type TemplateRenderContext } from "../memory-prompt/template.js";
 
 export interface SceneExtractionPromptParams {
   memoriesJson: string;
   sceneSummaries: string;
   currentTimestamp: string;
   sceneCountWarning?: string;
+  /**
+   * Warning about scene blocks that exceeded the per-file byte budget.
+   * When present the LLM must compact those scenes instead of appending.
+   */
+  sceneSizeWarning?: string;
   /** List of existing scene filenames (relative, e.g. ["work.md", "hobby.md"]) */
   existingSceneFiles?: string[];
   /** Maximum number of scene blocks allowed */
   maxScenes: number;
+  /** Maximum bytes allowed for a single scene block file (default: 256KB). */
+  maxSceneBytes?: number;
   /** Prompt family for L2 scene extraction (default: chat). */
   promptMode?: MemoryPromptMode;
+  /**
+   * Tenant output template (custom memory prompt in template mode).
+   * When absent the system prompt is byte-identical to the built-in one.
+   */
+  template?: TemplateRenderContext;
 }
 
 export interface SceneExtractionPromptResult {
@@ -46,7 +59,13 @@ export interface SceneExtractionPromptResult {
 // Contains maxScenes as a constraint parameter.
 // ============================
 
-function buildSceneSystemPrompt(maxScenes: number): string {
+/** Render a byte budget in a form that is easy for the LLM to reason about. */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+function buildSceneSystemPrompt(maxScenes: number, maxSceneBytes: number): string {
   return `# Memory Consolidation Architect
 
 **输出语言**：\`.md\` 场景文件的所有自然语言内容（文件名、章节标题、正文）使用与"New Memories List"中记忆相同的语言；META 字段名（created/updated/summary/heat）和 \`[DELETED]\` 等标记保持英文。模板中给出的中文章节标题（\`## 用户核心特征\` 等）作为结构骨架——非中文输出时请用目标语言的等价表达替换。
@@ -76,6 +95,12 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 3. 当前时间 (Current Time): 用于生成元数据的具体时间戳。
 
 **⚠️ 场景文件数量上限：${maxScenes} 个。处理完成后目录中的场景文件数量必须严格小于此上限。**
+
+**🚨 单个场景文件体积上限：${formatBytes(maxSceneBytes)}。**
+- 场景是**叙事文档**，不是流水账。体积失控会直接拖垮后续处理。
+- **当某个场景已接近或超过上限时，禁止继续向其追加内容**。正确做法是先**精简**：合并重复条目、删除过时/低价值内容、把冗长复述压缩成要点。
+- 如果新记忆确实属于一个已超限的场景，应当：① 先精简该场景腾出空间；或 ② 将其中可独立成篇的子主题拆分为新场景（在数量上限允许时）。
+- **精简后的内容必须保留信息密度**——压缩表述，不是丢弃事实。
 
 ## ⛔ 文件操作约束（必须严格遵守）
 1. **所有文件操作使用相对文件名**（如 \`技术研究-Rust学习.md\`），当前工作目录已设为场景文件目录
@@ -174,6 +199,11 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 深度整合: 严禁简单的文本追加。你必须结合上下文（基于摘要或提供的原始内容）重写叙事，将新信息自然地融入其中。
 隐性推断: 寻找用户 没说出口 的信息。更新"隐性信号"部分。
 冲突检测: 如果新记忆与旧记忆相矛盾，将其记录在"演变轨迹"或"待确认/矛盾点"中。
+时间先后（重要）: 每条新记忆的 \`event_time\` 是对话真实发生的时间；场景摘要中的"已覆盖对话至"是该场景已吸收的最新对话时间。处理积压时较早的对话可能**晚到**。
+- 若新记忆的 event_time **早于**目标场景的"已覆盖对话至"，它是**旧信息补录**：**不得改写"用户核心特征""核心叙事"中的现有结论**；与现有结论矛盾时写入"演变轨迹"（注明该记忆的日期）或"待确认/矛盾点"；不矛盾的细节可作为背景补充。
+- 只有 event_time 晚于（或等于）"已覆盖对话至"、或场景没有该时间时，才按常规以新信息更新结论。
+- 判断"新/旧"一律以 event_time 为准，不要以记忆在列表中的位置或处理先后判断。
+- META 中的 last_event_time 由系统维护，**不要修改或删除**该行。
 
 ### 撰写准则 (严格遵守)
 核心部分禁止列表: "用户核心特征"和"核心叙事"必须是连贯的段落，信息要连贯，可以分段。
@@ -255,7 +285,7 @@ reason: 具体原因描述
    - **删除文件**：使用 **write**(\`path\`=文件名, \`content\`='[DELETED]') 写入删除标记。系统会自动清理这些文件。**重要**：只有 \`[DELETED]\` 标记会触发系统清理。写入空字符串会被系统拒绝，写入 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等标记**不会删除文件**，文件会继续占用场景配额。`;
 }
 
-function buildWorkSceneSystemPrompt(maxScenes: number): string {
+function buildWorkSceneSystemPrompt(maxScenes: number, maxSceneBytes: number): string {
   return `# Team Work Method Memory Consolidation Architect
 
 **输出语言**：\`.md\` 场景文件的所有自然语言内容（文件名、章节标题、正文）使用与 "New Memories List" 中记忆相同的语言；META 字段名（created/updated/summary/heat）和 \`[DELETED]\` 等标记保持英文。模板中的中文章节标题仅作为结构骨架，非中文输出时请用目标语言的等价表达替换。
@@ -303,6 +333,12 @@ function buildWorkSceneSystemPrompt(maxScenes: number): string {
 3. 当前时间 (Current Time)：用于生成元数据的具体时间戳。
 
 **⚠️ 场景文件数量上限：${maxScenes} 个。处理完成后目录中的场景文件数量必须严格小于此上限。**
+
+**🚨 单个场景文件体积上限：${formatBytes(maxSceneBytes)}。**
+- 场景沉淀的是**方法论**，不是事件流水。体积失控会直接拖垮后续处理。
+- **当某个场景已接近或超过上限时，禁止继续向其追加内容**。正确做法是先**精简**：合并重复的实践条目、删除已被更新结论取代的旧内容、把冗长过程压缩成可复用结论。
+- 如果新记忆确实属于一个已超限的场景，应当：① 先精简该场景腾出空间；或 ② 将其中可独立成篇的子主题拆分为新场景（在数量上限允许时）。
+- **精简后的内容必须保留信息密度**——压缩表述，不是丢弃事实。
 
 ---
 
@@ -428,6 +464,11 @@ function buildWorkSceneSystemPrompt(maxScenes: number): string {
 事实和状态只用于说明方法的来源和适用条件，不要堆砌历史细节。
 
 冲突检测：如果新记忆与旧记忆相矛盾，将其记录在"演化记录"或"待确认问题"中，不要直接覆盖。
+时间先后（重要）：每条新记忆的 \`event_time\` 是对话真实发生的时间；场景摘要中的"已覆盖对话至"是该场景已吸收的最新对话时间。处理积压时较早的对话可能**晚到**。
+- 若新记忆的 event_time **早于**目标场景的"已覆盖对话至"，它是**旧信息补录**：**不得改写现有的方法、结论、任务状态或决策**；与现有结论矛盾时写入"演化记录"（注明该记忆的日期）或"待确认问题"；不矛盾的细节可作为背景补充。
+- 只有 event_time 晚于（或等于）"已覆盖对话至"、或场景没有该时间时，才按常规以新信息更新结论。
+- 判断"新/旧"一律以 event_time 为准，不要以记忆在列表中的位置或处理先后判断。
+- META 中的 last_event_time 由系统维护，**不要修改或删除**该行。
 
 ---
 
@@ -525,8 +566,64 @@ reason: 具体原因描述
 - **删除文件**：使用 **write**(\`path\`=文件名, \`content\`='[DELETED]') 写入删除标记。系统会自动清理这些文件。**重要**：只有 \`[DELETED]\` 标记会触发系统清理。写入空字符串会被系统拒绝，写入 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等标记不会删除文件。`;
 }
 
-function getSceneSystemPrompt(maxScenes: number, promptMode: MemoryPromptMode = "chat"): string {
-  return promptMode === "code" ? buildWorkSceneSystemPrompt(maxScenes) : buildSceneSystemPrompt(maxScenes);
+function getSceneSystemPrompt(
+  maxScenes: number,
+  maxSceneBytes: number,
+  promptMode: MemoryPromptMode = "chat",
+): string {
+  return promptMode === "code"
+    ? buildWorkSceneSystemPrompt(maxScenes, maxSceneBytes)
+    : buildSceneSystemPrompt(maxScenes, maxSceneBytes);
+}
+
+// ============================
+// Template mode: replace built-in output-template slot
+// ============================
+
+const L2_TEMPLATE_HEADING_NOTE = "章节标题以「输出规范」中的正文结构模板为准，模板中的标题保持原样，不要翻译或改写。";
+const L2_TEMPLATE_CONFLICT_NOTE = "记录在正文结构模板中对应的演化/待确认类章节，不要直接覆盖。";
+
+/**
+ * Text substitutions that remove references to built-in section names
+ * (otherwise the model mixes built-in sections into the tenant template).
+ * Each entry is applied only if found; tests assert all anchors exist.
+ */
+export const L2_TEMPLATE_SUBSTITUTIONS: Record<MemoryPromptMode, Array<[string | RegExp, string]>> = {
+  chat: [
+    ["模板中给出的中文章节标题（`## 用户核心特征` 等）作为结构骨架——非中文输出时请用目标语言的等价表达替换。", L2_TEMPLATE_HEADING_NOTE],
+    ["隐性推断: 寻找用户 没说出口 的信息。更新\"隐性信号\"部分。\n", ""],
+    ["冲突检测: 如果新记忆与旧记忆相矛盾，将其记录在\"演变轨迹\"或\"待确认/矛盾点\"中。", `冲突检测: 如果新记忆与旧记忆相矛盾，${L2_TEMPLATE_CONFLICT_NOTE}`],
+    ["**不得改写\"用户核心特征\"\"核心叙事\"中的现有结论**；与现有结论矛盾时写入\"演变轨迹\"（注明该记忆的日期）或\"待确认/矛盾点\"", "**不得改写现有结论**；与现有结论矛盾时写入正文结构模板中对应的演化/待确认类章节（注明该记忆的日期）"],
+    [/### 撰写准则 \(严格遵守\)\n[\s\S]*?(?=\n### 热度管理)/, "### 撰写准则 (严格遵守)\n严格按「输出规范」中的正文结构模板组织内容，不要使用模板以外的章节。\n"],
+  ],
+  code: [
+    ["模板中的中文章节标题仅作为结构骨架，非中文输出时请用目标语言的等价表达替换。", L2_TEMPLATE_HEADING_NOTE],
+    ["冲突检测：如果新记忆与旧记忆相矛盾，将其记录在\"演化记录\"或\"待确认问题\"中，不要直接覆盖。", `冲突检测：如果新记忆与旧记忆相矛盾，${L2_TEMPLATE_CONFLICT_NOTE}`],
+    ["与现有结论矛盾时写入\"演化记录\"（注明该记忆的日期）或\"待确认问题\"", "与现有结论矛盾时写入正文结构模板中对应的演化/待确认类章节（注明该记忆的日期）"],
+    [/### 撰写准则（严格遵守）\n[\s\S]*?(?=\n---\n\n### 热度管理)/, "### 撰写准则（严格遵守）\n\n严格按「输出规范」中的正文结构模板组织内容，不要使用模板以外的章节。\n"],
+  ],
+};
+
+const L2_OUTPUT_SPEC_START = "## 输出规范 (Output Specification)";
+const L2_OUTPUT_SPEC_END = /^#{2,4} 主动触发/m;
+
+/** Apply the tenant template to a built-in L2 system prompt. Throws if slot anchors are missing. */
+export function applyL2Template(
+  base: string,
+  template: TemplateRenderContext,
+  promptMode: MemoryPromptMode = "chat",
+): string {
+  let out = base;
+  for (const [from, to] of L2_TEMPLATE_SUBSTITUTIONS[promptMode]) {
+    out = typeof from === "string" ? out.replace(from, () => to) : out.replace(from, () => to);
+  }
+  const start = out.indexOf(L2_OUTPUT_SPEC_START);
+  const endMatch = L2_OUTPUT_SPEC_END.exec(out.slice(start));
+  if (start === -1 || !endMatch) {
+    throw new Error("scene-extraction: output-spec slot anchors not found");
+  }
+  const end = start + endMatch.index;
+  return `${out.slice(0, start)}${renderL2TemplateSlot(template)}${out.slice(end)}`;
 }
 
 // ============================
@@ -539,13 +636,20 @@ export function buildSceneExtractionPrompt(params: SceneExtractionPromptParams):
     sceneSummaries,
     currentTimestamp,
     sceneCountWarning,
+    sceneSizeWarning,
     existingSceneFiles,
     maxScenes,
+    maxSceneBytes = 262144,
     promptMode = "chat",
+    template,
   } = params;
 
   const warningSection = sceneCountWarning
     ? `\n⚠️ **场景数量警告**: ${sceneCountWarning}\n`
+    : "";
+
+  const sizeWarningSection = sceneSizeWarning
+    ? `\n🚨 **场景体积警告**: ${sceneSizeWarning}\n`
     : "";
 
   const fileListSection = existingSceneFiles && existingSceneFiles.length > 0
@@ -553,7 +657,7 @@ export function buildSceneExtractionPrompt(params: SceneExtractionPromptParams):
     : `### 📁 已有场景文件清单\n（当前无已有场景文件）\n`;
 
   const userPrompt = `**输出语言**：场景文件内容使用下方 New Memories List 中记忆的主导语言。
-${warningSection}
+${warningSection}${sizeWarningSection}
 ### 1️⃣ New Memories List
 ${memoriesJson}
 
@@ -565,8 +669,9 @@ ${currentTimestamp}
 
 ${fileListSection}`;
 
+  const baseSystemPrompt = getSceneSystemPrompt(maxScenes, maxSceneBytes, promptMode);
   return {
-    systemPrompt: getSceneSystemPrompt(maxScenes, promptMode),
+    systemPrompt: template ? applyL2Template(baseSystemPrompt, template, promptMode) : baseSystemPrompt,
     userPrompt,
   };
 }

@@ -7,6 +7,16 @@ export interface SceneBlockMeta {
   updated: string;
   summary: string;
   heat: number;
+  /**
+   * Latest *conversation* time (ISO 8601 UTC) whose memories have been merged
+   * into this scene. Maintained by code after each L2 run — never by the LLM.
+   *
+   * `updated` is the write time and keeps moving forward even when an old,
+   * late-arriving memory is processed, so it cannot tell "newer fact" from
+   * "older fact replayed out of order". This field can. Optional: scenes
+   * written by older versions simply lack it.
+   */
+  last_event_time?: string;
 }
 
 export interface SceneBlock {
@@ -43,6 +53,8 @@ export function parseSceneBlock(raw: string, filename: string): SceneBlock {
     summary: extractMetaField(metaBlock, "summary"),
     heat: parseInt(extractMetaField(metaBlock, "heat"), 10) || 0,
   };
+  const lastEventTime = extractMetaField(metaBlock, "last_event_time");
+  if (lastEventTime) meta.last_event_time = lastEventTime;
 
   return { filename, meta, content };
 }
@@ -64,6 +76,8 @@ export function formatMeta(meta: SceneBlockMeta): string {
     `updated: ${meta.updated}`,
     `summary: ${meta.summary}`,
     `heat: ${meta.heat}`,
+    // 只有存在时才输出，保证没有该字段的旧场景格式化结果与升级前逐字节一致
+    ...(meta.last_event_time ? [`last_event_time: ${meta.last_event_time}`] : []),
     META_END,
   ].join("\n");
 }

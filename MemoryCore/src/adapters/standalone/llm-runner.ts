@@ -282,6 +282,7 @@ export class StandaloneLLMRunner implements LLMRunner {
 
   async run(params: LLMRunParams): Promise<string> {
     const runStartMs = Date.now();
+    const tag = `${TAG} [${params.instanceId ?? "-"}]`;
     const timeoutMs = params.timeoutMs ?? this.config.timeoutMs ?? 120_000;
     const maxTokens = params.maxTokens ?? this.config.maxTokens ?? 4096;
     const workspaceDir = params.workspaceDir ?? process.cwd();
@@ -294,7 +295,7 @@ export class StandaloneLLMRunner implements LLMRunner {
     const maxIterations = params.maxIterations ?? MAX_TOOL_ITERATIONS;
 
     this.logger?.debug?.(
-      `${TAG} run() start: taskId=${params.taskId}, model=${this.model}, ` +
+      `${tag} run() start: taskId=${params.taskId}, model=${this.model}, ` +
       `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
     );
 
@@ -316,11 +317,11 @@ export class StandaloneLLMRunner implements LLMRunner {
     let tools: Record<string, unknown> | undefined;
     if (callerProvidedTools && effectiveEnableTools) {
       tools = params.tools;
-      this.logger?.debug?.(`${TAG} Using caller-provided tools: [${Object.keys(tools!).join(", ")}]`);
+      this.logger?.debug?.(`${tag} Using caller-provided tools: [${Object.keys(tools!).join(", ")}]`);
     } else if (effectiveEnableTools && params.storage) {
       const { createStorageTools } = await import("./storage-tools.js");
       tools = createStorageTools(params.storage, params.storagePrefix ?? "", this.logger);
-      this.logger?.debug?.(`${TAG} Using storage-backed tools (prefix="${params.storagePrefix ?? ""}")`);
+      this.logger?.debug?.(`${tag} Using storage-backed tools (prefix="${params.storagePrefix ?? ""}")`);
     } else if (effectiveEnableTools) {
       tools = createSandboxedTools(workspaceDir, this.logger);
     } else {
@@ -395,7 +396,7 @@ export class StandaloneLLMRunner implements LLMRunner {
       }
 
       this.logger?.debug?.(
-        `${TAG} run() completed: ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
+        `${tag} run() completed: ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
       );
 
       // Log each step's activity (tool calls + text output)
@@ -407,17 +408,17 @@ export class StandaloneLLMRunner implements LLMRunner {
             `${tc.toolName}(${JSON.stringify(tc.input).slice(0, 120)})`,
           ).join(", ");
           this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] toolCalls: ${callSummary}`,
+            `${tag} step[${step.stepNumber}] toolCalls: ${callSummary}`,
           );
         }
         if (textLen > 0) {
           this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] text: ${textLen} chars, finishReason=${step.finishReason}`,
+            `${tag} step[${step.stepNumber}] text: ${textLen} chars, finishReason=${step.finishReason}`,
           );
         }
         if (calls.length === 0 && textLen === 0) {
           this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] empty (no tools, no text), finishReason=${step.finishReason}`,
+            `${tag} step[${step.stepNumber}] empty (no tools, no text), finishReason=${step.finishReason}`,
           );
         }
       }
@@ -453,7 +454,7 @@ export class StandaloneLLMRunner implements LLMRunner {
             : "") +
           ")";
       }
-      this.logger?.error(`${TAG} run() failed after ${totalMs}ms: ${errMsg}`);
+      this.logger?.error(`${tag} run() failed after ${totalMs}ms: ${errMsg}`);
 
       if (params.instanceId) {
         report("llm_call", {

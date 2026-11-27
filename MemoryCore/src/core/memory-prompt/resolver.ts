@@ -86,6 +86,7 @@ export async function resolveMemoryPrompts(
         layer: prompt.layer,
         source: candidate.source,
         version: prompt.version,
+        ...(prompt.mode === "template" ? { mode: "template" as const } : {}),
       };
       break;
     }

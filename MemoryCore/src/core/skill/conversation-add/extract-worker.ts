@@ -186,7 +186,7 @@ export class SkillConversationExtractWorker {
         agent = await this.opts.queue.peekAgent(blockMs);
       } catch (err) {
         if (this.closed) break;
-        this.logger.warn(`[skill-conv-worker] peek error: ${(err as Error).message}`);
+        this.logger.warn(`【P2】[skill-conv-worker] peek error: ${(err as Error).message}`);
         await sleep(200);
         continue;
       }
@@ -194,7 +194,7 @@ export class SkillConversationExtractWorker {
       try {
         await this.consumeAgent(agent);
       } catch (err) {
-        this.logger.error(`[skill-conv-worker] consumeAgent error: ${(err as Error).message}`);
+        this.logger.error(`【P2】[skill-conv-worker] consumeAgent error: ${(err as Error).message}`);
       }
     }
   }
@@ -284,14 +284,14 @@ export class SkillConversationExtractWorker {
             const ok = await q.renewExtractLock(handle, extractLockTtl);
             if (!ok) {
               this.logger.warn(
-                `[skill-conv-worker] renew extract-lock lost agent=${agentKey}`,
+                `【P2】[skill-conv-worker] renew extract-lock lost agent=${agentKey}`,
               );
               if (renewTimer) clearInterval(renewTimer);
               renewTimer = undefined;
             }
           } catch (err) {
             this.logger.warn(
-              `[skill-conv-worker] renew extract-lock error: ${(err as Error).message}`,
+              `【P2】[skill-conv-worker] renew extract-lock error: ${(err as Error).message}`,
             );
           }
         })();
@@ -537,7 +537,7 @@ export class SkillConversationExtractWorker {
         await q.releaseExtractLock(handle);
       } catch (err) {
         this.logger.warn(
-          `[skill-conv-worker] releaseExtractLock error: ${(err as Error).message}`,
+          `【P2】[skill-conv-worker] releaseExtractLock error: ${(err as Error).message}`,
         );
       }
     }
@@ -554,11 +554,11 @@ export class SkillConversationExtractWorker {
     const every = this.opts.transientLogSampleEvery ?? 60;
     if (streak === 1) {
       this.logger.error(
-        `[skill-conv-worker] transient extract failure task=${taskId}: ${errMsg}`,
+        `【P2】[skill-conv-worker] transient extract failure task=${taskId}: ${errMsg}`,
       );
     } else if (every > 0 && streak % every === 0) {
       this.logger.warn(
-        `[skill-conv-worker] transient extract failure (x${streak}) task=${taskId}: ${errMsg}`,
+        `【P2】[skill-conv-worker] transient extract failure (x${streak}) task=${taskId}: ${errMsg}`,
       );
     }
   }
@@ -594,7 +594,7 @@ export class SkillConversationExtractWorker {
       if (idx < 0) {
         // task 已被别处清掉（幽灵回收 / DLQ 重跑），本次 permanent 视为无效。
         this.logger.warn(
-          `[skill-conv-worker] permanent failure but task gone task=${head.task_id}`,
+          `【P2】[skill-conv-worker] permanent failure but task gone task=${head.task_id}`,
         );
         // 2026-08-03: 原子路径不 requeue/remove, 靠下一轮懒删除; 降级路径 v1 语义。
         if (isDowngrade) {
@@ -612,7 +612,7 @@ export class SkillConversationExtractWorker {
         doc.updated_at_ms = nowMs();
         await this.opts.buffer.writeTasks(agent, doc);
         this.logger.error(
-          `[skill-conv-worker] permanent failure → DLQ task=${head.task_id} ` +
+          `【P2】[skill-conv-worker] permanent failure → DLQ task=${head.task_id} ` +
             `retries=${nextRetry}/${maxRetries} err=${truncated}`,
         );
       } else {
@@ -620,7 +620,7 @@ export class SkillConversationExtractWorker {
         doc.updated_at_ms = nowMs();
         await this.opts.buffer.writeTasks(agent, doc);
         this.logger.warn(
-          `[skill-conv-worker] permanent failure task=${head.task_id} ` +
+          `【P2】[skill-conv-worker] permanent failure task=${head.task_id} ` +
             `retries=${nextRetry}/${maxRetries} err=${truncated}`,
         );
       }
@@ -640,7 +640,7 @@ export class SkillConversationExtractWorker {
         await this.opts.buffer.appendDlq(agent, dead);
       } catch (err) {
         this.logger.error(
-          `[skill-conv-worker] appendDlq failed task=${head.task_id}: ${(err as Error).message}`,
+          `【P2】[skill-conv-worker] appendDlq failed task=${head.task_id}: ${(err as Error).message}`,
         );
       }
     }

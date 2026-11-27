@@ -12,6 +12,7 @@ import {
   type MemoryPromptSettingRecord,
 } from "../core/memory-prompt/types.js";
 import { resolveMemoryPrompt } from "../core/memory-prompt/resolver.js";
+import { normalizeTemplatePrompt, validateTemplatePrompt } from "../core/memory-prompt/template.js";
 import {
   memoryPromptCreateSchema,
   memoryPromptDeleteSchema,
@@ -54,6 +55,13 @@ function unsupportedStore(requestId: string): ApiResponseEnvelope {
 async function handleCreate(body: unknown, _auth: V2AuthContext, requestId: string, deps: unknown): Promise<ApiResponseEnvelope> {
   const parsed = memoryPromptCreateSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodErr(parsed.error), requestId);
+  const isTemplate = parsed.data.mode === "template";
+  let promptText = parsed.data.prompt;
+  if (isTemplate) {
+    const invalid = validateTemplatePrompt(parsed.data.layer, promptText);
+    if (invalid) return errorEnvelope(400, `${invalid.code}: ${invalid.message}`, requestId);
+    promptText = normalizeTemplatePrompt(promptText);
+  }
   const store = getStore(deps);
   if (!store) return missingStore(requestId);
   if (!store.countMemoryPrompts || !store.createMemoryPrompt) return unsupportedStore(requestId);
@@ -65,7 +73,8 @@ async function handleCreate(body: unknown, _auth: V2AuthContext, requestId: stri
     memory_prompt_id: id,
     name: parsed.data.name,
     layer: parsed.data.layer,
-    prompt: parsed.data.prompt,
+    prompt: promptText,
+    ...(isTemplate ? { mode: "template" as const } : {}),
     version: 1,
     status: "active",
     created_by: operatorId(deps),
@@ -77,6 +86,7 @@ async function handleCreate(body: unknown, _auth: V2AuthContext, requestId: stri
     memory_prompt_id: record.memory_prompt_id,
     version: record.version,
     created_at_ms: record.created_at_ms,
+    ...(isTemplate ? { mode: "template" } : {}),
   }, requestId);
 }
 
@@ -121,12 +131,25 @@ async function handleGet(body: unknown, _auth: V2AuthContext, requestId: string,
 async function handleUpdate(body: unknown, _auth: V2AuthContext, requestId: string, deps: unknown): Promise<ApiResponseEnvelope> {
   const parsed = memoryPromptUpdateSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodErr(parsed.error), requestId);
+  if (parsed.data.mode !== undefined) {
+    return errorEnvelope(400, "TEMPLATE_MODE_IMMUTABLE: mode cannot be changed; create a new memory prompt instead", requestId);
+  }
   const store = getStore(deps);
   if (!store) return missingStore(requestId);
   if (!store.updateMemoryPrompt) return unsupportedStore(requestId);
+  let promptText = parsed.data.prompt;
+  if (promptText !== undefined && store.getMemoryPrompts) {
+    // Template records re-validate on prompt change; append records keep legacy behaviour.
+    const current = (await store.getMemoryPrompts([parsed.data.memory_prompt_id]))[0];
+    if (current?.mode === "template") {
+      const invalid = validateTemplatePrompt(current.layer, promptText);
+      if (invalid) return errorEnvelope(400, `${invalid.code}: ${invalid.message}`, requestId);
+      promptText = normalizeTemplatePrompt(promptText);
+    }
+  }
   const record = await store.updateMemoryPrompt(parsed.data.memory_prompt_id, {
     name: parsed.data.name,
-    prompt: parsed.data.prompt,
+    prompt: promptText,
     updated_by: operatorId(deps),
     updated_at_ms: Date.now(),
   });

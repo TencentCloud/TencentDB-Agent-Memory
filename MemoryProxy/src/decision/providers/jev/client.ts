@@ -176,7 +176,7 @@ export class JevClient implements DecisionProvider {
       });
     } catch (err) {
       // 不带 body —— state 含用户对话，不进日志。
-      log.warn("skill.jev.call_failed", {
+      log.warn("【P1】skill.jev.call_failed", {
         model, host, questionCount, stateLen,
         latencyMs: Date.now() - startedAt, timeoutMs: timeout, reason: "fetch_failed",
       });
@@ -190,7 +190,7 @@ export class JevClient implements DecisionProvider {
     if (!resp.ok) {
       // 422 = 请求体校验失败（字段名/结构不对），429/529 = 限流/过载。
       // 这里只截断回显，便于定位，不重试。
-      log.warn("skill.jev.call_failed", {
+      log.warn("【P1】skill.jev.call_failed", {
         model, host, questionCount, stateLen, latencyMs,
         status: resp.status, reason: "http_error",
       });
@@ -202,7 +202,7 @@ export class JevClient implements DecisionProvider {
     try {
       parsed = await resp.json();
     } catch (err) {
-      log.warn("skill.jev.call_failed", {
+      log.warn("【P1】skill.jev.call_failed", {
         model, host, questionCount, stateLen, latencyMs,
         status: resp.status, reason: "non_json",
       });

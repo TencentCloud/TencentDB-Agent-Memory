@@ -70,6 +70,7 @@ import type {
   MemoryPromptSettingRecord,
   MemoryPromptTargetType,
 } from "../../memory-prompt/types.js";
+import { normalizeMemoryPromptMode } from "../../memory-prompt/types.js";
 import {
   buildMemoryGenerationRefId,
   type MemoryGenerationLayer,
@@ -874,6 +875,10 @@ export class VectorStore implements IMemoryStore {
         ON memory_prompts(layer, updated_at_ms);
       CREATE INDEX IF NOT EXISTS idx_memory_prompts_status
         ON memory_prompts(status);
+`);
+    // Online migration: custom prompt strategy mode (NULL = legacy append). Idempotent.
+    try { this.db.exec("ALTER TABLE memory_prompts ADD COLUMN mode TEXT"); } catch { /* exists */ }
+    this.db.exec(`
 
       CREATE TABLE IF NOT EXISTS memory_prompt_settings (
         setting_id TEXT PRIMARY KEY,
@@ -3467,22 +3472,30 @@ export class VectorStore implements IMemoryStore {
     this.db.prepare(`
       INSERT INTO memory_prompts
         (memory_prompt_id, name, layer, prompt, version, status,
-         created_by, updated_by, created_at_ms, updated_at_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         created_by, updated_by, created_at_ms, updated_at_ms, mode)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.memory_prompt_id, record.name, record.layer, record.prompt,
       record.version, record.status, record.created_by ?? null,
       record.updated_by ?? null, record.created_at_ms, record.updated_at_ms,
+      normalizeMemoryPromptMode(record.mode) ?? null,
     );
     return record;
+  }
+
+  /** Strip the nullable `mode` column so append rows look exactly like legacy rows. */
+  private memoryPromptFromRow(row: Record<string, unknown>): MemoryPromptRecord {
+    const { mode, ...rest } = row;
+    const normalized = normalizeMemoryPromptMode(mode);
+    return (normalized ? { ...rest, mode: normalized } : rest) as unknown as MemoryPromptRecord;
   }
 
   getMemoryPrompts(ids: string[]): MemoryPromptRecord[] {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(",");
-    return this.db.prepare(
+    return (this.db.prepare(
       `SELECT * FROM memory_prompts WHERE memory_prompt_id IN (${placeholders})`,
-    ).all(...ids) as unknown as MemoryPromptRecord[];
+    ).all(...ids) as Record<string, unknown>[]).map((row) => this.memoryPromptFromRow(row));
   }
 
   listMemoryPrompts(filter: MemoryPromptListFilter): MemoryPromptRecord[] {
@@ -3492,12 +3505,12 @@ export class VectorStore implements IMemoryStore {
     const order = filter.timeOrder === "asc" ? "ASC" : "DESC";
     const limit = Math.min(Math.max(filter.limit ?? 20, 1), 100);
     const offset = Math.max(filter.offset ?? 0, 0);
-    return this.db.prepare(`
+    return (this.db.prepare(`
       SELECT * FROM memory_prompts
       WHERE ${conds.join(" AND ")}
       ORDER BY updated_at_ms ${order}, memory_prompt_id ${order}
       LIMIT ? OFFSET ?
-    `).all(...args, limit, offset) as unknown as MemoryPromptRecord[];
+    `).all(...args, limit, offset) as Record<string, unknown>[]).map((row) => this.memoryPromptFromRow(row));
   }
 
   updateMemoryPrompt(

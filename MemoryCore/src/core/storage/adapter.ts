@@ -143,8 +143,8 @@ export class StorageAdapter {
 
   // ── fs.writeFile replacement ──
 
-  async writeFile(key: string, content: string | Buffer): Promise<void> {
-    return this.backend.putObject(key, content);
+  async writeFile(key: string, content: string | Buffer, opts?: PutObjectOptions): Promise<void> {
+    return this.backend.putObject(key, content, opts);
   }
 
   // ── fs.appendFile replacement — atomic via backend.appendObject (CR-1 fix) ──

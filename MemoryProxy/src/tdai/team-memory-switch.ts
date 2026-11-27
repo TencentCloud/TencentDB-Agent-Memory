@@ -16,6 +16,8 @@
  * See `MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md` §4-§6.
  */
 
+import { DependencyError, dependencyStatus, upstreamFailure } from "../common/dependency-error.js";
+
 export const DEFAULT_TEAM_MEMORY_ENABLED = true;
 
 export interface FetchTeamMemoryEnabledInput {
@@ -29,6 +31,7 @@ export interface FetchTeamMemoryEnabledInput {
   userId?: string | null;
   /** fetch timeout; default 5000ms. */
   timeoutMs?: number;
+  strict?: boolean;
 }
 
 interface ConfigUserGetEnvelope {
@@ -56,6 +59,7 @@ export async function fetchTeamMemoryEnabled(input: FetchTeamMemoryEnabledInput)
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 5_000);
+  let responseReceived = false;
   try {
     const headers: Record<string, string> = {
       "Authorization": `Bearer ${input.apiKey}`,
@@ -74,23 +78,30 @@ export async function fetchTeamMemoryEnabled(input: FetchTeamMemoryEnabledInput)
       }),
       signal: controller.signal,
     });
+    responseReceived = true;
     if (!resp.ok) {
+      if (input.strict) throw upstreamFailure(resp.status);
       const text = await resp.text().catch(() => "");
       console.warn(`[team-memory-switch] HTTP ${resp.status}: ${text.slice(0, 200)}`);
       return DEFAULT_TEAM_MEMORY_ENABLED;
     }
 
     const env = (await resp.json()) as ConfigUserGetEnvelope;
-    if (env.code !== 0) {
-      console.warn(`[team-memory-switch] envelope code=${env.code}: ${env.message ?? ""}`);
+    if (env?.code !== 0) {
+      if (input.strict) throw upstreamFailure(typeof env?.code === "number" ? env.code : 502);
       return DEFAULT_TEAM_MEMORY_ENABLED;
     }
 
     const items = env.data?.items ?? [];
     const row = items.find((it) => it.param_name === "enabled");
     const parsed = parseEnabled(row?.effective_value);
+    if (input.strict && row && parsed === undefined) throw new DependencyError(502, "Invalid team memory configuration");
     return parsed === undefined ? DEFAULT_TEAM_MEMORY_ENABLED : parsed;
   } catch (err) {
+    if (input.strict) {
+      const status = controller.signal.aborted ? 504 : dependencyStatus(err, responseReceived ? 502 : 503);
+      throw new DependencyError(status, "Team memory configuration unavailable");
+    }
     console.warn(`[team-memory-switch] fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     return DEFAULT_TEAM_MEMORY_ENABLED;
   } finally {
