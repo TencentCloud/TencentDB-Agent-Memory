@@ -42,6 +42,8 @@ export function isSessionResetCommand(
   try {
     const adapter = resolveAgentAdapter(agentSource);
     let text: string | null = null;
+    // 同一轮用户消息里的所有文本块（顺序不固定，命令可能不在最后一块）
+    const allTexts: string[] = [];
 
     // Codex / WorkBuddy 用 body.input[] (Responses API)
     if (Array.isArray((body as any).input)) {
@@ -62,6 +64,7 @@ export function isSessionResetCommand(
         const b = block as Record<string, unknown> | null | undefined;
         if (b && typeof b === "object" && b.type === "input_text" && typeof b.text === "string") {
           texts.push(b.text);
+          allTexts.push(b.text);
         }
       }
       text = texts.length > 0 ? texts.join("\n") : null;
@@ -69,15 +72,78 @@ export function isSessionResetCommand(
       // CC/CB/dsh 用 body.messages[]
       const messages = (body as any).messages as any[];
       if (messages.length === 0) return false;
-      // 最后一条 user
-      const last = messages[messages.length - 1];
-      if (!last || last.role !== "user") return false;
+      // 真机上 CC 会在用户输入后面再挂一条 `role:"system"` 的提示
+      // （实测形如 `<total_tokens>15000000 tokens left</total_tokens>`），
+      // 于是"最后一条就是用户消息"的前提不成立、命令被整条漏掉。
+      //
+      // 于是从尾部往回找"本 turn 的用户输入"，一路跳过非 user 消息（上面那条 system 提示）
+      // 与没有文本的占位消息，最多回看 6 条，避免历史里的旧命令被重放触发。
+      //
+      // 但"往回跳过没有文本的消息"这条规则会误伤表单续接：客户端把表单选择以**工具回执**
+      // 发回来，回执里没有用户键入的文本，于是回看会越过它、命中会话更早那条
+      // `mem:session-reset`，把一条已经执行过的命令当成新命令重放 —— 状态被打回
+      // uninitialized，同一张表单被反复弹（真机现象：CC 上资产关联问句连弹两遍、
+      // 第一次的选择被第二次重置覆盖；Hermes 上更明显，连问三次）。
+      // 工具回执有两种形态，都要挡住：
+      //   - OpenAI Chat：独立角色 `{role:"tool", tool_call_id, content}`（Hermes / workbuddy …）
+      //   - Anthropic：`{role:"user", content:[{type:"tool_result", …}]}`
+      // 遇到任一种都判否：本 turn 是工具/表单的续接，不是用户新输入。
+      const hasText = (m: any): boolean => {
+        if (!m || m.role !== "user") return false;
+        if (typeof m.content === "string") return m.content.trim().length > 0;
+        if (!Array.isArray(m.content)) return false;
+        return m.content.some(
+          (b: any) => b && (b.type === "text" || b.type === "input_text") && typeof b.text === "string" && b.text.trim().length > 0,
+        );
+      };
+      const isToolReply = (m: any): boolean =>
+        !!m && typeof m === "object" && (m.role === "tool" || m.role === "function");
+      const hasToolResult = (m: any): boolean => {
+        if (!m || m.role !== "user" || !Array.isArray(m.content)) return false;
+        return m.content.some(
+          (b: any) => b && typeof b === "object" && (b.type === "tool_result" || b.type === "function_call_output"),
+        );
+      };
+      let last: any = undefined;
+      for (let i = messages.length - 1; i >= 0 && i >= messages.length - 6; i--) {
+        const m = messages[i];
+        if (isToolReply(m)) return false;
+        if (!m || m.role !== "user") continue;
+        if (hasText(m)) { last = m; break; }
+        if (hasToolResult(m)) return false;
+      }
+      if (!last) return false;
       text = adapter.extractUserText(last.content);
+      if (Array.isArray(last.content)) {
+        for (const block of last.content as unknown[]) {
+          const b = block as Record<string, unknown> | null | undefined;
+          if (b && typeof b === "object" && (b.type === "text" || b.type === "input_text") && typeof b.text === "string") {
+            allTexts.push(b.text);
+          }
+        }
+      }
     } else {
       return false;
     }
 
     if (!text) return false;
+
+    // 客户端会往用户消息里掺自己的内容：Claude Code 2.x 把 `<system-reminder>…` 与用户输入
+    // 分成多个 text 块（顺序不固定），也可能在同一块里换行追加。这两种情况下，
+    // "按整段文本解析命令"会得到 command="session-reset\n<system-reminder>…"（或干脆取到
+    // reminder 那一块），与 "session-reset" 不相等，reset 永远不会触发——真机表现是用户发了
+    // mem:session-reset，会话仍停在 bypassed/pending，模型把它当普通提问回答。
+    //
+    // 因此：先看**首行**是否恰好是命令（不放松成"包含"，免得把"mem:session-reset 是什么意思"
+    // 这类正常提问也拦掉），并允许命令出现在任意一个 text 块里。
+    const isResetLine = (value: string | null | undefined): boolean =>
+      typeof value === "string" &&
+      value.trim().split(/\r?\n/, 1)[0].trim().toLowerCase() === "mem:session-reset";
+
+    if (isResetLine(text)) return true;
+    for (const candidate of allTexts) if (isResetLine(candidate)) return true;
+
+    // 兜底：保持原有严格解析（含参数校验）不变。
     const parsed = parseCommandFromText(text);
     return parsed?.command === "session-reset";
   } catch {
