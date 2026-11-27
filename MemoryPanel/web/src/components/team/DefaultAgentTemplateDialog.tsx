@@ -9,7 +9,7 @@
  * 已配置时打开弹窗会用 get-default-template 的返回值预填。
  */
 
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Button, Input, Modal, Tag } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { BooksIcon, CodeIcon, ToolsIcon } from 'tea-icons-react';
@@ -62,6 +62,14 @@ export default function DefaultAgentTemplateDialog({
   const [codeGraphs, setCodeGraphs] = useState<string[]>(initial?.asset_ids?.code_graphs ?? []);
   const [llmWikis, setLlmWikis] = useState<string[]>(initial?.asset_ids?.wikis ?? []);
   const [busy, setBusy] = useState(false);
+  const mountedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // 团队公共资产（skill / code_graph / wiki，后端 bootstrap 已按 visibility=team 过滤）
   const assets = useTeamAssets(team.team_id);
@@ -71,6 +79,10 @@ export default function DefaultAgentTemplateDialog({
 
   function toggle(list: string[], setList: (v: string[]) => void, key: string) {
     setList(list.includes(key) ? list.filter((k) => k !== key) : [...list, key]);
+  }
+
+  function handleClose() {
+    if (!busy) onClose();
   }
 
   async function handleSave() {
@@ -90,8 +102,10 @@ export default function DefaultAgentTemplateDialog({
         asset_ids: { skills, code_graphs: codeGraphs, wikis: llmWikis },
       };
       await agentsApi.setDefaultTemplate(team.team_id, template);
+      if (!mountedRef.current) return;
       onSaved(template);
     } catch (err) {
+      if (!mountedRef.current) return;
       tea.notify.error(getErrorMessage(err));
       setBusy(false);
     }
@@ -102,8 +116,9 @@ export default function DefaultAgentTemplateDialog({
       visible
       caption={initial ? t('defaultAgent.edit.caption') : t('defaultAgent.create.caption')}
       size="l"
-      onClose={onClose}
+      onClose={handleClose}
       disableEscape={busy}
+      disableCloseIcon={busy}
     >
       <Modal.Body>
         <div className="_memory-form-stack">
@@ -258,7 +273,7 @@ export default function DefaultAgentTemplateDialog({
         <Button type="primary" disabled={!canSubmit} loading={busy} onClick={handleSave}>
           {initial ? t('defaultAgent.save') : t('defaultAgent.create.submit')}
         </Button>
-        <Button onClick={onClose} disabled={busy}>{t('createAgent.cancel')}</Button>
+        <Button onClick={handleClose} disabled={busy}>{t('createAgent.cancel')}</Button>
       </Modal.Footer>
     </Modal>
   );
