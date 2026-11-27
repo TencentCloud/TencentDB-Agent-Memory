@@ -1,0 +1,6 @@
+packages:
+  - "MemoryCore"
+  - "MemoryKnowledge"
+  - "MemoryPanel"
+  - "MemoryProxy"
+  - "sdk/memory-core/typescript"
