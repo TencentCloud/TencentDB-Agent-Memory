@@ -204,6 +204,20 @@ export interface DedupDecision {
 
 const TAG = "[memory-tdai][l1-writer]";
 
+/**
+ * 人工修订标记：`/v3/atomic/update` 会在 metadata 里写 `manual_edited_at`。
+ * 命中的行在 L1 去重/合并时受保护——不删除、不覆盖（见 writeMemory）。
+ */
+export function isManuallyEdited(metadataJson: string | undefined): boolean {
+  if (!metadataJson) return false;
+  try {
+    const parsed = JSON.parse(metadataJson);
+    return Boolean(parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).manual_edited_at);
+  } catch {
+    return false;
+  }
+}
+
 // ============================
 // Core functions
 // ============================
@@ -245,7 +259,9 @@ export async function writeMemory(params: {
   /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
   storage?: StorageAdapter;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  const { memory, decision: requestedDecision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  // 去重决策可能被人工修订保护降级（update/merge → store），因此用可变量承载。
+  let decision = requestedDecision;
 
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
@@ -262,11 +278,22 @@ export async function writeMemory(params: {
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0 && vectorStore) {
     try {
       const existing = await vectorStore.queryL1Records({ recordIds: decision.target_ids });
-      const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
-      nextVersion = maxVersion + 1;
-      for (const row of existing) {
-        for (const ts of [row.timestamp_str, row.timestamp_start, row.timestamp_end]) {
-          if (ts) targetTimestamps.push(ts);
+      const manualEdited = existing.filter((row) => isManuallyEdited(row.metadata_json));
+      if (manualEdited.length > 0) {
+        // 人工修订过的记忆是"人改过的真相"，去重合并不得删除或覆盖它。
+        // 降级为 store：保留旧行，另写一条新记忆（可能产生近义行，但不会丢人工修订）。
+        logger?.info?.(
+          `${TAG} 保护人工修订行 [${manualEdited.map((row) => row.record_id).join(",")}]，` +
+            `${decision.action} 降级为 store（不删除、不合并）`,
+        );
+        decision = { ...decision, action: "store", target_ids: [], record_id: undefined };
+      } else {
+        const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
+        nextVersion = maxVersion + 1;
+        for (const row of existing) {
+          for (const ts of [row.timestamp_str, row.timestamp_start, row.timestamp_end]) {
+            if (ts) targetTimestamps.push(ts);
+          }
         }
       }
     } catch (err) {

@@ -135,6 +135,19 @@ export interface L0RecordRow {
 
 const TAG = "[memory-tdai][sqlite]";
 
+/**
+ * Columns returned by every L1 row query. Hoisted to module scope so the
+ * dynamic primary-key lookup (`record_id IN (...)`) can reuse the exact same
+ * projection as the prepared statements built in `init()`.
+ */
+const L1_QUERY_COLUMNS = `record_id, content, type, priority, scene_name, session_key, session_id,
+      team_id, task_id, user_id, agent_id, version,
+      timestamp_str, timestamp_start, timestamp_end,
+      created_time, updated_time, metadata_json`;
+
+/** Upper bound for `recordIds` lookups (defensive; callers pass ≤ 20 in practice). */
+const MAX_RECORD_IDS = 500;
+
 /** Persisted metadata about the embedding provider used to generate stored vectors. */
 interface EmbeddingMeta {
   provider: string;
@@ -1058,10 +1071,7 @@ export class VectorStore implements IMemoryStore {
     // L1 query statements (for l1-reader)
     // user_id / agent_id surfaced in every L1 read so callers (router /
     // candidate-pool / l1-reader) can enforce isolation downstream.
-    const l1QueryCols = `record_id, content, type, priority, scene_name, session_key, session_id,
-      team_id, task_id, user_id, agent_id, version,
-      timestamp_str, timestamp_start, timestamp_end,
-      created_time, updated_time, metadata_json`;
+    const l1QueryCols = L1_QUERY_COLUMNS;
 
     this.stmtQueryBySessionId = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
@@ -1268,6 +1278,12 @@ export class VectorStore implements IMemoryStore {
           this.stmtDeleteVec!.run(recordId);
           this.stmtInsertVec!.run(recordId, Buffer.from(embedding!.buffer), record.updatedAt);
         } else {
+          // No usable embedding: drop any stale vector for this id. Keeping the
+          // previous vector would let KNN recall the *old* content after the row
+          // was rewritten (e.g. an edit whose embedding call failed).
+          try {
+            this.stmtDeleteVec?.run(recordId);
+          } catch { /* vec table may be absent */ }
           this.logger?.debug?.(
             `${TAG} [L1-upsert] Skipping vec write (${embedding ? "zero vector" : "no embedding"}) id=${recordId}`,
           );
@@ -1652,12 +1668,28 @@ export class VectorStore implements IMemoryStore {
       return [];
     }
     try {
-      const { sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
+      const { recordIds, sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
 
       let raw: Record<string, unknown>[];
 
-      // Priority: sessionId > sessionKey (sessionId is more specific)
-      if (sessionId && updatedAfter) {
+      // Primary-key lookup (`recordIds`) must win over every other predicate:
+      // callers such as `/v3/atomic/update` and the L1 dedup writer ask for one
+      // specific row. Before this branch existed, sqlite silently fell through
+      // to `stmtQueryAll` (all rows, oldest first) and they took rows[0] — which
+      // made atomic/update rewrite the *oldest* record's tenancy onto the target.
+      // Other backends (TCVDB/Mongo) already honour `recordIds`.
+      if (recordIds && recordIds.length > 0) {
+        const ids = recordIds.slice(0, MAX_RECORD_IDS).filter((id) => typeof id === "string" && id.length > 0);
+        if (ids.length === 0) return [];
+        if (recordIds.length > MAX_RECORD_IDS) {
+          this.logger?.warn(`${TAG} [L1-query] recordIds truncated to ${MAX_RECORD_IDS} (requested ${recordIds.length})`);
+        }
+        const placeholders = ids.map(() => "?").join(",");
+        raw = this.db
+          .prepare(`SELECT ${L1_QUERY_COLUMNS} FROM l1_records WHERE record_id IN (${placeholders})`)
+          .all(...ids) as Record<string, unknown>[];
+      } else if (sessionId && updatedAfter) {
+        // Priority: sessionId > sessionKey (sessionId is more specific)
         raw = this.stmtQueryBySessionIdSince.all(sessionId, updatedAfter) as Record<string, unknown>[];
       } else if (sessionId) {
         raw = this.stmtQueryBySessionId.all(sessionId) as Record<string, unknown>[];

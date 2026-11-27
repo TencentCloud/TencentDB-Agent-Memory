@@ -96,6 +96,17 @@ import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
 import { buildProfileIsolationScope, buildProfileStableId, DEFAULT_PROFILE_SCOPE } from "../core/profile/profile-scope.js";
 
 const TAG = "[tdai-gateway][v2]";
+
+/** L1 记忆类型白名单（与 core/record/l1-writer.ts 的 MemoryType 保持一致）。 */
+const L1_MEMORY_TYPES = new Set([
+  "persona",
+  "episodic",
+  "instruction",
+  "work_fact",
+  "work_task",
+  "work_method",
+  "work_artifact",
+]);
 const V2_PREFIX = "/v2";
 
 /**
@@ -1058,22 +1069,37 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
   const { id, content, background } = parsed.data;
 
+  // 可选字段：type / priority（对外 schema 暂未包含，但运维面 memory_edit 需要能改错标类型）。
+  // 两者都只在显式传入时覆盖；缺省保留库里原值。
+  const rawType = (body as Record<string, unknown> | undefined)?.type;
+  const rawPriority = (body as Record<string, unknown> | undefined)?.priority;
+  if (rawType !== undefined) {
+    if (typeof rawType !== "string" || !L1_MEMORY_TYPES.has(rawType)) {
+      return errorEnvelope(400, `Invalid type: ${String(rawType)} (allowed: ${[...L1_MEMORY_TYPES].join(", ")})`, requestId);
+    }
+  }
+  if (rawPriority !== undefined) {
+    if (typeof rawPriority !== "number" || !Number.isInteger(rawPriority) || rawPriority < 0 || rawPriority > 100) {
+      return errorEnvelope(400, `Invalid priority: ${String(rawPriority)} (expected integer 0..100)`, requestId);
+    }
+  }
+
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
 
-  // Read existing record by primary key
+  // 主键精确定位。历史上 sqlite 的 queryL1Records 不认 recordIds，会返回全表
+  // （按 updated_time 升序），调用方取 [0] → 403 比对的是"最老那条"的归属，
+  // 且写入时把最老那条的 team/user/agent/task/type 覆盖到目标行。
   const existing = await store.queryL1Records({ recordIds: [id] });
-  if (!existing || existing.length === 0) {
+  const record = existing.find((r) => r.record_id === id);
+  if (!record) {
     return errorEnvelope(404, `Atomic note not found: ${id}`, requestId);
   }
 
   const now = new Date().toISOString();
-  const record = existing[0];
 
-  // Build update: content is always overwritten; background (scene_name) only if provided.
-  // user_id / agent_id are preserved from the existing row — updates don't
-  // re-derive them. If the caller supplied an isolation triple that does NOT
-  // match the existing row, we treat it as a permission denial.
+  // 归属一律以库里那一行为准，绝不因请求缺字段而回落到请求身份
+  // （否则编辑会把记忆"改到"另一个桶里，召回时等于记忆消失）。
   const iso = deps.requestIsolation;
   if (iso?.userId && record.user_id && record.user_id !== iso.userId) {
     return errorEnvelope(403, `Atomic note ${id} belongs to a different user`, requestId);
@@ -1082,24 +1108,33 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
     return errorEnvelope(403, `Atomic note ${id} belongs to a different agent`, requestId);
   }
   const updatedVersion = (record.version ?? 0) + 1;
+
+  // 人工修订标记：L1 去重/合并读到该标记会放弃删除（见 core/record/l1-writer.ts）。
+  const baseMetadata = parseMetadataJson(record.metadata_json);
+  const metadata = {
+    ...baseMetadata,
+    manual_edited_at: now,
+    manual_edit_count: Number(baseMetadata.manual_edit_count ?? 0) + 1,
+  };
+
   const updated: MemoryRecord = {
     id,
     content,
-    type: record.type as any,
-    priority: record.priority ?? 50,
+    type: ((rawType as MemoryRecord["type"] | undefined) ?? (record.type as MemoryRecord["type"])),
+    priority: (rawPriority as number | undefined) ?? record.priority ?? 50,
     scene_name: background !== undefined ? background : (record.scene_name ?? ""),
     source_message_ids: [],
-    metadata: parseMetadataJson(record.metadata_json),
+    metadata,
     timestamps: record.timestamp_str ? [record.timestamp_str] : [],
     createdAt: record.created_time,
     updatedAt: now,
     version: updatedVersion,
     sessionKey: record.session_key ?? "",
-    sessionId: record.session_id ?? iso?.sessionId ?? "",
+    sessionId: record.session_id || iso?.sessionId || "",
     taskId: record.task_id ?? iso?.taskId,
-    teamId: record.team_id ?? iso?.teamId,
-    userId: record.user_id ?? iso?.userId,
-    agentId: record.agent_id ?? iso?.agentId,
+    teamId: record.team_id || iso?.teamId,
+    userId: record.user_id || iso?.userId,
+    agentId: record.agent_id || iso?.agentId,
   };
 
   const embedding = deps.getEmbedding();
