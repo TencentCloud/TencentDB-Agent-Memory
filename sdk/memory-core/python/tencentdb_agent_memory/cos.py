@@ -21,7 +21,7 @@ import re
 import threading
 import time
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -344,7 +344,7 @@ class MemoryFileReader:
         if cred.token:
             headers["x-cos-security-token"] = cred.token
 
-        url = f"https://{host}{cos_path}"
+        url = f"https://{host}{quote(cos_path, safe='/')}"
         logger.debug("[cos] GET %s", url)
 
         resp = self._client.get(url, headers=headers)
@@ -367,7 +367,7 @@ class MemoryFileReader:
             headers = {"Host": host, "Authorization": auth}
             if cred.token:
                 headers["x-cos-security-token"] = cred.token
-            url = f"https://{host}{cos_path}"
+            url = f"https://{host}{quote(cos_path, safe='/')}"
             resp = self._client.get(url, headers=headers)
 
         if resp.status_code == 404:
@@ -423,7 +423,7 @@ class AsyncMemoryFileReader:
         if cred.token:
             headers["x-cos-security-token"] = cred.token
 
-        url = f"https://{host}{cos_path}"
+        url = f"https://{host}{quote(cos_path, safe='/')}"
         resp = await self._client.get(url, headers=headers)
 
         if resp.status_code == 403:
@@ -442,7 +442,7 @@ class AsyncMemoryFileReader:
             headers = {"Host": host, "Authorization": auth}
             if cred.token:
                 headers["x-cos-security-token"] = cred.token
-            url = f"https://{host}{cos_path}"
+            url = f"https://{host}{quote(cos_path, safe='/')}"
             resp = await self._client.get(url, headers=headers)
 
         if resp.status_code == 404:
