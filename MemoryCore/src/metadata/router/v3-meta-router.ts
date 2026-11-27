@@ -167,7 +167,7 @@ const routeTable: Record<string, Handler> = {
 
   // Team
   [`${V3_PREFIX}/team/create`]: bind(S.teamCreateSchema, (d, c, s) => s.createTeamForCaller(d, c)),
-  [`${V3_PREFIX}/team/get`]: bind(S.teamGetSchema, async (d, _c, s) => orNotFound(await s.getTeamById(d.team_id), "team_not_found", d.team_id)),
+  [`${V3_PREFIX}/team/get`]: bind(S.teamGetSchema, async (d, c, s) => orNotFound(await s.getTeamForCaller(d.team_id, c), "team_not_found", d.team_id)),
   [`${V3_PREFIX}/team/update`]: bind(S.teamUpdateSchema, async (d, c, s) => {
     const { team_id, ...patch } = d;
     return s.updateTeamForCaller(team_id, patch, c);
