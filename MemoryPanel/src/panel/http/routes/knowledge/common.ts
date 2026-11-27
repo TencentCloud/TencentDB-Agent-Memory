@@ -9,8 +9,9 @@ import type { Context } from 'hono';
 import type { PanelDeps } from '../../../panel-deps.js';
 import { toKernelCredentials, type MetaCallContext } from '../../../kernel/types.js';
 import type { MetaEnvelope } from '../../../kernel/envelope.js';
-import { DomainError } from '../../../domain/errors.js';
-import { respondControlError, respondEnvelope } from '../../envelope.js';
+import { CoreUpstreamError, DomainError } from '../../../domain/errors.js';
+import type { CodeGraphDetail } from '../../../kernel/ports/knowledge-client-port.js';
+import { controlEnvelope, respondControlError, respondEnvelope } from '../../envelope.js';
 
 export function buildCtx(c: Context): MetaCallContext {
   const panelMeta = c.get('panelMeta');
@@ -133,6 +134,13 @@ export async function runKs<T>(
     const data = await fn();
     return respondEnvelope(c, okEnvelope(c, data));
   } catch (err) {
+    if (err instanceof CoreUpstreamError && err.upstreamErrorCode) {
+      const envelope = {
+        ...controlEnvelope(err.httpStatus, err.message || err.code, c.get('reqId') ?? ''),
+        error_code: err.upstreamErrorCode,
+      };
+      return respondEnvelope(c, envelope);
+    }
     if (err instanceof DomainError) {
       return respondControlError(c, err.httpStatus, err.message || err.code);
     }
@@ -165,11 +173,20 @@ export async function ensureKnowledgeAsset(
   const log = deps.logger;
   const getEnv = await deps.metaKernel.invoke('asset/get', { asset_id: params.assetId }, ctx);
   if (getEnv.code === 0 && getEnv.data) {
+    const existing = getEnv.data as KnowledgeAssetMetaRaw;
+    if (existing.asset_type !== params.assetType || existing.team_id !== params.teamId ||
+        existing.owner_user_id !== params.ownerUserId) {
+      return { ok: false, env: {
+        code: 409, message: 'existing knowledge asset identity conflicts with source',
+        request_id: ctx.reqId ?? '', data: null,
+      } };
+    }
     log.info('[ensure-knowledge-asset] already present; idempotent skip', {
       asset_id: params.assetId, asset_type: params.assetType, team_id: params.teamId,
     });
     return { ok: true }; // 幂等：已存在
   }
+  if (getEnv.code !== 404) return { ok: false, env: getEnv };
   log.info('[ensure-knowledge-asset] not present; creating', {
     asset_id: params.assetId, asset_type: params.assetType, team_id: params.teamId, owner: params.ownerUserId,
   });
@@ -234,6 +251,32 @@ export async function deleteKnowledgeCascade(
 ): Promise<void> {
   await deleteKnowledgeDetail(deps, ctx, ids);
   await deleteKnowledgeAssets(deps, ctx, ids);
+}
+
+/** Confirm one CodeGraph's Core deletion before releasing its meta ACL anchor.
+ * A failed detail delete must leave meta in place so an authorized retry can
+ * finish the cross-service cascade after KS has already removed its row. */
+export async function deleteCodeGraphCascadeChecked(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+  id: string,
+  teamId: string,
+): Promise<boolean> {
+  type DeleteData = { deleted_ids: string[]; failed: Array<{ id: string; reason: string }> };
+  const completed = (data: DeleteData | null | undefined) =>
+    !!data && (data.deleted_ids.includes(id) || data.failed.some((item) =>
+      item.id === id && (item.reason === 'not_found' || item.reason === 'not found')));
+  try {
+    const cred = toKernelCredentials(ctx, { timeoutMs: deps.config.metadataRemoteTimeoutMs }, { omitUserKey: true });
+    const detail = await deps.kernelHttp.postEnvelope<DeleteData>(
+      '/v3/knowledge/delete', { knowledge_ids: [id], team_id: teamId }, cred,
+    );
+    if (detail.code !== 0 || !completed(detail.data)) return false;
+    const asset = await deps.metaKernel.invoke('asset/delete', { asset_ids: [id] }, ctx);
+    return asset.code === 0 && completed(asset.data as DeleteData | null);
+  } catch {
+    return false;
+  }
 }
 
 // ── meta list 分页 + 鉴权 + KS join ─────────────────────────────
@@ -333,15 +376,15 @@ export async function checkAssetReadPermission(
 
 /**
  * 知识资源读门控：meta asset 存在时走 acl/check；
- * code-graph 构建中无 meta 时，仅允许 KS owner 读 get（窄例外）。
+ * code-graph 尚无 meta 时，仅允许同 team 的 KS owner 走显式 opt-in 例外。
  */
 export async function requireKnowledgeRead(
   deps: PanelDeps,
   c: Context,
   ctx: MetaCallContext,
   knowledgeId: string,
-  opts?: { allowInFlightCodeOwner?: boolean; action?: 'read' | 'write' | 'use' },
-): Promise<{ userId: string; asset?: KnowledgeAssetMetaRaw } | { error: Response }> {
+  opts?: { allowInFlightCodeOwner?: boolean; action?: 'read' | 'write' | 'use'; verifyCodeGraphIdentity?: boolean; allowMissingCodeGraph?: boolean },
+): Promise<{ userId: string; asset?: KnowledgeAssetMetaRaw; codeGraphDetail?: CodeGraphDetail; codeGraphMissing?: boolean } | { error: Response }> {
   const userId = await resolveCallerUserId(deps, ctx);
   if (!userId) return { error: respondControlError(c, 401, 'INVALID_USER_KEY') };
   const action = opts?.action ?? 'read';
@@ -353,20 +396,42 @@ export async function requireKnowledgeRead(
     if (!allowed) return { error: respondControlError(c, 403, 'FORBIDDEN') };
     const member = await isTeamMember(deps, ctx, asset.team_id, userId);
     if (!member) return { error: respondControlError(c, 403, 'NOT_TEAM_MEMBER') };
+    if (opts?.verifyCodeGraphIdentity) {
+      if (asset.asset_type !== ASSET_TYPE_CODE_GRAPH) {
+        return { error: respondControlError(c, 404, 'KNOWLEDGE_NOT_FOUND') };
+      }
+      try {
+        const detail = await deps.knowledgeClientFactory(ctx.instanceId).codeGraphGet(knowledgeId);
+        if (detail.code_graph_id !== knowledgeId || detail.team_id !== asset.team_id ||
+            detail.owner_user_id !== asset.owner_user_id) {
+          return { error: respondControlError(c, 403, 'KNOWLEDGE_IDENTITY_MISMATCH') };
+        }
+        return { userId, asset, codeGraphDetail: detail };
+      } catch (err) {
+        if (opts.allowMissingCodeGraph && err instanceof CoreUpstreamError && err.httpStatus === 404) {
+          return { userId, asset, codeGraphMissing: true };
+        }
+        return { error: await runKs(c, () => Promise.reject(err)) };
+      }
+    }
     return { userId, asset };
   }
 
-  if (opts?.allowInFlightCodeOwner && (action === 'read' || action === 'write')) {
+  // Only a confirmed missing meta asset may use the KS owner fallback. A meta
+  // outage or permission error must not silently bypass the normal ACL path.
+  if (assetEnv.code === 404 && opts?.allowInFlightCodeOwner && (action === 'read' || action === 'write')) {
     try {
       const kc = deps.knowledgeClientFactory(ctx.instanceId);
       const detail = await kc.codeGraphGet(knowledgeId);
-      if (detail.owner_user_id === userId) {
+      if (detail.code_graph_id === knowledgeId && detail.owner_user_id === userId) {
         const member = await isTeamMember(deps, ctx, detail.team_id, userId);
         if (!member) return { error: respondControlError(c, 403, 'NOT_TEAM_MEMBER') };
-        return { userId };
+        return { userId, codeGraphDetail: detail };
       }
-    } catch {
-      /* fall through */
+    } catch (err) {
+      if (!(err instanceof CoreUpstreamError) || err.httpStatus !== 404) {
+        return { error: await runKs(c, () => Promise.reject(err)) };
+      }
     }
   }
 

@@ -27,6 +27,8 @@ export interface StatusCallbackPayload {
   summary: string | null;
   sync_error: string | null;
   timestamp: string;
+  /** Serving status remains ready, but the attempted refresh failed. */
+  event?: "refresh_failed";
   /** 与本次 ingest 进度回调同一代际；Panel 用以拒绝 clear 后的迟到 progress */
   run_id?: string;
 }

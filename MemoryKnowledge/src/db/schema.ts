@@ -37,6 +37,7 @@ export const knowledgeCodeGraph = sqliteTable(
     serviceUrl: text("service_url"),
     summary: text("summary"),
     version: integer("version").notNull().default(0),
+    hasLastGood: integer("has_last_good", { mode: "boolean" }).notNull().default(false),
     lastSyncAt: text("last_sync_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),

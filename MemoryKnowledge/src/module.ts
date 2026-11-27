@@ -6,8 +6,8 @@
  * Real wiki worker: LLM ingest via wiki engine.
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
 import pLimit from "p-limit";
 import simpleGit from "simple-git";
 
@@ -22,8 +22,11 @@ import {
   type ILlmBindingStore,
 } from "./store/llm-binding-store.js";
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
-import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
+import { CodeGraphHandleCloseError, openIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
+import { createCodeGraphWorker } from "./code-graph-worker.js";
+import { recoverInterruptedCodeGraphs } from "./code-graph-recovery.js";
+import { acquireDataRootOwnership, acquireKnowledgeStoreOwnership, type DataRootOwnership } from "./data-root-ownership.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
 import { getGlobalLlmConcurrency } from "./config.js";
@@ -70,6 +73,10 @@ async function headCommitIfGit(dir: string): Promise<string | undefined> {
 export interface KnowledgeModuleConfig {
   dataDir: string;
   db: Db;
+  /** Path of the metadata database; required to guard external DB paths. */
+  dbPath?: string;
+  /** Acquired before opening the metadata DB when constructed by the server. */
+  dataRootOwnership?: DataRootOwnership;
   /** LLM configuration for wiki ingest. */
   llmConfig: LlmConfig;
   /** TMC callback URL for status notifications (empty = no callback). */
@@ -98,10 +105,237 @@ export interface CodeGraphInstancePool {
   get(codeGraphId: string): CodeGraphInstance | undefined;
   set(codeGraphId: string, instance: CodeGraphInstance): void;
   delete(codeGraphId: string): void;
+  /** Hold a query lease until its handler has finished using the instance. */
+  acquire?(codeGraphId: string): { instance: CodeGraphInstance; release(): void } | undefined;
+  /** Stop new leases and lazy loads, then wait for existing ones to finish. */
+  pause?(codeGraphId: string): Promise<void>;
+  /** Acquire an exclusive pause immediately, or report an active reader. */
+  tryPause?(codeGraphId: string): boolean;
+  /** Retain an unclosed candidate handle so delete also drains it before rm. */
+  retainUnclosed?(codeGraphId: string, instance: CodeGraphInstance, onClosed?: () => void): void;
+  resume?(codeGraphId: string): void;
   loadIfMissing?(codeGraphId: string, dir: string): Promise<CodeGraphInstance | undefined>;
 }
 
+interface CodeGraphPoolIndexOps {
+  openIndex: (dir: string) => Promise<CodeGraphInstance>;
+  closeIndex: (instance: CodeGraphInstance) => void;
+}
+
+interface CodeGraphPoolGate {
+  pauses: number;
+  leases: number;
+  loads: number;
+  waiters: Array<{ resolve: () => void; reject: (error: unknown) => void }>;
+  /** A discarded handle could not be closed during the current drain. */
+  drainError?: unknown;
+  /** Keep failed closes reachable so a later pause can retry before copying. */
+  retired: Map<CodeGraphInstance, (() => void) | undefined>;
+}
+
+/** The production pool's lifecycle gate protects handles while a graph is promoted. */
+export function createCodeGraphInstancePool(
+  indexOps: CodeGraphPoolIndexOps = { openIndex, closeIndex },
+): Required<CodeGraphInstancePool> {
+  const instances = new Map<string, CodeGraphInstance>();
+  const loading = new Map<string, Promise<CodeGraphInstance | undefined>>();
+  const gates = new Map<string, CodeGraphPoolGate>();
+
+  function gate(id: string) {
+    let state = gates.get(id);
+    if (!state) {
+      state = { pauses: 0, leases: 0, loads: 0, waiters: [], retired: new Map() };
+      gates.set(id, state);
+    }
+    return state;
+  }
+
+  function retryRetired(state: CodeGraphPoolGate): void {
+    for (const [instance, onClosed] of state.retired) {
+      indexOps.closeIndex(instance);
+      state.retired.delete(instance);
+      onClosed?.();
+    }
+  }
+
+  function maybeDeleteGate(id: string, state: CodeGraphPoolGate): void {
+    if (!instances.has(id) && !loading.has(id) && state.pauses === 0 && state.leases === 0 &&
+        state.loads === 0 && state.waiters.length === 0 && state.retired.size === 0) {
+      gates.delete(id);
+    }
+  }
+
+  function notifyIdle(state: CodeGraphPoolGate) {
+    if (state.leases !== 0 || state.loads !== 0) return;
+    const waiters = state.waiters.splice(0);
+    if (waiters.length === 0) return;
+    // A close failure invalidates this drain, but must not poison every future
+    // refresh. Retain the handle and retry its close on the next pause.
+    let failure = state.drainError;
+    state.drainError = undefined;
+    if (failure === undefined) {
+      try { retryRetired(state); }
+      catch (err) { failure = err; }
+    }
+    for (const waiter of waiters) {
+      if (failure !== undefined) waiter.reject(failure);
+      else waiter.resolve();
+    }
+  }
+
+  function discard(state: CodeGraphPoolGate, instance: CodeGraphInstance) {
+    try { indexOps.closeIndex(instance); }
+    catch (err) {
+      state.retired.set(instance, undefined);
+      state.drainError = err;
+      throw err;
+    }
+  }
+
+  return {
+    get(id) { return instances.get(id); },
+    retainUnclosed(id, instance, onClosed) {
+      gate(id).retired.set(instance, onClosed);
+    },
+    set(id, instance) { instances.set(id, instance); },
+    delete(id) {
+      instances.delete(id);
+      const state = gates.get(id);
+      if (state) maybeDeleteGate(id, state);
+    },
+    acquire(id) {
+      const state = gate(id);
+      if (state.pauses > 0) return undefined;
+      const instance = instances.get(id);
+      if (!instance) return undefined;
+      state.leases++;
+      let released = false;
+      return {
+        instance,
+        release() {
+          if (released) return;
+          released = true;
+          state.leases--;
+          notifyIdle(state);
+          maybeDeleteGate(id, state);
+        },
+      };
+    },
+    pause(id) {
+      const state = gate(id);
+      // Mark paused synchronously, before the caller's first await.
+      state.pauses++;
+      if (state.leases === 0 && state.loads === 0) {
+        const failure = state.drainError;
+        state.drainError = undefined;
+        if (failure !== undefined) return Promise.reject(failure);
+        try { retryRetired(state); }
+        catch (err) { return Promise.reject(err); }
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve, reject) => { state.waiters.push({ resolve, reject }); });
+    },
+    tryPause(id) {
+      const state = gate(id);
+      if (state.pauses > 0 || state.leases > 0 || state.loads > 0) return false;
+      state.pauses++;
+      try {
+        const failure = state.drainError;
+        state.drainError = undefined;
+        if (failure !== undefined) throw failure;
+        retryRetired(state);
+        return true;
+      } catch (err) {
+        state.pauses--;
+        maybeDeleteGate(id, state);
+        throw err;
+      }
+    },
+    resume(id) {
+      const state = gate(id);
+      if (state.pauses > 0) state.pauses--;
+      maybeDeleteGate(id, state);
+    },
+    async loadIfMissing(id, dir) {
+      const state = gate(id);
+      if (state.pauses > 0 || state.retired.size > 0) return undefined;
+      const existing = instances.get(id);
+      if (existing) return existing;
+      const pending = loading.get(id);
+      if (pending) return pending;
+
+      state.loads++;
+      const opening = (async () => {
+        try {
+          let instance: CodeGraphInstance;
+          try { instance = await indexOps.openIndex(dir); }
+          catch (err) {
+            if (err instanceof CodeGraphHandleCloseError) {
+              // A partially opened SQLite handle survived a failed close.
+              // Keep it reachable so delete/refresh cannot move its files.
+              state.retired.set(err.unclosedInstance, undefined);
+              state.drainError = err;
+            }
+            log.warn(`[code-graph] lazy-load failed ${id}: ${err instanceof Error ? err.message : String(err)}`);
+            return undefined;
+          }
+          if (state.pauses > 0) {
+            discard(state, instance);
+            return undefined;
+          }
+          // A worker can install a freshly promoted handle while lazy open runs.
+          const current = instances.get(id);
+          if (current) {
+            if (current !== instance) discard(state, instance);
+            return current;
+          }
+          instances.set(id, instance);
+          log.info(`[code-graph] lazy-loaded instance ${id}`);
+          return instance;
+        } finally {
+          loading.delete(id);
+          state.loads--;
+          notifyIdle(state);
+          maybeDeleteGate(id, state);
+        }
+      })();
+      loading.set(id, opening);
+      return opening;
+    },
+  };
+}
+
+/** Drain readers and lazy opens, then hold the gate through metadata/file deletion. */
+export function createCodeGraphInstanceReleaser(
+  instancePool: Required<CodeGraphInstancePool>,
+  close: (instance: CodeGraphInstance) => void = closeIndex,
+): (codeGraphId: string) => Promise<(() => void) | null> {
+  return async (codeGraphId) => {
+    let paused = false;
+    try {
+      paused = instancePool.tryPause(codeGraphId);
+      if (!paused) return null;
+      const inst = instancePool.get(codeGraphId);
+      // Keep a handle whose close failed reachable. A later delete can retry
+      // closing it; dropping the pool entry would let that retry unlink an
+      // index while SQLite may still hold its WAL and database files open.
+      if (inst) close(inst);
+      instancePool.delete(codeGraphId);
+      let resumed = false;
+      return () => {
+        if (resumed) return;
+        resumed = true;
+        instancePool.resume(codeGraphId);
+      };
+    } catch (err) {
+      if (paused) instancePool.resume(codeGraphId);
+      throw err;
+    }
+  };
+}
+
 export interface KnowledgeModule {
+  dataRootOwnership: DataRootOwnership;
   wikiService: WikiService;
   cgService: CodeGraphService;
   wikiMgr: WikiSourceManager;
@@ -130,6 +364,17 @@ export interface KnowledgeModule {
  * - Async restore synced instances
  */
 export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeModule {
+  const ownership = config.dataRootOwnership ?? (config.dbPath
+    ? acquireKnowledgeStoreOwnership(config.dataDir, config.dbPath)
+    : acquireDataRootOwnership(config.dataDir));
+  try { return buildKnowledgeModule(config, ownership); }
+  catch (err) {
+    if (!config.dataRootOwnership) ownership.release();
+    throw err;
+  }
+}
+
+function buildKnowledgeModule(config: KnowledgeModuleConfig, ownership: DataRootOwnership): KnowledgeModule {
   const { dataDir, db, llmConfig } = config;
 
   // Store
@@ -143,24 +388,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     resolveLlmConfig(serviceId, llmBindingStore.get(serviceId), llmConfig);
 
   // Instance pool (code-graph) — lazy loading
-  const _poolMap = new Map<string, CodeGraphInstance>();
-  const instancePool: CodeGraphInstancePool = {
-    get(id: string) { return _poolMap.get(id); },
-    set(id: string, inst: CodeGraphInstance) { _poolMap.set(id, inst); },
-    delete(id: string) { _poolMap.delete(id); },
-    async loadIfMissing(id: string, dir: string) {
-      if (_poolMap.has(id)) return _poolMap.get(id);
-      try {
-        const instance = await openIndex(dir);
-        _poolMap.set(id, instance);
-        log.info(`[code-graph] lazy-loaded instance ${id}`);
-        return instance;
-      } catch (err) {
-        log.warn(`[code-graph] lazy-load failed ${id}: ${err instanceof Error ? err.message : String(err)}`);
-        return undefined;
-      }
-    },
-  };
+  const instancePool = createCodeGraphInstancePool();
 
   // Wiki engine manager
   const wikiMgr = createWikiSourceManager(join(dataDir, "_wiki_engines"));
@@ -265,104 +493,39 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     return { ssh: { keyPath: key.keyPath, knownHostsPath: key.knownHostsPath } };
   };
 
-  // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
-  const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, serviceId, setInternalStatus } = ctx;
-
-    // 外部来源（工蜂等）→ 注入令牌；无凭据行 → 公开仓。
-    const cleanUrl = stripCredentials(repoUrl);
-    const effectiveUrl = cloneUrlFor(serviceId, codeGraphId, cleanUrl);
-    // 判定「是否私有仓」用 URL 是否被改写（等价于凭据行是否存在，且无需再查一次库）。
-    const needsCredential = effectiveUrl !== cleanUrl;
-
-    // Resolve protocol-specific fetcher (validates url: https/ssh whitelist + SSRF blocklist).
-    const fetcher = fetcherRegistry.resolve(effectiveUrl);
-
-    // SSH 仓库 → 每用户私钥（HTTPS 下恒为 undefined，行为与改造前完全一致）。
-    const sshOpts = sshFetchOptionsFor({
-      serviceId,
-      ownerUserId: ctx.ownerUserId,
-      repoUrl: effectiveUrl,
-    });
-
-    const isExistingRepo = existsSync(join(dir, ".git"));
-    // ★ 私有仓不做增量 sync：GitSourceFetcher.sync() 内部是 `git fetch origin`，
-    //   用的是 .git/config 里的 URL —— 而那已被 sanitize 成干净地址，必然 401。
-    //   因此外部来源一律全量 clone（每次都带令牌），代价是慢，行为正确。
-    const canIncremental = isExistingRepo && !needsCredential;
-    let didIncrementalSync = false;
-    let version: string | null = null;
-
-    if (canIncremental) {
-      try {
-        setInternalStatus("fetching");
-        const res = await fetcher.sync(effectiveUrl, branch, dir, sshOpts);
-        version = res.version;
-
-        setInternalStatus("indexing");
-        let instance = instancePool.get(codeGraphId);
-        if (!instance) {
-          instance = await openIndex(dir);
-        }
-        await syncIndex(instance);
-        instancePool.set(codeGraphId, instance);
-        didIncrementalSync = true;
-      } catch (err) {
-        log.warn(
-          `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
-    }
-
-    if (!didIncrementalSync) {
-      // 私有仓重跑：旧目录还在（增量被跳过）→ 先清掉，否则 clone 到非空目录会失败。
-      if (isExistingRepo) {
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
-      mkdirSync(dir, { recursive: true });
-      setInternalStatus("cloning");
-      let res;
-      try {
-        res = await fetcher.fetch(effectiveUrl, branch, dir, sshOpts);
-      } catch (err) {
-        const raw = err instanceof Error ? err.message : String(err);
-        // ★ 顺序要紧：先判「分支不存在」，再判认证。
-        //
-        // 原因：git 在分支找不到时也会输出 `Could not read from remote repository`，
-        // 与认证失败的措辞重叠。若先判认证，分支错误会被误报成「SSH 认证失败」，
-        // 让用户去查公钥 —— 而真正要做的只是改个分支名。
-        // （fetcher 层的 explainBranchError 已把分支错误转成带远端分支列表的可行动消息。）
-        if (isRemoteBranchMissingError(raw)) {
-          throw err; // 已由 fetcher 包装好，原样透出
-        }
-        // git 认证/权限错误措辞误导（`could not read Username` = 仓库需要认证），
-        // 转成面向用户的提示后再抛，写入 sync_error 供前端展示。
-        if (isGitAuthError(raw)) {
-          throw new Error(explainGitAuthError(raw, needsCredential));
-        }
-        throw err;
-      }
-      version = res.version;
-      // ★ 凭据落地清理：clone 会把带令牌的 URL 写进 .git/config 的 origin。
-      //   不清理等于把用户 PAT 明文留在磁盘上（后续 git fetch 也一直用它）。
-      await sanitizeCloneRemote(dir, stripCredentials(repoUrl), serviceId, codeGraphId);
-
-      setInternalStatus("indexing");
-      const instance = await indexProject(dir);
-      instancePool.set(codeGraphId, instance);
-    }
-
-    // commit hash comes from the fetcher's FetchResult (unified after clone / sync)
-    const commitHash = version ?? undefined;
-
-    const instance = instancePool.get(codeGraphId);
-    const rawStats = instance ? getStats(instance) : undefined;
-    const stats = rawStats
-      ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
-      : undefined;
-    return { commitHash, stats };
-  };
+  // Authentication is resolved for each build; only the isolated candidate is fetched.
+  const realCodeWorker = createCodeGraphWorker({
+    instancePool,
+    resolveFetcher: (repoUrl, ctx) => {
+      const cleanUrl = stripCredentials(repoUrl);
+      const effectiveUrl = cloneUrlFor(ctx.serviceId, ctx.codeGraphId, cleanUrl);
+      const needsCredential = effectiveUrl !== cleanUrl;
+      const fetcher = fetcherRegistry.resolve(effectiveUrl);
+      const sshOpts = sshFetchOptionsFor({ serviceId: ctx.serviceId, ownerUserId: ctx.ownerUserId, repoUrl: effectiveUrl });
+      return {
+        supportedType: fetcher.supportedType,
+        validate: (url) => fetcher.validate(url),
+        fetch: async (_url, branch, dir) => {
+          try {
+            const result = await fetcher.fetch(effectiveUrl, branch, dir, sshOpts);
+            await sanitizeCloneRemote(dir, cleanUrl, ctx.serviceId, ctx.codeGraphId);
+            return result;
+          } catch (err) {
+            const raw = err instanceof Error ? err.message : String(err);
+            if (isRemoteBranchMissingError(raw)) throw err;
+            if (isGitAuthError(raw)) throw new Error(explainGitAuthError(raw, needsCredential));
+            throw err;
+          }
+        },
+        sync: (_url, branch, dir) => {
+          // origin is stored without a PAT; private repositories need a fresh clone.
+          if (needsCredential) throw new Error("Private repository requires a fresh candidate clone");
+          return fetcher.sync(effectiveUrl, branch, dir, sshOpts);
+        },
+      };
+    },
+    logger: { warn: (message) => log.warn(message) },
+  });
 
   /**
    * 本地目录构建 worker —— **只建索引，不做任何网络拉取**。
@@ -373,26 +536,13 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
    * 与 realCodeWorker 的关键差异：没有 clone / fetch / 凭据 / SSRF 任何环节，
    * 因此不会因网络、分支、令牌问题失败 —— 失败只可能是目录本身有问题。
    */
-  const realLocalCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, codeGraphId, setInternalStatus } = ctx;
-
-    // 目录校验：build() 入队前已查过一次，这里再查是防「入队后到执行前」被删。
-    if (!existsSync(dir)) {
-      throw new Error(`代码目录不存在，无法构建：${dir}`);
-    }
-
-    setInternalStatus("indexing");
-    const instance = await indexProject(dir);
-    instancePool.set(codeGraphId, instance);
-
-    const rawStats = getStats(instance);
-    const stats = rawStats
-      ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
-      : undefined;
-
-    // commitHash：目录里带 .git 就读一下，没有或读不了就留空 —— 不因此判失败。
-    return { commitHash: await headCommitIfGit(dir), stats };
-  };
+  const realLocalCodeWorker = createCodeGraphWorker({
+    instancePool,
+    fromLocalDir: true,
+    localCommitHash: headCommitIfGit,
+    resolveFetcher: () => { throw new Error("Local builds must not fetch a repository"); },
+    logger: { warn: (message) => log.warn(message) },
+  });
 
   // ── Real wiki worker: ingest via wiki engine ──
   const realWikiWorker: WikiWorker = async (ctx) => {
@@ -449,17 +599,16 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     queue: sharedQueue,
     logger: { info: log.info.bind(log), warn: log.warn.bind(log), error: log.error.bind(log) },
     callbackConfig,
-    // 释放 code-graph 内存资源（008 delete 清理）：从 pool 移除并关闭索引句柄。幂等。
-    releaseInstance: (codeGraphId: string) => {
-      const inst = instancePool.get(codeGraphId);
-      if (inst) closeIndex(inst);
-      instancePool.delete(codeGraphId);
-    },
+    releaseInstance: createCodeGraphInstanceReleaser(instancePool),
     credentialStore,
     codeSourceRegistry,
   });
 
-  // Restart recovery: mark interrupted tasks as failed
+  // A refresh still has a last-good index; an initial build does not.
+  const restored = recoverInterruptedCodeGraphs(store, dataDir, { warn: (message) => log.warn(message) });
+  if (restored > 0) log.info(`restored ${restored} interrupted code-graph refresh(es)`);
+
+  // Restart recovery: mark remaining interrupted tasks as failed
   const interrupted = store.markInterruptedAsFailed();
   if (interrupted > 0) {
     log.info(`marked ${interrupted} interrupted tasks as failed`);
@@ -473,8 +622,8 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
       for (const row of allSynced) {
         const dir = join(dataDir, row.service_id, row.team_id, row.code_graph_id);
         try {
-          const instance = await openIndex(dir);
-          instancePool.set(row.code_graph_id, instance);
+          const instance = await instancePool.loadIfMissing(row.code_graph_id, dir);
+          if (!instance) continue;
           const rawStats = getStats(instance);
           if (rawStats) {
             const statsJson = JSON.stringify({
@@ -535,7 +684,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   });
   autoSyncScheduler.start();
 
-  return {
+  return { dataRootOwnership: ownership,
     wikiService, cgService, wikiMgr, store, instancePool,
     llmBindingStore, autoSyncScheduler, autoSyncConfig, credentialStore,
     codeSourceRegistry, wikiSourceRegistry, sshKeyStore,

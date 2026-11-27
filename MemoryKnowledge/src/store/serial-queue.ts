@@ -84,11 +84,15 @@ export class SerialQueue {
     const entry = this.queue.shift()!;
     this.running = true;
 
-    entry
-      .task()
-      .then((result) => entry.resolve(result))
-      .catch((err) => entry.reject(err))
-      .finally(() => {
+    // Finish the queue before callers observe the settled task promise.
+    // Otherwise an immediate retry after an awaited operation sees the old
+    // task as busy for one extra microtask and is rejected spuriously.
+    void (async () => {
+      try {
+        entry.resolve(await entry.task());
+      } catch (err) {
+        entry.reject(err);
+      } finally {
         this.running = false;
         if (this.queue.length === 0) {
           const resolvers = this.idleResolvers;
@@ -97,6 +101,7 @@ export class SerialQueue {
         } else {
           this.drain();
         }
-      });
+      }
+    })();
   }
 }

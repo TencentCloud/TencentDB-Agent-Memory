@@ -1,0 +1,52 @@
+name: Knowledge and Panel CI
+
+on:
+  pull_request:
+    branches: [main, feat/server_team]
+    paths:
+      - "MemoryKnowledge/**"
+      - "MemoryPanel/**"
+      - ".github/workflows/knowledge-panel-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  knowledge:
+    name: MemoryKnowledge tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MemoryKnowledge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      # This repository intentionally ignores MemoryKnowledge/pnpm-lock.yaml.
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  panel:
+    name: MemoryPanel and web tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install and test Panel
+        working-directory: MemoryPanel
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+      - name: Install and test web
+        working-directory: MemoryPanel/web
+        run: |
+          npm ci
+          npm test
+          npm run build
