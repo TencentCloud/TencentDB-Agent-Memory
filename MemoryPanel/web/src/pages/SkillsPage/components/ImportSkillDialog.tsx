@@ -115,6 +115,10 @@ async function readAsUtf8(file: File): Promise<string> {
   return file.text();
 }
 
+async function readSkillMarkdown(file: File): Promise<string> {
+  return (await readAsUtf8(file)).replace(/\r\n?/g, '\n');
+}
+
 /**
  * Heuristic: extension-based + small-size = text. The gateway already
  * enforces a 5MB cap, but we want to send big binaries as base64 not
@@ -190,8 +194,8 @@ async function resolveSkillContent(plan: SkillPlan): Promise<{ name: string; con
   if (!plan.mainFile) {
     throw new Error(plan.warning ?? i18n.t('importSkill.error.noMainFile'));
   }
-  const raw = await readAsUtf8(plan.mainFile.file);
-  const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const raw = await readSkillMarkdown(plan.mainFile.file);
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
   const nameMatch = fmMatch?.[1].match(/^name:\s*(.+)$/m);
   const name = nameMatch?.[1].trim().replace(/^["']|["']$/g, '') || plan.skillName || '';
   if (!name) {
@@ -370,7 +374,7 @@ async function unzipToEntries(file: File): Promise<SourceEntry[]> {
 const SKILL_NAME_REGEX = /^[a-z0-9][a-z0-9-]*$/;
 
 function validateSkillText(raw: string, name: string): void {
-  const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/);
   if (!fmMatch) {
     throw new Error(i18n.t('importSkill.zip.error.noFrontmatter'));
   }
@@ -407,7 +411,7 @@ async function buildZipPlan(file: File): Promise<SkillPlan> {
     throw new Error(i18n.t('importSkill.zip.error.multiSkill'));
   }
   // 校验 SKILL.md 本身（name/description 必填、name 合规），避免批量导到一半才失败。
-  const raw = await readAsUtf8(plan.mainFile!.file);
+  const raw = await readSkillMarkdown(plan.mainFile!.file);
   const { name } = await resolveSkillContent(plan);
   validateSkillText(raw, name);
   return plan;
