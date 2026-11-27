@@ -1,0 +1,12 @@
+{
+  "name": "@tencentdb-agent-memory/subscription-hooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.16.0" },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.5.0" }
+}
