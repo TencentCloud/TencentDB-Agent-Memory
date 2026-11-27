@@ -63,15 +63,13 @@ export default function DefaultAgentTemplateDialog({
   const [llmWikis, setLlmWikis] = useState<string[]>(initial?.asset_ids?.wikis ?? []);
   const [busy, setBusy] = useState(false);
   const mountedRef = useRef(false);
-  const activeTeamIdRef = useRef(team.team_id);
 
   useLayoutEffect(() => {
     mountedRef.current = true;
-    activeTeamIdRef.current = team.team_id;
     return () => {
       mountedRef.current = false;
     };
-  }, [team.team_id]);
+  }, []);
 
   // 团队公共资产（skill / code_graph / wiki，后端 bootstrap 已按 visibility=team 过滤）
   const assets = useTeamAssets(team.team_id);
@@ -83,9 +81,12 @@ export default function DefaultAgentTemplateDialog({
     setList(list.includes(key) ? list.filter((k) => k !== key) : [...list, key]);
   }
 
+  function handleClose() {
+    if (!busy) onClose();
+  }
+
   async function handleSave() {
     if (!canSubmit) return;
-    const submitTeamId = team.team_id;
     setBusy(true);
     try {
       const metadataJson = writeAgentUiMeta(undefined, {
@@ -100,18 +101,13 @@ export default function DefaultAgentTemplateDialog({
         metadata_json: metadataJson,
         asset_ids: { skills, code_graphs: codeGraphs, wikis: llmWikis },
       };
-      await agentsApi.setDefaultTemplate(submitTeamId, template);
+      await agentsApi.setDefaultTemplate(team.team_id, template);
       if (!mountedRef.current) return;
-      if (activeTeamIdRef.current !== submitTeamId) {
-        setBusy(false);
-        return;
-      }
       onSaved(template);
     } catch (err) {
       if (!mountedRef.current) return;
-      setBusy(false);
-      if (activeTeamIdRef.current !== submitTeamId) return;
       tea.notify.error(getErrorMessage(err));
+      setBusy(false);
     }
   }
 
@@ -120,9 +116,7 @@ export default function DefaultAgentTemplateDialog({
       visible
       caption={initial ? t('defaultAgent.edit.caption') : t('defaultAgent.create.caption')}
       size="l"
-      onClose={() => {
-        if (!busy) onClose();
-      }}
+      onClose={handleClose}
       disableEscape={busy}
       disableCloseIcon={busy}
     >
@@ -279,7 +273,7 @@ export default function DefaultAgentTemplateDialog({
         <Button type="primary" disabled={!canSubmit} loading={busy} onClick={handleSave}>
           {initial ? t('defaultAgent.save') : t('defaultAgent.create.submit')}
         </Button>
-        <Button onClick={onClose} disabled={busy}>{t('createAgent.cancel')}</Button>
+        <Button onClick={handleClose} disabled={busy}>{t('createAgent.cancel')}</Button>
       </Modal.Footer>
     </Modal>
   );

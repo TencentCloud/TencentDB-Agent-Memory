@@ -794,4 +794,50 @@ describe('DefaultAgentTemplateSection E2E race-condition & lifecycle guards', ()
     expect(container.querySelector('._memory-default-agent-detail')?.textContent).toBe('Beta desc');
     expect(container.textContent).not.toContain('Alpha Template');
   });
+
+  it('8) Unkeyed A->B->A round-trip resets loading and does not reopen stale Team A dialog', async () => {
+    const reqA1 = createDeferred<TemplateConfig>();
+    const reqB = createDeferred<TemplateConfig>();
+    const reqA2 = createDeferred<TemplateConfig>();
+    let aCalls = 0;
+
+    getDefaultTemplateMock.mockImplementation((teamId) => {
+      if (teamId === 'team-a') {
+        aCalls += 1;
+        if (aCalls === 1) return reqA1.promise;
+        return reqA2.promise;
+      }
+      if (teamId === 'team-b') return reqB.promise;
+      throw new Error(`unexpected team ${teamId}`);
+    });
+
+    await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-a', teamName: 'Team A' }));
+    await React.act(async () => {
+      reqA1.resolve({ name: 'Team A First', description: 'First A' });
+      await reqA1.promise;
+    });
+
+    // Open dialog on Team A
+    await React.act(async () => {
+      (container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).not.toBeNull();
+
+    // Rapid switch A -> B (B pending) -> A without external key
+    await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-b', teamName: 'Team B' }));
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).toBeNull();
+
+    await render(React.createElement(DefaultAgentTemplateSection, { teamId: 'team-a', teamName: 'Team A' }));
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).toBeNull();
+    expect(container.textContent).toContain('team.loading');
+    expect((container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).disabled).toBe(true);
+
+    await React.act(async () => {
+      reqA2.resolve({ name: 'Team A Fresh', description: 'Fresh A' });
+      await reqA2.promise;
+    });
+    expect(container.querySelector('[data-testid="default-agent-dialog"]')).toBeNull();
+    expect(container.querySelector('._memory-default-agent-name')?.textContent).toBe('Team A Fresh');
+    expect((container.querySelector('._memory-default-agent-actions button') as HTMLButtonElement).disabled).toBe(false);
+  });
 });

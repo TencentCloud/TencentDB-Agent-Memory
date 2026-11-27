@@ -18,7 +18,7 @@ import { tea } from '@/lib/tea-bridge';
 import { getErrorMessage } from '@/lib/error-message';
 import DefaultAgentTemplateDialog from './DefaultAgentTemplateDialog';
 
-export default function DefaultAgentTemplateSection({
+function DefaultAgentTemplateContent({
   teamId,
   teamName,
 }: {
@@ -26,64 +26,55 @@ export default function DefaultAgentTemplateSection({
   teamName: string;
 }) {
   const { t } = useTranslation();
-  const [loaded, setLoaded] = useState<{
-    teamId: string;
-    template: AgentTemplateConfig | null;
-  } | null>(null);
-  const [dialogTeamId, setDialogTeamId] = useState<string | null>(null);
-  const activeRequestRef = useRef(0);
-  const activeTeamIdRef = useRef(teamId);
+  const [template, setTemplate] = useState<AgentTemplateConfig | null>(null);
+  const [loading, setLoading] = useState(Boolean(teamId));
+  const [showDialog, setShowDialog] = useState(false);
   const mountedRef = useRef(false);
-
-  const loading = Boolean(teamId) && loaded?.teamId !== teamId;
-  const template = loaded?.teamId === teamId ? loaded.template : null;
-  const showDialog = Boolean(teamId) && !loading && dialogTeamId === teamId;
 
   useLayoutEffect(() => {
     mountedRef.current = true;
-    activeTeamIdRef.current = teamId;
     return () => {
-      activeRequestRef.current += 1;
       mountedRef.current = false;
     };
-  }, [teamId]);
+  }, []);
 
   useEffect(() => {
-    const reqId = ++activeRequestRef.current;
-
     if (!teamId) {
+      setLoading(false);
       return;
     }
 
+    let cancelled = false;
+    setLoading(true);
     agentsApi
       .getDefaultTemplate(teamId)
       .then((data) => {
-        if (activeRequestRef.current !== reqId) return;
+        if (cancelled || !mountedRef.current) return;
         // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
-        setLoaded({ teamId, template: data && data.name ? data : null });
+        setTemplate(data && data.name ? data : null);
+        setLoading(false);
       })
       .catch((err) => {
-        if (activeRequestRef.current !== reqId) return;
+        if (cancelled || !mountedRef.current) return;
         tea.notify.error(getErrorMessage(err));
-        setLoaded({ teamId, template: null });
+        setTemplate(null);
+        setLoading(false);
       });
 
     return () => {
-      if (activeRequestRef.current === reqId) {
-        activeRequestRef.current += 1;
-      }
+      cancelled = true;
     };
   }, [teamId]);
 
   function openDialog() {
-    if (loading || !teamId) return;
-    setDialogTeamId(teamId);
+    if (loading) return;
+    setShowDialog(true);
   }
 
-  function handleSaved(savedTeamId: string, saved: AgentTemplateConfig) {
-    if (!mountedRef.current || activeTeamIdRef.current !== savedTeamId) return;
-    setLoaded({ teamId: savedTeamId, template: saved });
-    setDialogTeamId(null);
+  function handleSaved(saved: AgentTemplateConfig) {
+    if (!mountedRef.current) return;
+    setTemplate(saved);
+    setShowDialog(false);
     tea.notify.success(t('defaultAgent.notify.saved'));
   }
 
@@ -140,13 +131,22 @@ export default function DefaultAgentTemplateSection({
 
       {showDialog && (
         <DefaultAgentTemplateDialog
-          key={teamId}
           team={{ team_id: teamId, name: teamName }}
           initial={template}
-          onClose={() => setDialogTeamId(null)}
-          onSaved={(saved) => handleSaved(teamId, saved)}
+          onClose={() => setShowDialog(false)}
+          onSaved={handleSaved}
         />
       )}
     </div>
   );
+}
+
+export default function DefaultAgentTemplateSection({
+  teamId,
+  teamName,
+}: {
+  teamId: string;
+  teamName: string;
+}) {
+  return <DefaultAgentTemplateContent key={teamId} teamId={teamId} teamName={teamName} />;
 }
