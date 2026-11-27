@@ -166,10 +166,22 @@ function mapTaskSourceError(err: TaskSourceError): number {
       return 404;
     case "task_source_timeout":
       return 504;
-    case "task_source_config_missing":
-      return 500;
-    default:
+    case "task_source_forbidden":
+      return 403;
+    case "task_source_network_error":
+    case "task_source_unavailable":
+      return 503;
+    case "task_source_upstream_error":
+    case "task_source_invalid_response":
+      return 502;
+    case "missing_scope":
+    case "invalid_item_type":
+    case "batch_too_large":
+    case "task_source_invalid_params":
       return 400;
+    case "task_source_config_missing":
+    default:
+      return 500;
   }
 }
 

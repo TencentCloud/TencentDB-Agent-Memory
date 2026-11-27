@@ -7,6 +7,7 @@
  */
 
 import type { ConversationMessage } from "../conversation/l0-recorder.js";
+import { renderL1TemplateSlot, type TemplateRenderContext } from "../memory-prompt/template.js";
 
 // ============================
 // System Prompt
@@ -373,6 +374,31 @@ metadata 字段说明：
 
 export function getExtractMemoriesSystemPrompt(mode: MemoryPromptMode = "chat"): string {
   return mode === "code" ? EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT : EXTRACT_MEMORIES_SYSTEM_PROMPT;
+}
+
+// ============================
+// Template mode: tenant replaces the extraction rules; JSON output contract stays system-owned
+// ============================
+
+const L1_RULES_START = /^### 任务一：/m;
+const L1_OUTPUT_START = /^### 任务三：输出格式规范（JSON）/m;
+
+/**
+ * Apply a tenant L1 template: replace "任务一 … 不应该提取的内容" (segmentation + extraction rules)
+ * with the tenant text, keep the role header and the JSON output contract (任务三) untouched.
+ * Throws if slot anchors are missing.
+ */
+export function applyL1Template(
+  base: string,
+  template: TemplateRenderContext,
+  mode: MemoryPromptMode = "chat",
+): string {
+  const start = L1_RULES_START.exec(base);
+  const end = L1_OUTPUT_START.exec(base);
+  if (!start || !end || end.index <= start.index) {
+    throw new Error("l1-extraction: rules/output slot anchors not found");
+  }
+  return `${base.slice(0, start.index)}${renderL1TemplateSlot(template, mode)}${base.slice(end.index)}`;
 }
 
 // ============================

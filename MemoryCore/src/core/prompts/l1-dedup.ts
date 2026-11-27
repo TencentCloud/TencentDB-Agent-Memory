@@ -46,6 +46,14 @@ export const CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。�
    - merge / update 时，merged_timestamps 应包含**所有相关记忆的时间戳并集**（去重排序）
    - 这样可以保留事件发生的完整时间线
 
+6. **时间先后（重要）**：
+   - 新记忆的 \`event_time\` 是对话真实发生的时间；候选记忆的 \`timestamps\` 是其对应对话的时间。
+   - 处理积压时，较早的对话可能**晚于**较新的对话才到达。若新记忆的 \`event_time\` **早于**候选记忆的最新时间戳，说明它是**旧信息补录**：
+     - **禁止用 update 覆盖较新的候选记忆**；
+     - 与候选不矛盾的补充信息 → merge（保留候选中较新的结论）；
+     - 与候选矛盾 → store 为独立记忆，不要改写候选。
+   - 只有新记忆时间更晚（或无法判断）时，才按上面的 update 规则以新记忆为主。
+
 ## 输出格式
 
 严格输出 JSON 数组，每个元素对应一条新记忆的决策。不输出任何其他内容：
@@ -109,6 +117,14 @@ export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆�
 5. **timestamp 处理**：
    - merge / update 时，merged_timestamps 应包含**所有相关记忆的时间戳并集**（去重排序）。
    - 这样可以保留工作事实、任务或方法演化的完整时间线。
+
+6. **时间先后（重要）**：
+   - 新记忆的 \`event_time\` 是对话真实发生的时间；候选记忆的 \`timestamps\` 是其对应对话的时间。
+   - 处理积压时，较早的对话可能**晚于**较新的对话才到达。若新记忆的 \`event_time\` **早于**候选记忆的最新时间戳，说明它是**旧信息补录**：
+     - **禁止用 update 覆盖较新的候选记忆**（例如旧的任务状态、旧的决策不能覆盖新的）；
+     - 与候选不矛盾的补充信息 → merge（保留候选中较新的结论）；
+     - 与候选矛盾 → store 为独立记忆，不要改写候选。
+   - 只有新记忆时间更晚（或无法判断）时，才按上面的 update 规则以新记忆为主。
 
 ## 输出格式
 
@@ -209,6 +225,7 @@ export function formatBatchConflictPrompt(matches: CandidateMatch[]): string {
         type: m.newMemory.type,
         priority: m.newMemory.priority,
         scene_name: m.newMemory.scene_name,
+        ...(m.newMemory.event_time ? { event_time: m.newMemory.event_time } : {}),
       },
       null,
       2,

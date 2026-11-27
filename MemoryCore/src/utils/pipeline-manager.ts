@@ -175,6 +175,8 @@ export interface L2RunnerResult {
   latestCursor?: string;
   /** True if no new records were found and extraction was skipped. */
   skipped?: boolean;
+  /** True if the run hit the per-run batch budget and L1 records remain past latestCursor. */
+  hasMore?: boolean;
   /** Content-free persisted scene delta for L2→L3 diagnostic correlation. */
   sceneDiff?: import("../core/persona/jev-gate.js").L2SceneDiffDiagnostic;
   /** Stable correlation ID propagated into the following L3 task. */

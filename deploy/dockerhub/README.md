@@ -72,9 +72,10 @@ APT_MIRROR=<your-debian-mirror> VERSION=1.0.0 ./publish.sh all
 
 ## 关于可选私有模块
 
-- `MemoryProxy/packages/cost-guard` 是可选扩展，不进公开镜像。`publish.sh` 会在
-  临时 context 里生成一个 stub 包让依赖图能解析；运行时 `src/guard-adapter.ts`
-  的动态 import 失败后自动降级为直通转发。
+- `MemoryProxy/packages/cost-guard` 是可选扩展，不进公开镜像。Docker Hub 必须从
+  已脱敏的 public release 构建：`package.json`、`package-lock.json` 和 Dockerfile
+  不得再引用 cost-guard。`publish.sh` 保留 public release 的既有 lockfile；发现
+  cost-guard 引用、目录或缺失的 lockfile 时会立即停止，不会生成 stub 或重新解析依赖。
 - `MemoryCore/src/integrations` 同理，已在 `MemoryCore/.dockerignore` 中排除，
   运行时走 fallback。
 

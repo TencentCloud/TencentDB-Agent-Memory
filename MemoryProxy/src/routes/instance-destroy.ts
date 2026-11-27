@@ -1,6 +1,7 @@
 /**
  * `POST /v3/instance/proxy-destroy` — 运维口：清理 proxy 侧为某个 instance
- * （= spaceId）缓存的 ProxyStorage 数据 + kernel-sts pool 里的 STS backend。
+ * （= spaceId）缓存的 ProxyStorage 数据 + kernel-sts pool 里的 STS backend
+ * + ClickHouse 里该实例的会话 trace 时间索引。
  *
  * 契约字段名对齐 core 的 `/v3/instance/destroy`
  * （`tdai-memory-openclaw-plugin/src/gateway/server.ts:1202-1221`），路径用
@@ -20,7 +21,8 @@
  *         "storage_ttl_deleted":   <number>,   // 缺省 0；出错时 storage_ttl_error 会同时出现
  *         "storage_nottl_deleted": <number>,
  *         "cos_pool_evicted":      "evicted" | "not-cached" | "unsupported",
- *         "redis_skipped":         "per-session-ttl-only"
+ *         "redis_skipped":         "per-session-ttl-only",
+ *         "session_trace_index":   "deleted" | "disabled" | "error"
  *       }
  *     }
  *   }
@@ -39,6 +41,7 @@
 import type { Context } from "hono";
 import { getProxyStorage, evictCosSpace } from "../storage/factory.js";
 import { assertKeySegment } from "../storage/key-utils.js";
+import { deleteSessionTraceIndex } from "../clickhouse.js";
 import { log } from "../report/log.js";
 import type { ProxyConfig } from "../types.js";
 import { adminAuthError, checkAdminAuth } from "./admin-auth.js";
@@ -113,7 +116,7 @@ export function createInstanceDestroyHandler(config: ProxyConfig) {
       const msg = err instanceof Error ? err.message : String(err);
       cleaned.storage_ttl_deleted = 0;
       cleaned.storage_ttl_error = msg;
-      log.warn("instance_destroy.storage_ttl_error", { instance_id: instanceId, error: msg });
+      log.warn("【P1】instance_destroy.storage_ttl_error", { instance_id: instanceId, error: msg });
     }
 
     // 3b. nottl/<spaceId>/ —— binding / skill 抽取 / kv version pin 等业务态
@@ -123,7 +126,7 @@ export function createInstanceDestroyHandler(config: ProxyConfig) {
       const msg = err instanceof Error ? err.message : String(err);
       cleaned.storage_nottl_deleted = 0;
       cleaned.storage_nottl_error = msg;
-      log.warn("instance_destroy.storage_nottl_error", { instance_id: instanceId, error: msg });
+      log.warn("【P1】instance_destroy.storage_nottl_error", { instance_id: instanceId, error: msg });
     }
 
     // 3c. kernel-sts pool evict —— 回收该 space 的 STS backend
@@ -133,11 +136,21 @@ export function createInstanceDestroyHandler(config: ProxyConfig) {
       const msg = err instanceof Error ? err.message : String(err);
       cleaned.cos_pool_evicted = "error";
       cleaned.cos_pool_error = msg;
-      log.warn("instance_destroy.cos_pool_error", { instance_id: instanceId, error: msg });
+      log.warn("【P1】instance_destroy.cos_pool_error", { instance_id: instanceId, error: msg });
     }
 
     // 3d. Redis 不清 —— 声明式，方便调用方知道我们没漏
     cleaned.redis_skipped = "per-session-ttl-only";
+
+    // 3e. ClickHouse session_trace_index —— 该实例在线会话 trace 的时间索引
+    try {
+      cleaned.session_trace_index = await deleteSessionTraceIndex(instanceId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      cleaned.session_trace_index = "error";
+      cleaned.session_trace_index_error = msg;
+      log.warn("【P1】instance_destroy.session_trace_index_error", { instance_id: instanceId, error: msg });
+    }
 
     log.info("instance_destroy.done", { instance_id: instanceId, cleaned });
 

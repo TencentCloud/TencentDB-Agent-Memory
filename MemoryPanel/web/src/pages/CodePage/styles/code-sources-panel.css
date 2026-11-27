@@ -171,3 +171,23 @@
   background: var(--tea-color-bg-secondary-default);
   padding: 16px;
 }
+
+/* 失败终态的错误原因（issue #1937）：停止轮询后仍保留在卡片上，可用「同步」重试 */
+._codelist-card-error {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--tea-color-text-error-default);
+  overflow-wrap: anywhere;
+}
+
+/* 表格视图的失败原因：单行截断，完整内容走 title 悬浮提示，避免长文本撑破列宽 */
+._codelist-table-error {
+  max-width: 100%;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--tea-color-text-error-default);
+}

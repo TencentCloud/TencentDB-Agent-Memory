@@ -172,6 +172,12 @@ export class PipelineWorker {
   private parkedTaskCount = 0;
   private parkedCapacityReservations = 0;
   private parkedCapacityWaiters = new Set<() => void>();
+  /**
+   * 每个 instance 当前占用的 parked 名额。用于防止单个慢实例（例如同一
+   * agent 下堆积几百个 L2）把全局 maxParkedTasks 吃满，导致 consumeLoop
+   * 全部阻塞在 reserveParkedCapacity() 而无法再拉取其它实例的任务。
+   */
+  private parkedByInstance = new Map<string, number>();
 
   // Active locks tracked for graceful shutdown
   private activeLocks = new Set<string>();
@@ -200,6 +206,16 @@ export class PipelineWorker {
     executionAborted: 0,
     /** Number of stream messages moved to a local lock-scope parked queue. */
     tasksParked: 0,
+    /**
+     * Number of lock-conflicted tasks released back to the queue because the
+     * owning instance already held its per-instance parked quota. These tasks
+     * are never ACKed — they are re-delivered by pending recovery / XAUTOCLAIM.
+     * A persistently high value means that instance is saturated and should be
+     * scaled out (or its slow L2 backlog investigated).
+     */
+    parkedQuotaRejected: 0,
+    /** L2 runs that hit the per-run batch budget and enqueued a continuation L2. */
+    l2BacklogContinuations: 0,
     /** Number of parked queue-head lock acquisition attempts. */
     parkedRetryAttempts: 0,
     /** Number of tasks dropped locally after their PEL ownership was lost. */
@@ -335,6 +351,7 @@ export class PipelineWorker {
     await Promise.allSettled(parked.map((entry) => this.refreshTaskClaim(entry.task, this.config.pendingStaleMs)));
     this.parkedByScope.clear();
     this.parkedTaskCount = 0;
+    this.parkedByInstance.clear();
 
     // 释放所有活跃锁
     for (const lockKey of this.activeLocks) {
@@ -351,6 +368,13 @@ export class PipelineWorker {
   getMetrics() {
     let parkedTasks = 0;
     for (const queue of this.parkedByScope.values()) parkedTasks += queue.length;
+    // 只暴露聚合值：getMetrics 会出现在未鉴权的 /health 中，不能带出 instanceId。
+    let parkedInstancesAtQuota = 0;
+    let parkedMaxPerInstance = 0;
+    for (const count of this.parkedByInstance.values()) {
+      if (count >= this.maxParkedPerInstance) parkedInstancesAtQuota++;
+      if (count > parkedMaxPerInstance) parkedMaxPerInstance = count;
+    }
     return {
       ...this.metrics,
       workerId: this.config.workerId,
@@ -360,7 +384,16 @@ export class PipelineWorker {
       parkedBackpressured: this.parkedTaskCount >= this.config.maxParkedTasks,
       parkedScopes: this.parkedByScope.size,
       retryingScopes: this.retryingScopes.size,
+      parkedPerInstanceCapacity: this.maxParkedPerInstance,
+      parkedInstances: this.parkedByInstance.size,
+      parkedInstancesAtQuota,
+      parkedMaxPerInstance,
     };
+  }
+
+  /** 按实例的 parked 占用快照，仅供内部/测试使用（含 instanceId，不得放进公开接口）。 */
+  getParkedPerInstance(): Record<string, number> {
+    return Object.fromEntries(this.parkedByInstance);
   }
 
   /**
@@ -727,6 +760,44 @@ export class PipelineWorker {
   // Lock-conflict parking / PEL ownership
   // ============================
 
+  /**
+   * 单 instance 可占用的 parked 名额上限，从已有的 maxParkedTasks 派生，
+   * 不引入新配置项：扩容 concurrency / maxParkedTasks 时配额自动跟随放大。
+   *
+   * 取 1/4 全局容量（下限 8）意味着：
+   *   - 至少需要 4 个不同 instance 同时积压才可能打满全局容量；
+   *   - 任何单个实例最多占用 25%，剩余 75% 始终对其它实例开放；
+   *   - 单实例内部仍然按原有 FIFO + 锁串行语义执行，积压不丢、顺序不变。
+   */
+  private get maxParkedPerInstance(): number {
+    return Math.max(8, Math.floor(this.config.maxParkedTasks / 4));
+  }
+
+  /**
+   * 配额退回任务写入 PEL 的 idle 值。
+   *
+   * 设为 pendingStaleMs - 2×回收间隔，即退回后约 2 个 recovery 周期才重新
+   * 可被认领：既不会立刻再被捞回来空转，又能在锁释放后较快重试。
+   */
+  private get quotaReleaseIdleMs(): number {
+    const backoff = this.config.pendingRecoveryIntervalMs * 2;
+    return Math.max(0, this.config.pendingStaleMs - backoff);
+  }
+
+  private getParkedInstanceCount(instanceId: string): number {
+    return this.parkedByInstance.get(instanceId) ?? 0;
+  }
+
+  private incrementParkedInstance(instanceId: string): void {
+    this.parkedByInstance.set(instanceId, this.getParkedInstanceCount(instanceId) + 1);
+  }
+
+  private decrementParkedInstance(instanceId: string): void {
+    const next = this.getParkedInstanceCount(instanceId) - 1;
+    if (next > 0) this.parkedByInstance.set(instanceId, next);
+    else this.parkedByInstance.delete(instanceId);
+  }
+
   private async reserveParkedCapacity(): Promise<boolean> {
     while (!this.destroyed) {
       if (this.parkedTaskCount + this.parkedCapacityReservations < this.config.maxParkedTasks) {
@@ -754,8 +825,36 @@ export class PipelineWorker {
     this.parkedCapacityWaiters.clear();
   }
 
-  private parkTask(task: ClaimedTask, lockKey: string): void {
+  /**
+   * 锁冲突后把任务暂存到本地 parked 队列。
+   *
+   * 当该 instance 已达 per-instance 配额时不再占用本地名额，而是把 PEL claim
+   * 调到 stale：消息既不 ACK 也不重新 XADD，由 pending-recovery / XAUTOCLAIM
+   * 回收后重投。任务不丢失、不重复执行，只是把"等待锁"的位置从本进程内存
+   * 挪回队列，从而把 parked 名额让给其它实例。
+   *
+   * @returns true 表示已 park（调用方无需额外处理）；false 表示已退回队列。
+   */
+  private parkTask(task: ClaimedTask, lockKey: string): boolean {
     const queue = this.parkedByScope.get(lockKey) ?? [];
+    const instanceId = task.instanceId;
+
+    if (this.getParkedInstanceCount(instanceId) >= this.maxParkedPerInstance) {
+      this.metrics.parkedQuotaRejected++;
+      this.logger?.debug?.(
+        `${TAG} Parked quota reached for instance=${instanceId} ` +
+        `(${this.maxParkedPerInstance}/${this.config.maxParkedTasks}); ` +
+        `releasing task back to queue [${task.type}] (task=${task.id}, scope=${lockKey})`,
+      );
+      // 不 ACK：只调整 PEL claim 的 idle，让任务在退避窗口后才可被回收重投。
+      // 不直接设成立即可回收，否则该实例的退回任务会在每一轮 pending recovery
+      // 中被优先认领、再次被配额拒绝，挤占其它实例滞留消息的回收名额。
+      // 失败也无妨——claim 自然超时后同样会被回收。
+      void this.refreshTaskClaim(task, this.quotaReleaseIdleMs, true)
+        .catch(() => { /* best effort: claim 超时后仍会被回收 */ });
+      return false;
+    }
+
     queue.push({
       task,
       lockKey,
@@ -765,12 +864,15 @@ export class PipelineWorker {
     });
     this.parkedByScope.set(lockKey, queue);
     this.parkedTaskCount++;
+    this.incrementParkedInstance(instanceId);
     this.metrics.tasksParked++;
     this.logger?.debug?.(
-      `${TAG} Parked after lock conflict [${task.type}] (task=${task.id}, scope=${lockKey}, depth=${queue.length})`,
+      `${TAG} Parked after lock conflict [${task.type}] (task=${task.id}, scope=${lockKey}, ` +
+      `depth=${queue.length}, instanceParked=${this.getParkedInstanceCount(instanceId)}/${this.maxParkedPerInstance})`,
     );
     this.ensureParkedHeartbeat();
     this.scheduleParkedRetries();
+    return true;
   }
 
   private getParkedRetryDelay(attempt: number): number {
@@ -791,13 +893,27 @@ export class PipelineWorker {
 
     const capacity = this.config.lockRetryConcurrency - this.retryingScopes.size;
     const now = Date.now();
+    // 排序优先级：先到期的优先；同等到期状态下 priority 小的优先（L1=0 快于 L2=1/L3=2），
+    // 保证某个实例堆积的大量低优先级 L2 不会把其它实例的 L1 挤在后面。
     const candidates = Array.from(this.parkedByScope.entries())
       .filter(([scope, queue]) => queue.length > 0 && !this.retryingScopes.has(scope))
-      .sort((a, b) => a[1][0]!.nextRetryAt - b[1][0]!.nextRetryAt);
+      .sort((a, b) => {
+        const ha = a[1][0]!, hb = b[1][0]!;
+        const dueA = ha.nextRetryAt <= now, dueB = hb.nextRetryAt <= now;
+        if (dueA !== dueB) return dueA ? -1 : 1;
+        if (dueA && dueB) {
+          const pd = (ha.task.priority ?? 0) - (hb.task.priority ?? 0);
+          if (pd !== 0) return pd;
+        }
+        return ha.nextRetryAt - hb.nextRetryAt;
+      });
 
     let started = 0;
     for (const [scope, queue] of candidates) {
-      if (started >= capacity || queue[0]!.nextRetryAt > now) break;
+      if (started >= capacity) break;
+      // 未到期的 scope 跳过而非中断：排序已把到期项前置，但不同实例的
+      // 退避窗口互相独立，continue 可避免一个未到期 scope 卡住后续实例。
+      if (queue[0]!.nextRetryAt > now) continue;
       started++;
       this.retryingScopes.add(scope);
       const retry = this.retryParkedScope(scope);
@@ -810,9 +926,16 @@ export class PipelineWorker {
     }
 
     if (started > 0 || this.retryingScopes.size >= this.config.lockRetryConcurrency) return;
-    const next = candidates.find(([scope]) => !this.retryingScopes.has(scope));
-    if (!next) return;
-    const waitMs = Math.max(0, next[1][0]!.nextRetryAt - Date.now());
+    // 取最早的「未来」到期时间来定时。candidates 已按到期状态排序，直接取首项
+    // 可能命中一个已到期但因容量不足未启动的 scope，导致 waitMs=0 空转。
+    let earliest = Infinity;
+    for (const [scope, queue] of candidates) {
+      if (this.retryingScopes.has(scope)) continue;
+      const at = queue[0]!.nextRetryAt;
+      if (at > now && at < earliest) earliest = at;
+    }
+    if (!Number.isFinite(earliest)) return;
+    const waitMs = Math.max(0, earliest - Date.now());
     this.parkedSchedulerTimer = setTimeout(() => {
       this.parkedSchedulerTimer = null;
       this.scheduleParkedRetries();
@@ -894,6 +1017,7 @@ export class PipelineWorker {
     if (index < 0) return;
     queue.splice(index, 1);
     this.parkedTaskCount = Math.max(0, this.parkedTaskCount - 1);
+    this.decrementParkedInstance(expected.task.instanceId);
     this.wakeParkedCapacityWaiters();
     if (queue.length === 0) this.parkedByScope.delete(scope);
     else if (index === 0) queue[0]!.nextRetryAt = Date.now() + this.getParkedRetryDelay(0);
@@ -1053,14 +1177,51 @@ export class PipelineWorker {
         data: task.data ? { ...task.data, ...serializeTraceContext() } : { teamId: tid, agentId: aid, ...serializeTraceContext() },
         createdAt: now,
       });
+      // l2_last_extraction_time 仍记完成时刻：它驱动 L2 最小间隔节流
+      // （stateful-pipeline-manager.advanceL2TimerAfterL1）。
+      // 增量读取游标单独存到 last_extraction_updated_time，取本次真正处理过的
+      // 最新 L1 记录的 updatedAt —— 若用完成时刻当游标，L2 运行期间新写入的
+      // L1 时间早于完成时刻，下次 `updatedAfter` 查询会把它们永久跳过。
+      // 与单机 pipeline-manager 的语义一致。
+      const latestCursor = (task as any)._l2LatestCursor as string | undefined;
+      // 游标只前进不后退：同一 session 可能有多个 L2 排队，后执行的旧任务
+      // 不能把游标拨回去（拨回只会导致重复处理，但没必要）。
+      let cursorPatch: { last_extraction_updated_time?: string } = {};
+      if (latestCursor) {
+        const prev = (await this.backend.getSessionState(task.instanceId, task.sessionId, tid, aid))
+          ?.last_extraction_updated_time ?? "";
+        if (!prev || latestCursor > prev) cursorPatch = { last_extraction_updated_time: latestCursor };
+      }
       await this.backend.updateSessionState(task.instanceId, task.sessionId, {
         l2_pending_l1_count: 0,
         l2_last_extraction_time: new Date().toISOString(),
+        ...cursorPatch,
       }, tid, aid);
       // onL2Complete 由 server.ts 注入 statefulManager.armL2MaxInterval。
       // 失败必须传播，避免 ACK 后永久失去 maxInterval 兜底 timer。
       if (this.config.onL2Complete) {
         await this.config.onL2Complete(task.sessionId, task.instanceId, tid, aid);
+      }
+      // 积压分批：本轮只处理了一批，游标已推进到这批末尾，立即续排一个 L2
+      // 继续消化剩余记录。只在游标确实前进时续排，避免游标不动时空转。
+      // id 由本任务 id + 新游标派生：同一任务 ACK 前崩溃重放时 id 不变，不会多排。
+      if ((task as any)._l2HasMore && cursorPatch.last_extraction_updated_time) {
+        await this.backend.enqueueTask({
+          id: `L2-more-${task.id}-${cursorPatch.last_extraction_updated_time}`,
+          type: "L2",
+          instanceId: task.instanceId,
+          sessionId: task.sessionId,
+          teamId: tid,
+          agentId: aid,
+          priority: task.priority ?? 1,
+          data: task.data ? { ...task.data } : { teamId: tid, agentId: aid },
+          createdAt: now,
+        });
+        this.metrics.l2BacklogContinuations++;
+        this.logger.info(
+          `${TAG} [${task.instanceId}/${task.sessionId}] L2 backlog remains → continuation L2 enqueued ` +
+          `(cursor=${cursorPatch.last_extraction_updated_time})`,
+        );
       }
       this.logger?.debug?.(`${TAG} [${task.instanceId}/${task.sessionId}] L2 done → L3 enqueued`);
     }

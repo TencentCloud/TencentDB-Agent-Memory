@@ -25,6 +25,14 @@ server:
   host: 0.0.0.0           # 监听地址；0.0.0.0 表示所有网卡
   port: 8096               # 监听端口
   forwardTimeoutMs: 3600000 # 上游转发超时（毫秒），默认 3600000（1 小时）；0 = 不超时
+  # 上游响应体两次收到字节之间的最大间隔（undici bodyTimeout）。undici 默认 300s，
+  # 部分网关会把超长工具参数攒完再发、期间不发字节，超过 300s 就被掐断
+  # （日志里是 `STREAM terminated`）。默认 1800000（30 分钟）；0 = 不限。仅启动时生效。
+  # 注意：Claude Code 对自定义 ANTHROPIC_BASE_URL 另有 300s 流式看门狗，
+  # 需在客户端设置 CLAUDE_STREAM_IDLE_TIMEOUT_MS（例如 1800000）才能一并放宽。
+  # upstreamBodyTimeoutMs: 1800000
+  # 等待上游响应头的最大时长（undici headersTimeout）。默认 600000（10 分钟）；0 = 不限。
+  # upstreamHeadersTimeoutMs: 600000
 
 
 # ── 上游 LLM 服务（默认兜底） ──────────────────────────────────────────────────
@@ -211,6 +219,9 @@ costGuard:
   #   port: 18097
   # requestPrepare:
   #   enabled: false
+  #   # CCR：给注入了 CFQ 的工具再加 allow_compression 参数，模型填 false 时该次工具结果保留原文不压缩。只在压缩开启时生效，默认关。
+  #   # 依赖 redis.enabled: true（模型的不压缩选择按 tool call id 存 Redis，多副本共享）。
+  #   ccrEnabled: false
   #   # CFQ（context_focus_question）子系统。字段全部可选，整段省略即用内置默认。
   #   cfq:
   #     enabled: true
@@ -238,31 +249,23 @@ costGuard:
   #     # grep cfq.analyze_fallback.misconfigured 可确认。写了非空值则用自己的。
   #     #
   #     # 其余字段省略即用代码默认值：batchSize 8、timeoutMs 30000、
-  #     # maxOutputTokens 128000、awaitPendingMs 8000、circuitBreaker 300/50/1800。
+  #     # maxOutputTokens 128000、circuitBreaker 300/50/1800。
+  #     #
+  #     # 兜底在响应结束帧发给客户端之前完成（与主模型自填的 CFQ 一起写入
+  #     # Redis），总预算固定 8s，含 CFQ 提取、熔断检查、分析模型调用和写入。
+  #     # 超时即中止、丢弃结果，这些 tool_result 按 no_cfq 处理；下一轮请求不再
+  #     # 等待。有漏填的轮次结束帧最多延后 8s，网关空闲超时需大于此值。
+  #     # 旧配置里的 awaitPendingMs 已不再读取，可删除。
   #     analyzeModelFallback:
   #       enabled: true
   #       batchSize: 8
   #       # model / url / apiKey 可省略，默认用上面的 analyze*
   #       timeoutMs: 30000
-  #       # 请求侧发现 backfill 缺口时，等待在途兜底的上限（毫秒）。
-  #       #
-  #       # 这个窗口就是兜底的全部机会：等到了当轮压，超时就落 no_cfq 缓存、
-  #       # 后续不再补。这样做是为了字节稳定——放行超时的条目去下一轮压，会让
-  #       # 同一段 tool_result 从原文变成压缩态，翻转点之后的整个前缀在上游
-  #       # prompt-cache 里失效。
-  #       #
-  #       # 8000 的依据：实测 77 次兜底中位 6.6s，82% 在 8.5s 内完成；等待从下
-  #       # 一轮请求到达时起算（兜底已先跑约 0.5s）。代价是有缺口的轮次平均阻塞
-  #       # 约 6.5 秒，请按自己分析模型的实际速度调整。
-  #       #
-  #       # 上限受 pending.ts 的 PENDING_TTL_S（30s）约束。0 = 不等，兜底退化成
-  #       # 只对后续轮次有效，当轮一律 no_cfq。
-  #       awaitPendingMs: 8000
   #       # 兜底熔断 —— 按 spaceId 隔离的成本闸门，多节点通过 Redis 共享计数。
   #       #
   #       # 某个 space 在 windowSeconds 内兜底次数超过 threshold，接下来
   #       # breakSeconds 内不再兜底，这些 tool_result 按 no_cfq 处理。
-  #       # 熔断期不打在途标记，所以请求侧也不会陪等 awaitPendingMs。
+  #       # 熔断期结束帧立即放行，不占结算预算。
   #       #
   #       # 整段省略即用默认值（300 / 50 / 1800）；要关必须显式 enabled: false。
   #       # 阈值按自己的流量调：5 分钟窗口 50 次，熔断后歇 30 分钟。
@@ -279,6 +282,8 @@ costGuard:
 # 多 Pod 通过上面的共享 Redis 原子计数。Redis 不可用时 fail-open 并记录告警。
 # 实例级（该实例所有模型）与实例×模型 override 通过 /v3/admin/rate-limits 管理，
 # 修改后下一次请求立即生效。优先级：实例×模型 > 实例 > 全局。
+# 启用 clickhouse 后，每次限流判定写入 rate_limit_logs（判定结果 + 60 秒窗口用量 + 生效限额），
+# 供外部监控画 TPM / QPM 曲线；未启用 Redis 时不写。
 rateLimit:
   tpm: 1000000             # 实际 Input Token / 最近 60 秒
   qpm: 100                 # 发起请求数 / 最近 60 秒；与 TPM 使用相同维度
@@ -463,6 +468,10 @@ clickhouse:
   flushIntervalMs: 5000              # 定时 flush 间隔（毫秒），默认 5 秒
   flushThreshold: 50                 # 缓冲区积累 N 条后立即 flush（0 = 禁止批量 flush）
   ttlDays: 30                        # 数据保留天数（0 = 不自动过期；启动时通过 CREATE TABLE TTL 生效）
+  # 集群名。线上填写真实集群名（如 default_cluster）：compress_filter_logs 用
+  # ON CLUSTER + ReplicatedMergeTree() 建表（副本模式，依赖服务端 {shard}/{replica} 宏）。
+  # 本机单节点留空，使用普通 MergeTree。
+  cluster: ""
 
 # ── 企业微信名称归属（可选）─────────────────────────────────────────────────
 # 启用后首次使用一个 API Key 时会通过客户端原生交互工具要求填写企业微信名称；
@@ -754,7 +763,7 @@ tdai:
     l2Limit: 3              # L2/L3 注入最大条数
     timeoutMs: 5000         # 单次内核调用超时（毫秒）
   sessionTrace:
-    maxQueuedBytes: 1073741824  # 在途会话上传（/v3/session/add）合计字节上限，超出的轮次直接丢弃。默认 1 GiB
+    maxQueuedBytes: 1073741824  # 在途会话上传（/v3/session/add）合计字节上限，超出的记录直接丢弃。默认 1 GiB
 
 
 # ── Skill / 内核 gateway 数据面 ──────────────────────────────────────────────

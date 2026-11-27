@@ -7,6 +7,7 @@ const requireWeb = createRequire(new URL('../web/package.json', import.meta.url)
 const { createElement, act } = requireWeb('react');
 const { createRoot } = requireWeb('react-dom/client');
 const { JSDOM } = requireWeb('jsdom');
+const { zipSync } = requireWeb('fflate');
 const { createSkill, onImported } = vi.hoisted(() => ({
   createSkill: vi.fn(),
   onImported: vi.fn(),
@@ -27,7 +28,12 @@ vi.doMock(requireWeb.resolve('tea-component'), () => {
     Alert: ({ children }: { children: unknown }) => createElement('div', { role: 'alert' }, children),
     Button: ({ children, onClick, disabled }: { children: unknown; onClick: () => void; disabled: boolean }) =>
       createElement('button', { onClick, disabled }, children),
-    Segment: () => null,
+    Segment: ({ options, onChange }: {
+      options: { value: string; text: string }[];
+      onChange: (value: string) => void;
+    }) => createElement('div', null, options.map(({ value, text }) =>
+      createElement('button', { key: value, onClick: () => onChange(value) }, text),
+    )),
     Select: () => null,
     Input: { TextArea: () => null },
   };
@@ -42,7 +48,7 @@ function fileAt(relativePath: string, content: string | Uint8Array): File {
   return file;
 }
 
-describe('Skill directory import', () => {
+describe('Skill file import', () => {
   let dom: InstanceType<typeof JSDOM>;
   let root: ReturnType<typeof createRoot>;
   let host: HTMLElement;
@@ -73,13 +79,20 @@ describe('Skill directory import', () => {
     dom.window.close();
   });
 
-  async function submit(files: File[]) {
+  async function clickButton(label: string) {
+    const button = [...host.querySelectorAll('button')].find((item) => item.textContent === label)!;
+    await vi.waitFor(() => expect(button.disabled, host.textContent ?? undefined).toBe(false));
+    await act(async () => button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
+  }
+
+  async function submit(files: File[], label = 'importSkill.submit') {
     const input = host.querySelector('input[type="file"]')!;
     Object.defineProperty(input, 'files', { value: files, configurable: true });
-    await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })));
-    const button = [...host.querySelectorAll('button')].find((item) => item.textContent === 'importSkill.submit')!;
-    expect(button.disabled).toBe(false);
-    await act(async () => button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
+    await act(async () => {
+      input.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+      await vi.dynamicImportSettled();
+    });
+    await clickButton(label);
   }
 
   it.each([['LF', '\n'], ['CRLF', '\r\n'], ['CR', '\r']])(
@@ -94,6 +107,16 @@ describe('Skill directory import', () => {
       expect(host.textContent).toContain('importSkill.result.directory');
     },
   );
+
+  it('accepts a ZIP with CR line endings and sends the same normalized main content', async () => {
+    await clickButton('importSkill.mode.zip');
+    const archive = zipSync({
+      'folder-name/SKILL.md': new TextEncoder().encode(skillText.replaceAll('\n', '\r')),
+    });
+    await submit([new File([archive], 'skill.zip')], 'importSkill.zip.submit');
+    expect(createSkill).toHaveBeenCalledOnce();
+    expect(createSkill.mock.calls[0][0]).toMatchObject({ name: 'actual-skill', content: skillText });
+  });
 
   it('falls back to the directory name only when the frontmatter name is absent', async () => {
     const content = '---\r\ndescription: A sample skill\r\n---\r\nBody';

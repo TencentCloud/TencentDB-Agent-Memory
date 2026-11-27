@@ -45,7 +45,7 @@ import {
 import {
   createCfqStripStream,
   createCfqStripObserver,
-  stripCfqFromResponseText,
+  settleAndStripCfqFromResponseText,
 } from "../../common/cfq-strip.js";
 import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import {
@@ -73,7 +73,9 @@ import {
 } from "../../session/codex/form.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "../../common/codex-injection.js";
 import { log } from "../../report/log.js";
+import { readIncomingRequestId, withRequestId } from "../../request-id.js";
 import { buildSafeTraceRequestBody, writeRequestLog } from "../../requestLog.js";
+import { extractSessionId, resolveSessionKeyFallback } from "../../session/session-key.js";
 import { logPipelineUpstreamError } from "../../upstream-error-log.js";
 import {
   langfuseReportGeneration,
@@ -85,13 +87,14 @@ import { TdaiClient, buildTdaiClientForRequest } from "../../tdai/client.js";
 import { deriveTdaiIdentity } from "../../tdai/identity.js";
 import {
   ResponsesAssembler,
-  buildSessionTurnContext,
-  createSessionTurnSeed,
+  buildSessionCallContext,
+  createSessionCallSeed,
+  sessionTraceDir,
   parseSseData,
-  responsesReplyFromJson,
-  submitSessionTurn,
-  type PendingSessionTurn,
-  type SessionTurnContext,
+  responseFromText,
+  submitSessionCall,
+  type PendingSessionCall,
+  type SessionCallContext,
 } from "../../session-trace/index.js";
 import type { TdaiIdentity, TdaiMessage } from "../../tdai/types.js";
 import { stageArchive } from "../stages/archive.js";
@@ -205,13 +208,7 @@ export function extractCodexSessionId(
   headers: Record<string, string>,
   body: Record<string, unknown>,
 ): string | null {
-  const parentId = headers["x-parent-conversation-id"] ?? headers["X-Parent-Conversation-Id"];
-  if (typeof parentId === "string" && parentId.length > 0) return parentId;
-
-  if (headers["session-id"]) return headers["session-id"];
-  const meta = body.client_metadata as { session_id?: string } | undefined;
-  if (typeof meta?.session_id === "string") return meta.session_id;
-  return null;
+  return extractSessionId(headers, body);
 }
 
 // ── Default mode gate detection (exported for unit tests) ────────────────────
@@ -306,7 +303,8 @@ export async function runCodexPipeline(
   c: Context,
   config: ProxyConfig,
 ): Promise<Response> {
-  const traceId = uuidv7();
+  // 客户端/网关 x-request-id 作为 trace 主键，缺失才走 uuidv7。see request-id.ts。
+  const traceId = readIncomingRequestId(c.req) ?? uuidv7();
   const startTime = new Date().toISOString();
   const requestStartMono = performance.now();
   const path = c.req.path;
@@ -319,7 +317,7 @@ export async function runCodexPipeline(
   if (auth.rejected) {
     return c.json(
       { error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` },
-      401,
+      auth.failureStatus ?? 401,
     );
   }
   const keyId = auth.keyId;
@@ -327,7 +325,8 @@ export async function runCodexPipeline(
   // ── 2. Read body (via shared stageParseBody) ─────────────────────────
   const parseResult = await stageParseBody(c);
   if (!parseResult.ok) {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId({ error: "Invalid JSON body" }, traceId), 400);
   }
   // ⚠️ `let` 不能改回 `const`: 下面 § 9 注入阶段 (line 770 附近)
   // 会 `body = injectCodexAssets(body, ...)` 原地替换为注入后的新对象。
@@ -343,7 +342,10 @@ export async function runCodexPipeline(
     wecomName = wecomIdentity.name;
   }
   const poolRejection = poolServiceRejection(config, body.model);
-  if (poolRejection) return c.json(poolRejection, 400);
+  if (poolRejection) {
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId(poolRejection, traceId), 400);
+  }
   applyMainModel(body);
 
   // ── 3. Extract headers as plain object ─────────────────────────────────────
@@ -406,11 +408,12 @@ export async function runCodexPipeline(
     if (!_codexIsCustomUpstream) {
       const gateResult = stageModelGate(requestedModel, config, false);
       if (!gateResult.ok) {
-        return c.json({
+        c.header("x-request-id", traceId);
+        return c.json(withRequestId({
           type: "error",
           error: { type: "invalid_request_error",
             message: `Model '${requestedModel}' is not a registered display name in the credit pricing table` },
-        }, 400);
+        }, traceId), 400);
       }
     }
   }
@@ -438,10 +441,14 @@ export async function runCodexPipeline(
 
   // ── 6. Session ID extraction ───────────────────────────────────────────────
   const sessionId = extractCodexSessionId(headers, body);
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
   const agentSource = "codex";
+  const sessionKey = resolveSessionKeyFallback(
+    sessionId,
+    keyId,
+    { protocol: "responses", agentSource },
+  );
   const isStream = body.stream !== false;
-  const sessionTurnSeed = createSessionTurnSeed(config, {
+  const sessionCallSeed = createSessionCallSeed(config, {
     agent: agentSource,
     path,
     protocol: "responses",
@@ -488,7 +495,7 @@ export async function runCodexPipeline(
   if (isLegacyProxyPath(path)) {
     pipe.info("CODEX_LEGACY_PROXY", `legacy /proxy prefix → route+compress only (path=${path})`);
     return forwardToUpstream(c, config, body, traceId, startTime, keyId, wecomName || keyId, modelId, pipe, lf, null, {
-      seed: sessionTurnSeed,
+      seed: sessionCallSeed,
       authUserId: userId,
     });
   }
@@ -909,7 +916,7 @@ export async function runCodexPipeline(
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
   return forwardToUpstream(c, config, body, traceId, startTime, keyId, wecomName || keyId, modelId, pipe, lf, archiveCtx, {
-    seed: sessionTurnSeed,
+    seed: sessionCallSeed,
     sessionInfo,
     authUserId: userId,
   }, defaultBindingNotice);
@@ -1042,7 +1049,7 @@ async function forwardToUpstream(
   pipe: ReturnType<typeof createPipeline>,
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
-  sessionTurn: PendingSessionTurn | null = null,
+  sessionCall: PendingSessionCall | null = null,
   /**
    * v3.3 user-session-default: 命中账户默认时, Proxy 在客户端响应最前面插的
    * ✅ 绑定提示文本(markdown)。null = 不插(非命中默认 / 后续轮次 / aux)。
@@ -1083,7 +1090,8 @@ async function forwardToUpstream(
     forceOfficial: isLegacyProxyPath(c.req.path),
   });
   if (isInstanceUpstreamBlocked(_upstreamResolve)) {
-    return c.json(_upstreamResolve.errorBody, 400);
+    c.header("x-request-id", traceId);
+    return c.json(withRequestId(_upstreamResolve.errorBody as Record<string, unknown>, traceId), 400);
   }
   if (_upstreamResolve.overrideUrl) {
     upstreamUrl = _upstreamResolve.overrideUrl;
@@ -1104,6 +1112,7 @@ async function forwardToUpstream(
   // Auxiliary turns are excluded for the same reason they skip langfuse and
   // archive: they are client-driven background calls, not dialogue turns.
   let preparedStats: Record<string, unknown> | null = null;
+  let compressionObservations: Record<string, unknown>[] | undefined;
   if (lf && Array.isArray(body.input)) {
     preparedStats = await prepareUpstreamRequest({
       config,
@@ -1123,15 +1132,25 @@ async function forwardToUpstream(
       lf,
       opikTraceId: traceId,
       opikKeyId: obsProjectName,
+      sessionTraceDir: sessionCall
+        ? sessionTraceDir(config, sessionCall.seed, {
+            spaceId,
+            sessionInfo: sessionCall.sessionInfo,
+            authUserId: sessionCall.authUserId,
+          })
+        : undefined,
+      ...(sessionCall?.seed ? { onCompressionObservations: (o: Record<string, unknown>[]) => { compressionObservations = o; } } : {}),
     });
   }
 
-  const sessionTurnCtx = sessionTurn
-    ? buildSessionTurnContext(config, sessionTurn.seed, {
+  const sessionCallCtx = sessionCall
+    ? buildSessionCallContext(config, sessionCall.seed, {
         spaceId,
-        sessionInfo: sessionTurn.sessionInfo,
-        authUserId: sessionTurn.authUserId,
-        upstreamBody: body,
+        sessionInfo: sessionCall.sessionInfo,
+        authUserId: sessionCall.authUserId,
+        request: body,
+        traceId,
+        compressionObservations,
       })
     : null;
 
@@ -1227,6 +1246,11 @@ async function forwardToUpstream(
         pipe.error("LANGFUSE_SPAN", lfErr);
       }
     }
+    submitSessionCall(sessionCallCtx, {
+      status: 0,
+      response: { error: err instanceof Error ? err.message : String(err) },
+      model: modelId,
+    });
     return c.json(
       { error: "Upstream request failed", detail: err instanceof Error ? err.message : String(err) },
       502,
@@ -1254,6 +1278,7 @@ async function forwardToUpstream(
   if (upstreamResp.status >= 400) {
     // 4xx/5xx 通常返 JSON error（很小），完整读出来带进 langfuse 便于排查
     const errText = await upstreamResp.text();
+    submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: responseFromText(errText), model: modelId, upstreamRequestId });
     if (lf) {
       try {
         langfuseReportFailure({
@@ -1284,6 +1309,7 @@ async function forwardToUpstream(
   const contentType = upstreamResp.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
     const responseText = await upstreamResp.text();
+    submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: responseFromText(responseText), model: modelId, upstreamRequestId });
     let usage: Record<string, unknown> | undefined;
     let toolCalls: UpstreamToolCall[] = [];
     let outputText = "";
@@ -1294,7 +1320,6 @@ async function forwardToUpstream(
       }
       toolCalls = collectResponsesToolCalls(responseBody.output);
       outputText = collectResponsesOutputText(responseBody);
-      submitSessionTurn(sessionTurnCtx, responsesReplyFromJson(responseBody), modelId);
     } catch {
       // Preserve an unexpected non-JSON response without billing it.
     }
@@ -1355,7 +1380,8 @@ async function forwardToUpstream(
       }
     }
     // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-    const clientResponseText = stripCfqFromResponseText(
+    // 先结算本轮 CFQ 再返回：客户端拿到响应才会发下一轮，下一轮因此一定读得到。
+    const clientResponseText = await settleAndStripCfqFromResponseText(
       "responses",
       responseText,
       preparedStats,
@@ -1386,6 +1412,9 @@ async function forwardToUpstream(
   // Main turns are tapped for observability/archive; auxiliary Responses calls
   // are tapped for credit only.
   const needTap = Boolean(lf) || Boolean(archiveCtx) || !skipCreditReport;
+  if (!upstreamResp.body) {
+    submitSessionCall(sessionCallCtx, { status: upstreamResp.status, response: "", model: modelId, upstreamRequestId });
+  }
   if (!needTap || !upstreamResp.body) {
     // 不 tap 也要剥离：注入与否跟观测无关，客户端校验一样会拒。
     // v3.3: 若命中账户默认, 同样在最前面插 ✅ 绑定提示。
@@ -1439,7 +1468,8 @@ async function forwardToUpstream(
     skipCreditReport,
     preparedStats,
     archiveCtx,
-    sessionTurnCtx,
+    sessionCallCtx,
+    upstreamStatus: upstreamResp.status,
   });
 
   // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
@@ -1518,7 +1548,8 @@ export interface CodexTapContext {
    */
   archiveCtx?: CodexArchiveCtx | null;
   /** Online session trace for this call; null when it is not recorded. */
-  sessionTurnCtx?: SessionTurnContext | null;
+  sessionCallCtx?: SessionCallContext | null;
+  upstreamStatus?: number;
 }
 
 /**
@@ -1543,14 +1574,19 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
     let toolCalls: UpstreamToolCall[] = [];
     let stopReason: string | undefined;
     let streamCompleted = false;
-    const replyAssembler = ctx.sessionTurnCtx ? new ResponsesAssembler() : null;
+    const replyAssembler = ctx.sessionCallCtx ? new ResponsesAssembler() : null;
     async function completeStream(): Promise<void> {
       if (streamCompleted) return;
       streamCompleted = true;
 
       if (replyAssembler) {
         parseSseData(sseBuf).forEach((evt) => replyAssembler.push(evt));
-        submitSessionTurn(ctx.sessionTurnCtx, replyAssembler.result(), modelId);
+        submitSessionCall(ctx.sessionCallCtx ?? null, {
+          status: ctx.upstreamStatus ?? 200,
+          response: replyAssembler.result(),
+          model: modelId,
+          upstreamRequestId: ctx.upstreamRequestId,
+        });
       }
 
       const endTime = new Date().toISOString();

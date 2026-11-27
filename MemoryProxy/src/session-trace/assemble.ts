@@ -1,22 +1,18 @@
 /**
- * Rebuild the full model reply of one upstream call, streamed or not.
+ * Rebuild a streamed upstream reply into the body the same call would have
+ * returned without streaming (cos-format.md, online call record `response`).
  *
- * Streaming assemblers are fed the parsed SSE `data:` payloads by the
- * handler's existing tap loop, in order. The reply keeps each protocol's own
- * shape (cos-format.md §3.4): an OpenAI chat `message`, an Anthropic
- * `{ role, content }`, or `{ output: [...] }` for Responses.
+ * Assemblers are fed the parsed SSE `data:` payloads by the handler's existing
+ * tap loop, in order. Each one yields its protocol's non-stream shape: an
+ * OpenAI `chat.completion`, an Anthropic `message`, or a Responses `response`.
  */
 
-export interface ModelReply {
-  /** The `output` object of the turn record. */
-  output: Record<string, unknown>;
-  /** finish_reason / stop_reason / Responses status; null when the upstream never sent one. */
-  stopReason: string | null;
-  /** Client-executed tool calls the reply asks for. */
-  toolCallCount: number;
-}
-
 type Json = Record<string, unknown>;
+
+export interface ResponseAssembler {
+  push(event: Json): void;
+  result(): Json;
+}
 
 function isRecord(v: unknown): v is Json {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -42,19 +38,6 @@ export function parseSseData(block: string): Json[] {
 
 // ── OpenAI chat completions ──────────────────────────────────────────────────
 
-export function openaiReplyFromJson(json: unknown): ModelReply | null {
-  if (!isRecord(json) || !Array.isArray(json.choices)) return null;
-  const choice = json.choices[0];
-  if (!isRecord(choice) || !isRecord(choice.message)) return null;
-  const message = choice.message;
-  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls.length : 0;
-  return {
-    output: message,
-    stopReason: typeof choice.finish_reason === "string" ? choice.finish_reason : null,
-    toolCallCount: toolCalls + (isRecord(message.function_call) ? 1 : 0),
-  };
-}
-
 interface OpenAIToolCall {
   id: string;
   type: string;
@@ -62,18 +45,25 @@ interface OpenAIToolCall {
 }
 
 /**
+ * Chunk-level fields other than `object` / `choices` (id, created, model,
+ * system_fingerprint, usage, …) are carried over, last non-null value wins.
  * Deltas are merged generically: string fields concatenate (content,
  * reasoning_content, reasoning, refusal, …) and array fields append, so
  * vendor reasoning fields keep the name the upstream used. `tool_calls` are
  * merged by index into structured calls.
  */
-export class OpenAIChatAssembler {
+export class OpenAIChatAssembler implements ResponseAssembler {
+  private readonly meta = new Map<string, unknown>();
   private readonly fields = new Map<string, string | unknown[]>();
   private readonly toolCalls = new Map<number, OpenAIToolCall>();
   private role = "assistant";
   private finishReason: string | null = null;
 
   push(event: Json): void {
+    for (const [key, value] of Object.entries(event)) {
+      if (key === "object" || key === "choices" || value === null || value === undefined) continue;
+      this.meta.set(key, value);
+    }
     if (!Array.isArray(event.choices)) return;
     for (const c of event.choices) {
       if (!isRecord(c) || (typeof c.index === "number" && c.index !== 0)) continue;
@@ -113,47 +103,47 @@ export class OpenAIChatAssembler {
     if (typeof fn?.arguments === "string") acc.function.arguments += fn.arguments;
   }
 
-  result(): ModelReply {
-    const output: Json = { role: this.role };
-    for (const [key, value] of this.fields) output[key] = value;
-    if (!("content" in output)) output.content = this.toolCalls.size > 0 ? null : "";
+  result(): Json {
+    const message: Json = { role: this.role };
+    for (const [key, value] of this.fields) message[key] = value;
+    if (!("content" in message)) message.content = this.toolCalls.size > 0 ? null : "";
     if (this.toolCalls.size > 0) {
-      output.tool_calls = [...this.toolCalls.entries()].sort(([a], [b]) => a - b).map(([, tc]) => tc);
+      message.tool_calls = [...this.toolCalls.entries()].sort(([a], [b]) => a - b).map(([, tc]) => tc);
     }
-    return { output, stopReason: this.finishReason, toolCallCount: this.toolCalls.size };
+    const { usage, ...meta } = Object.fromEntries(this.meta);
+    return {
+      ...meta,
+      object: "chat.completion",
+      choices: [{ index: 0, message, finish_reason: this.finishReason }],
+      ...(usage !== undefined ? { usage } : {}),
+    };
   }
 }
 
 // ── Anthropic messages ───────────────────────────────────────────────────────
 
-function countToolUse(content: unknown[]): number {
-  return content.filter((b) => isRecord(b) && b.type === "tool_use").length;
-}
-
-export function anthropicReplyFromJson(json: unknown): ModelReply | null {
-  if (!isRecord(json) || !Array.isArray(json.content)) return null;
-  return {
-    output: { role: typeof json.role === "string" ? json.role : "assistant", content: json.content },
-    stopReason: typeof json.stop_reason === "string" ? json.stop_reason : null,
-    toolCallCount: countToolUse(json.content),
-  };
-}
-
 /**
- * Content blocks are rebuilt by index from `content_block_start` plus their
- * deltas. Block types without deltas (redacted_thinking, server tool results)
+ * `message_start.message` is the base (id, model, role, input usage); content
+ * blocks are rebuilt by index from `content_block_start` plus their deltas,
+ * and `message_delta` supplies stop_reason / stop_sequence and the final
+ * usage. Block types without deltas (redacted_thinking, server tool results)
  * are kept exactly as started.
  */
-export class AnthropicMessageAssembler {
+export class AnthropicMessageAssembler implements ResponseAssembler {
+  private message: Json = { type: "message", role: "assistant" };
   private readonly blocks = new Map<number, Json>();
   private readonly partialJson = new Map<number, string>();
-  private role = "assistant";
-  private stopReason: string | null = null;
+  private stopReason: unknown = null;
+  private stopSequence: unknown = null;
+  private usage: Json | undefined;
 
   push(event: Json): void {
     switch (event.type) {
       case "message_start":
-        if (isRecord(event.message) && typeof event.message.role === "string") this.role = event.message.role;
+        if (isRecord(event.message)) {
+          this.message = { ...event.message };
+          if (isRecord(event.message.usage)) this.usage = { ...event.message.usage };
+        }
         break;
       case "content_block_start":
         if (typeof event.index === "number" && isRecord(event.content_block)) {
@@ -164,9 +154,11 @@ export class AnthropicMessageAssembler {
         if (typeof event.index === "number" && isRecord(event.delta)) this.applyDelta(event.index, event.delta);
         break;
       case "message_delta":
-        if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") {
-          this.stopReason = event.delta.stop_reason;
+        if (isRecord(event.delta)) {
+          if ("stop_reason" in event.delta) this.stopReason = event.delta.stop_reason;
+          if ("stop_sequence" in event.delta) this.stopSequence = event.delta.stop_sequence;
         }
+        if (isRecord(event.usage)) this.usage = { ...(this.usage ?? {}), ...event.usage };
         break;
     }
   }
@@ -201,7 +193,7 @@ export class AnthropicMessageAssembler {
     }
   }
 
-  result(): ModelReply {
+  result(): Json {
     const content = [...this.blocks.entries()].sort(([a], [b]) => a - b).map(([index, block]) => {
       const raw = this.partialJson.get(index);
       if (raw === undefined || raw === "") return block;
@@ -212,45 +204,27 @@ export class AnthropicMessageAssembler {
       }
     });
     return {
-      output: { role: this.role, content },
-      stopReason: this.stopReason,
-      toolCallCount: countToolUse(content),
+      ...this.message,
+      content,
+      stop_reason: this.stopReason,
+      stop_sequence: this.stopSequence,
+      ...(this.usage !== undefined ? { usage: this.usage } : {}),
     };
   }
 }
 
 // ── OpenAI Responses ─────────────────────────────────────────────────────────
 
-const RESPONSES_CLIENT_TOOL_ITEMS = new Set(["function_call", "custom_tool_call", "local_shell_call", "computer_call"]);
-
-function countResponsesToolCalls(output: unknown[]): number {
-  return output.filter((item) => isRecord(item) && typeof item.type === "string" && RESPONSES_CLIENT_TOOL_ITEMS.has(item.type)).length;
-}
-
-export function responsesReplyFromJson(json: unknown): ModelReply | null {
-  if (!isRecord(json) || !Array.isArray(json.output)) return null;
-  return {
-    output: { output: json.output },
-    stopReason: typeof json.status === "string" ? json.status : "completed",
-    toolCallCount: countResponsesToolCalls(json.output),
-  };
-}
-
-const RESPONSES_FINAL_EVENTS: Record<string, string> = {
-  "response.completed": "completed",
-  "response.incomplete": "incomplete",
-  "response.failed": "failed",
-};
+const RESPONSES_FINAL_EVENTS = new Set(["response.completed", "response.incomplete", "response.failed"]);
 
 /**
- * The final `response.*` event normally carries the whole `output` array;
- * `response.output_item.done` items are collected as a fallback for upstreams
- * that send an empty one.
+ * The final `response.*` event carries the whole response object. Upstreams
+ * that send it with an empty `output` get the `response.output_item.done`
+ * items filled in.
  */
-export class ResponsesAssembler {
+export class ResponsesAssembler implements ResponseAssembler {
   private readonly items = new Map<number, unknown>();
-  private finalOutput: unknown[] | null = null;
-  private status: string | null = null;
+  private finalResponse: Json | null = null;
 
   push(event: Json): void {
     const type = typeof event.type === "string" ? event.type : "";
@@ -259,21 +233,13 @@ export class ResponsesAssembler {
       if (event.item !== undefined) this.items.set(index, event.item);
       return;
     }
-    const finalStatus = RESPONSES_FINAL_EVENTS[type];
-    if (!finalStatus) return;
-    const resp = isRecord(event.response) ? event.response : {};
-    this.status = typeof resp.status === "string" ? resp.status : finalStatus;
-    if (Array.isArray(resp.output)) this.finalOutput = resp.output;
+    if (RESPONSES_FINAL_EVENTS.has(type) && isRecord(event.response)) this.finalResponse = event.response;
   }
 
-  result(): ModelReply {
-    const output = this.finalOutput && this.finalOutput.length > 0
-      ? this.finalOutput
-      : [...this.items.entries()].sort(([a], [b]) => a - b).map(([, item]) => item);
-    return {
-      output: { output },
-      stopReason: this.status,
-      toolCallCount: countResponsesToolCalls(output),
-    };
+  result(): Json {
+    const response = this.finalResponse ?? {};
+    if (Array.isArray(response.output) && response.output.length > 0) return response;
+    const output = [...this.items.entries()].sort(([a], [b]) => a - b).map(([, item]) => item);
+    return { ...response, output };
   }
 }

@@ -698,7 +698,7 @@ export const enUS = {
   // ===== ImportSkillDialog =====
   'importSkill.caption': 'Import Skill',
   'importSkill.hint':
-    'Upload a SKILL.md directory, or paste a conversation to let the system auto-extract a skill.',
+    'Upload a SKILL.md directory, one or more skill .zip archives, or paste a conversation to let the system auto-extract a skill.',
   'importSkill.agent': 'Owning Agent (required)',
   'importSkill.agent.extra':
     'The skill will be a fixed asset of this agent — it is only loaded when a task is linked to this agent.',
@@ -706,6 +706,7 @@ export const enUS = {
   'importSkill.agent.noAgent':
     'No agent in the current team. Please create at least one agent in Team Management first.',
   'importSkill.mode.directory': 'Directory Import',
+  'importSkill.mode.zip': 'Zip Import',
   'importSkill.mode.session': 'Conversation Import',
   'importSkill.directory.label':
     'Select a local directory (should contain SKILL.md and an optional files/ subdirectory)',
@@ -716,6 +717,40 @@ export const enUS = {
   'importSkill.directory.resources': 'Resource files: {{count}}',
   'importSkill.directory.warning':
     'SKILL.md not found in the directory. Ensure at least one SKILL.md exists in the root or <skill-name>/ subdirectory.',
+  'importSkill.zip.label': 'Select zip archives (.zip, multiple allowed; one archive = one Skill)',
+  'importSkill.zip.multiHint':
+    'Multiple .zip files can be selected at once. The layout inside each archive must match directory import: SKILL.md at the archive root or under <skill-name>/, with all other files imported as resources. One archive maps to exactly one Skill; archives containing multiple SKILL.md files are skipped.',
+  'importSkill.zip.dropHint': 'Drag .zip archives here, or click the button below (multiple allowed)',
+  'importSkill.zip.selectFile': 'Select Archives',
+  'importSkill.zip.clear': 'Clear',
+  'importSkill.zip.picked': '{{count}} archives selected',
+  'importSkill.zip.parsing': 'Parsing…',
+  'importSkill.zip.ready': '{{count}} resource files, structure validated',
+  'importSkill.zip.invalid': 'Structure validation failed',
+  'importSkill.zip.submit': 'Import {{count}} Skills',
+  'importSkill.zip.done': 'Done',
+  'importSkill.zip.summary': 'Finished: {{ok}} succeeded / {{skipped}} skipped / {{failed}} failed',
+  'importSkill.zip.result.ok': '{{count}} resource files',
+  'importSkill.zip.result.skipped': 'Skipped: {{reason}}',
+  'importSkill.zip.result.failed': 'Import failed: {{reason}}',
+  'importSkill.zip.error.notZip': 'Not a valid .zip archive',
+  'importSkill.zip.error.empty': 'The archive contains no files',
+  'importSkill.zip.error.noSkillMd':
+    'SKILL.md not found in the archive (must be at the root or under <skill-name>/)',
+  'importSkill.zip.error.noFrontmatter':
+    'SKILL.md is missing YAML frontmatter (the file must start with a name/description block wrapped in ---)',
+  'importSkill.zip.error.noDescription': 'SKILL.md frontmatter is missing the required "description" field',
+  'importSkill.zip.error.invalidName':
+    'Invalid SKILL.md name "{{name}}" (lowercase letters, digits and hyphens only, must start with a letter or digit, max 64 chars)',
+  'importSkill.zip.error.bodyTooLong': 'SKILL.md body exceeds the {{size}}-character limit',
+  'importSkill.zip.error.multiSkill':
+    'The archive contains multiple SKILL.md files. One archive can only hold one Skill — please split it and retry.',
+  'importSkill.zip.error.unsafePath': 'Illegal path in archive (absolute or containing ".."): {{path}}',
+  'importSkill.zip.error.tooLarge': 'Archive exceeds the {{size}} limit',
+  'importSkill.zip.error.totalTooLarge':
+    'Uncompressed size exceeds the {{size}} limit (bounded by the API request body size). Please trim resources and repack.',
+  'importSkill.zip.error.tooManyEntries': 'Archive contains more than {{count}} files',
+  'importSkill.zip.error.noReady': 'No archive passed structure validation. Please check that SKILL.md exists.',
   'importSkill.session.hintPrefix':
     'Paste a conversation with this agent. The system will automatically extract reusable skills. The conversation JSON must contain a ',
   'importSkill.session.hintSuffix': ' array.',
@@ -733,6 +768,8 @@ export const enUS = {
   'importSkill.error.tooManyMessages':
     'Too many messages ({{count}}). The API supports up to 500 messages. Please trim and retry.',
   'importSkill.error.noMainFile': 'Please select a directory containing SKILL.md.',
+  'importSkill.error.payloadTooLarge':
+    'Content too large (~{{actual}}), exceeding the {{size}} per-import limit. Please reduce resource sizes and retry.',
   'importSkill.error.noName':
     'Cannot infer skill name from SKILL.md or directory structure. Please check the frontmatter or directory layout.',
   'importSkill.result.session':
@@ -1281,6 +1318,13 @@ export const enUS = {
     'A Wiki ingestion is already in progress. Please wait for it to complete before starting another.',
   'wiki.ingest.stateRecovery': 'State recovered: {{stage}}{{pageHint}}',
   'wiki.ingest.currentPage': ', {{count}} pages so far',
+  // Auto-check paused (#1917: polling must be bounded). Wording deliberately says
+  // "auto-check stopped", not "completed"/"failed" — the backend may still be working.
+  'wiki.ingest.pollPaused.timeout':
+    'Auto-check stopped after {{minutes}} minutes. Ingestion may still be running in the background — click "Check again" to refresh the status.',
+  'wiki.ingest.pollPaused.network':
+    'Auto-check stopped after repeated failures to read the ingest status. Check your network, then click "Check again".',
+  'wiki.detail.recheck': 'Check again',
   'wiki.notify.readRawFailed': 'Failed to read raw document',
   'wiki.notify.rawNotFound': 'Raw document does not exist or has been deleted',
   'wiki.notify.uploadCancelled': 'Failed to fetch existing documents. Upload cancelled.',

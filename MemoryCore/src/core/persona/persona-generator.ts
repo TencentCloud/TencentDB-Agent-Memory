@@ -18,7 +18,8 @@ import { buildTraceParams } from "../types.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
-import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
+import { composeMemorySystemPrompt, resolveTemplateContext } from "../memory-prompt/composer.js";
+import { checkTemplateOutput, l3TemplateMaxChars } from "../memory-prompt/template.js";
 
 const TAG = "[memory-tdai] [persona]";
 
@@ -136,7 +137,7 @@ export class PersonaGenerator {
           `### [${changedSceneContents.length + 1}] ${entry.filename}\n\n\`\`\`markdown\n${raw}\n\`\`\``,
         );
       } catch {
-        this.logger?.warn(`${TAG} Could not read scene block: ${entry.filename}`);
+        this.logger?.warn(`【P1】${TAG} Could not read scene block: ${entry.filename}`);
       }
     }
 
@@ -182,6 +183,7 @@ export class PersonaGenerator {
       triggerInfo: triggerReason,
       personaFilePath,
       checkpointPath,
+      template: resolveTemplateContext(this.memoryPrompt),
     });
     const systemPrompt = composeMemorySystemPrompt(baseSystemPrompt, this.memoryPrompt);
 
@@ -201,26 +203,29 @@ export class PersonaGenerator {
     );
 
     // 8. Run LLM agent (sandboxed to dataDir, tools enabled — LLM writes target L3 file directly)
+    // 接收返回文本作为兜底来源：模型不调工具、直接输出 persona 文本时，系统可自行落盘
+    let llmText = "";
     try {
       this.logger?.debug?.(`${TAG} Calling LLM for ${targetFile} generation (timeout=180s, tools=enabled, workspaceDir=${this.dataDir})...`);
       // langfuse trace 语义：L3 persona 生成有独立 name / 顶级 user/session 列 / 可筛选 tags。
       const traceParams = buildTraceParams("memory.persona-generate", this.traceContext);
-      await this.runner.run({
+      llmText = (await this.runner.run({
         systemPrompt,
         prompt: userPrompt,
         taskId: "persona-generation",
         timeoutMs: 180_000,
-        // maxTokens omitted → core uses the resolved model's maxTokens from catalog
+        // 显式覆盖模型 catalog 值，与 prompt 的 1200/2000 字约束对齐，防止输出失控被截断（finishReason=length）
+        maxTokens: 4000,
         workspaceDir: this.dataDir,
         // Service mode: LLM tools read/write via StorageAdapter (COS) instead of local FS
         storage: this.storage,
         storagePrefix: this.storage ? "" : undefined,
         ...traceParams,
-      });
+      })) ?? "";
       this.logger?.debug?.(`${TAG} LLM runner completed`);
     } catch (err) {
       const elapsedMs = Date.now() - startMs;
-      this.logger?.error(`${TAG} Persona generation failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+      this.logger?.error(`【P1】${TAG} Persona generation failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
       return "failed";
     }
     const personaWriteMarkerAfter = await readPersonaWriteMarker(
@@ -229,8 +234,8 @@ export class PersonaGenerator {
       this.storage,
     );
 
-    // 9. Read LLM-written persona.md and apply post-processing
-    let personaText: string;
+    // 9. Read LLM-written persona.md; fallback to LLM text output when the file wasn't written
+    let personaText = "";
     try {
       let raw: string | null;
       if (this.storage) {
@@ -239,29 +244,35 @@ export class PersonaGenerator {
         const fs = await import("node:fs/promises");
         raw = await fs.default.readFile(personaFilePath, "utf-8");
       }
-      if (!raw) throw new Error(`${targetFile} not found`);
-      personaText = raw;
+      personaText = raw ?? "";
     } catch {
-      // LLM failed to write persona.md — treat as failure
-      this.logger?.error(`${TAG} LLM did not write ${targetFile} — file not found after runner completed`);
-      return "failed";
+      personaText = "";
     }
-    if (
+    const markerUnchanged =
       existingPersona &&
       personaWriteMarkerBefore &&
-      personaWriteMarkerAfter === personaWriteMarkerBefore
-    ) {
-      this.logger?.error(
-        `${TAG} LLM completed without writing ${targetFile}; preserving checkpoint for retry`,
-      );
-      return "failed";
+      personaWriteMarkerAfter === personaWriteMarkerBefore;
+    if (!personaText || markerUnchanged) {
+      // 安全兜底：仅采纳结构上确实是一份 persona 文档的文本，防止污染 L3
+      const fallback = extractPersonaFromText(llmText, this.promptMode);
+      if (fallback) {
+        this.logger?.info(
+          `${TAG} LLM did not write ${targetFile} via tools, falling back to text output (${fallback.length} chars)`,
+        );
+        personaText = fallback;
+      } else {
+        this.logger?.error(
+          `【P1】${TAG} LLM neither wrote ${targetFile} nor returned valid persona text; preserving checkpoint for retry`,
+        );
+        return "failed";
+      }
     }
 
     // 10. Strip any navigation the LLM might have added + sanitize for safe injection
     personaText = escapeXmlTags(stripSceneNavigation(personaText).trim());
 
     if (!personaText) {
-      this.logger?.error(`${TAG} LLM wrote empty ${targetFile} — skipping`);
+      this.logger?.error(`【P1】${TAG} LLM wrote empty ${targetFile} — skipping`);
       return "failed";
     }
 
@@ -281,6 +292,7 @@ export class PersonaGenerator {
 
     const elapsedMs = Date.now() - startMs;
     this.logger?.info(`${TAG} ${targetFile} written (${finalContent.length} chars) in ${elapsedMs}ms`);
+    this.reportTemplateViolations(personaText);
 
     // ── l3_persona_generation metric ──
     if (this.instanceId && this.logger) {
@@ -311,6 +323,36 @@ export class PersonaGenerator {
     }
 
     return personaUnchanged ? "unchanged" : "generated";
+  }
+
+  /** Template mode: log + report persona.md format violations. Never mutates content. */
+  private reportTemplateViolations(personaText: string): void {
+    const ctx = resolveTemplateContext(this.memoryPrompt);
+    if (!ctx) return;
+    try {
+      const check = checkTemplateOutput({
+        layer: "l3",
+        content: personaText,
+        templatePrompt: ctx.prompt,
+        maxChars: l3TemplateMaxChars(this.promptMode),
+      });
+      if (check.violations.length === 0) return;
+      this.logger?.warn(
+        `${TAG} template output violation: memory_prompt_id=${ctx.memoryPromptId} version=${ctx.version} ` +
+        `reasons=${check.violations.join(",")} chars=${check.chars}` +
+        (check.unknownHeadings.length ? ` unknown_headings=${JSON.stringify(check.unknownHeadings)}` : ""),
+      );
+      for (const reason of check.violations) {
+        report("memory_prompt_template_violation", {
+          layer: "l3",
+          reason,
+          chars: check.chars,
+          memoryPromptId: ctx.memoryPromptId,
+          memoryPromptVersion: ctx.version,
+          instanceId: this.instanceId,
+        });
+      }
+    } catch { /* never block business logic */ }
   }
 
   /**
@@ -344,4 +386,30 @@ async function readPersonaWriteMarker(
   } catch {
     return undefined;
   }
+}
+
+/** 兜底文本长度上限：超出视为异常输出，拒绝采纳（正常已被 maxTokens 控制） */
+const MAX_FALLBACK_CHARS = 8000;
+
+/**
+ * 从模型输出文本中提取可用的 persona 文档；提取失败返回 null（拒绝兜底）。
+ * - 剥离 markdown 代码围栏；
+ * - 按模板标题锚点截取，锚点之前的思考/废话全部丢弃；
+ * - 锚点不存在 / 内容为空 / 超长 → 返回 null。
+ */
+function extractPersonaFromText(llmText: string, promptMode: MemoryPromptMode): string | null {
+  let text = llmText.trim();
+  // 1. 剥离 markdown 代码围栏（模型偶尔把输出包在 ```markdown 里）
+  text = text.replace(/^```(?:markdown|md)?\s*\n?/i, "").replace(/\n?```\s*$/, "");
+  // 2. 按模板标题锚点截取
+  const anchor = promptMode === "code"
+    ? "# Team Operating Doctrine"      // 团队画像模板首行
+    : "# User Narrative Profile";      // 用户画像模板首行
+  const idx = text.indexOf(anchor);
+  if (idx === -1) return null;         // 没有模板锚点 → 不可信，拒绝
+  const body = text.slice(idx).trim();
+  // 3. 最小校验
+  if (!body) return null;
+  if (body.length > MAX_FALLBACK_CHARS) return null;
+  return body;
 }

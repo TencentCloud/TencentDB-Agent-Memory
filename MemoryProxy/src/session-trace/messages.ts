@@ -1,6 +1,5 @@
 /**
- * Protocol-agnostic readers over a request body, shared by subagent detection
- * and turn-record building.
+ * Protocol-agnostic readers over a request body, used by subagent detection.
  *
  * Three request shapes reach the proxy:
  *   - openai     : `messages[]`, system / developer as messages
@@ -11,29 +10,10 @@
 
 import { extractUserQueryText } from "../common/user-query-extractor.js";
 
-export type SessionProtocol = "openai" | "anthropic" | "responses";
-
 const SYSTEM_ROLES = new Set(["system", "developer"]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-/** The message array of a request: `messages` for chat protocols, `input` for Responses. */
-export function requestMessages(protocol: SessionProtocol, body: unknown): unknown[] {
-  if (!isRecord(body)) return [];
-  if (protocol === "responses") {
-    const input = body.input;
-    if (Array.isArray(input)) return input;
-    if (typeof input === "string" && input.length > 0) return [{ role: "user", content: input }];
-    return [];
-  }
-  return Array.isArray(body.messages) ? body.messages : [];
-}
-
-/** Drop `role: system` / `role: developer` entries, keeping the rest in order. */
-export function stripSystemMessages(messages: unknown[]): unknown[] {
-  return messages.filter((m) => !(isRecord(m) && typeof m.role === "string" && SYSTEM_ROLES.has(m.role)));
 }
 
 /** Plain text of a message `content`: the string itself, or its text / input_text blocks joined. */

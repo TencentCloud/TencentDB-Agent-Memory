@@ -75,7 +75,7 @@ MemoryProxy 的 v3 接口信封分两类，**与卷一 MemoryCore、卷二 Memor
 
 ### POST /v3/instance/proxy-destroy
 
-清理 proxy 侧某实例（spaceId）的缓存数据 + kernel-sts pool 里的 STS backend。契约字段名对齐 Core 的 `/v3/instance/destroy`，路径用 `proxy-destroy` 动作区分。
+清理 proxy 侧某实例（spaceId）的缓存数据 + kernel-sts pool 里的 STS backend + ClickHouse 里该实例的会话 trace 时间索引（`session_trace_index`，见 [session-cos.md](./docs/session-cos.md) §6）。契约字段名对齐 Core 的 `/v3/instance/destroy`，路径用 `proxy-destroy` 动作区分。
 
 **鉴权**：`Authorization: Bearer <admin.apiKey>`（未配置则公开）。
 
@@ -91,8 +91,9 @@ MemoryProxy 的 v3 接口信封分两类，**与卷一 MemoryCore、卷二 Memor
 | cleaned.storage_nottl_deleted | number | 删除 `nottl/<id>/` 前缀条数 |
 | cleaned.cos_pool_evicted | string | `evicted` / `not-cached` / `unsupported` / `error` |
 | cleaned.redis_skipped | string | 固定 `per-session-ttl-only` |
+| cleaned.session_trace_index | string | `deleted`（已提交删除，后台执行）/ `disabled`（ClickHouse 未启用）/ `error` |
 
-**局部失败策略**：某步失败不阻断整体，`cleaned` 内含对应 `storage_ttl_error` / `storage_nottl_error` / `cos_pool_error` 字段（HTTP 仍 200）。
+**局部失败策略**：某步失败不阻断整体，`cleaned` 内含对应 `storage_ttl_error` / `storage_nottl_error` / `cos_pool_error` / `session_trace_index_error` 字段（HTTP 仍 200）。
 
 **错误**：`400`（JSON 非法 / 缺 instance_id / 非法字符）、`401`（auth 开启且 Bearer 缺失或不匹配）。
 
@@ -117,7 +118,8 @@ Authorization: Bearer <admin.apiKey>
       "storage_ttl_deleted": 3,
       "storage_nottl_deleted": 5,
       "cos_pool_evicted": "evicted",
-      "redis_skipped": "per-session-ttl-only"
+      "redis_skipped": "per-session-ttl-only",
+      "session_trace_index": "deleted"
     }
   }
 }
