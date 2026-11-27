@@ -2,6 +2,8 @@
  * TDAI Gateway — Request/Response types for the HTTP API.
  */
 
+import type { LLMCapabilityStatus } from "../adapters/standalone/llm-capabilities.js";
+
 // ============================
 // Common
 // ============================
@@ -23,6 +25,8 @@ export interface HealthResponse {
     vectorStore: boolean;
     embeddingService: boolean;
   };
+  /** Safe LLM/model compatibility state; never includes credentials or option values. */
+  llm: LLMCapabilityStatus;
   /** Integrated services status (only present when state_backend is configured) */
   services?: {
     timerScanner: unknown;
