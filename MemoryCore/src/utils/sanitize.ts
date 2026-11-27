@@ -305,13 +305,19 @@ export function escapeXmlTags(text: string): string {
  * LLMs sometimes produce unescaped control characters (raw newlines, tabs, etc.)
  * inside string values.
  *
- * Strategy (two-phase):
+ * Strategy (three-phase):
  *  1. **Precise pass** — walk through JSON string literals (delimited by `"`)
  *     and escape any unescaped U+0000–U+001F inside them to `\uXXXX` form,
  *     while leaving structural whitespace (between values) untouched.
  *  2. **Fallback** — if the precise pass still fails `JSON.parse`, fall back to
  *     a simple global strip of rare control chars (\x00–\x08, \x0b, \x0c,
  *     \x0e–\x1f) which are almost never meaningful in natural-language content.
+ *  3. **Stray-quote pass** — if phase 2 still fails `JSON.parse`, walk the JSON
+ *     string literals again and escape unescaped ASCII `"` that are clearly NOT
+ *     a real string terminator (see {@link escapeStrayQuotesInJsonStrings}).
+ *     Observed root cause (2026-08-30): the LLM occasionally opens a German
+ *     quote with „ but closes it with a literal ASCII `"` instead of the
+ *     typographic `"` or an escaped `\"`, prematurely ending the JSON string.
  */
 export function sanitizeJsonForParse(raw: string): string {
   // Phase 1: Escape control characters inside JSON string literals.
@@ -330,7 +336,29 @@ export function sanitizeJsonForParse(raw: string): string {
   // control-character escaping Phase 1 performed is preserved even when the JSON has
   // other issues (e.g. trailing commas) that cause the Phase 1 parse to fail.
   const stripped = escaped.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
-  return stripped;
+  try {
+    JSON.parse(stripped);
+    return stripped;
+  } catch {
+    // Phase 2 still doesn't parse — fall through to phase 3
+  }
+
+  // Phase 3: Escape stray/unescaped ASCII quotes inside string values that are
+  // not real string terminators (see escapeStrayQuotesInJsonStrings for the rule).
+  //
+  // IMPORTANT: this pass runs on `raw` (the original text), not on `escaped`/
+  // `stripped`. Phase 1's control-char escaper toggles its `inString` state on
+  // *every* unescaped `"` with no lookahead — a single stray quote (the exact
+  // bug this phase targets) flips that parity for the rest of the document,
+  // which can turn real structural newlines between fields into literal `\n`
+  // escape sequences further down. Running the smarter, lookahead-based quote
+  // fix first restores correct quote pairing; phases 1+2 are then re-applied
+  // (their logic untouched) to the corrected text so control chars inside the
+  // now-correctly-delimited strings are still handled.
+  const quoteFixed = escapeStrayQuotesInJsonStrings(raw);
+  const reEscaped = escapeControlCharsInJsonStrings(quoteFixed);
+  const reStripped = reEscaped.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+  return reStripped;
 }
 
 /**
@@ -389,6 +417,85 @@ function escapeControlCharsInJsonStrings(text: string): string {
       i++;
     } else {
       // Outside string literal
+      if (ch === '"') {
+        out.push(ch);
+        inString = true;
+        i++;
+        continue;
+      }
+      // Structural character (including whitespace) — pass through
+      out.push(ch);
+      i++;
+    }
+  }
+
+  return out.join("");
+}
+
+/**
+ * Walk through a JSON text and escape unescaped ASCII `"` (U+0022) characters
+ * that appear *inside* a JSON string literal but are clearly not the string's
+ * real terminator.
+ *
+ * Root cause: the LLM sometimes opens a typographic quote (e.g. a German „,
+ * U+201E) but closes it with a literal ASCII `"` instead of the matching
+ * typographic closing glyph (e.g. U+201C) or an escaped `\"`. Since the
+ * surrounding JSON string is itself delimited by `"`, that stray character
+ * ends the JSON string early and breaks the parse a few tokens later. Same
+ * error class as unescaped-quote/trailing-text JSON failures reported for
+ * other models (see #110).
+ *
+ * Rule: when an unescaped `"` is encountered while inside a string, look at
+ * the next non-whitespace character. If it is a JSON structural continuation
+ * character (`,` `}` `]` `:`) — or end-of-text — the quote is treated as the
+ * real terminator and left untouched. Otherwise it is almost certainly a
+ * stray quote embedded in natural-language content, so it gets escaped to
+ * `\"` and the string is kept open.
+ *
+ * This is deliberately conservative: it only fires on quotes that are NOT
+ * followed by valid JSON continuation syntax, so well-formed strings (the
+ * overwhelming majority) pass through byte-for-byte unchanged.
+ */
+function escapeStrayQuotesInJsonStrings(text: string): string {
+  const STRUCTURAL_AFTER_QUOTE = new Set([",", "}", "]", ":"]);
+
+  const out: string[] = [];
+  let inString = false;
+  let i = 0;
+
+  while (i < text.length) {
+    const ch = text[i]!;
+
+    if (inString) {
+      if (ch === "\\" && i + 1 < text.length) {
+        // Already-escaped sequence — copy both characters verbatim
+        out.push(ch, text[i + 1]!);
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        // Peek ahead past whitespace to decide: real terminator or stray quote?
+        let j = i + 1;
+        while (j < text.length && /\s/.test(text[j]!)) j++;
+        const nextCh = j < text.length ? text[j] : undefined;
+
+        if (nextCh === undefined || STRUCTURAL_AFTER_QUOTE.has(nextCh)) {
+          // Real string terminator — leave as-is, exit string mode.
+          out.push(ch);
+          inString = false;
+          i++;
+          continue;
+        }
+
+        // Stray quote embedded in content — escape it, stay inside the string.
+        out.push('\\"');
+        i++;
+        continue;
+      }
+      // Normal character inside string
+      out.push(ch);
+      i++;
+    } else {
       if (ch === '"') {
         out.push(ch);
         inString = true;
