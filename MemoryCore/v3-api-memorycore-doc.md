@@ -277,7 +277,7 @@ L2 场景文件列表（一次性全量列举，无分页）。
 
 ### POST /v3/scenario/write
 
-写入 L2 文件（自动剥 META 头）。
+写入 L2 文件（自动剥 META 头）。**路径不存在时自动创建（upsert）**：新建块 META 的 `created`/`updated` 均为当前时间；路径已存在时保留原 `created`、刷新 `updated`/`summary`。
 
 **请求体**：`path`、`content`、`summary?` + 隔离字段。
 

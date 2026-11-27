@@ -1932,15 +1932,16 @@ async function handleScenarioWrite(body: unknown, _auth: V2AuthContext, requestI
 
   const key = `${StoragePaths.sceneBlocksDir}${path}`;
 
-  // Existence check: path must already exist (no upsert/create)
+  // Upsert per the v3 API doc contract: a missing path is created with a
+  // fresh META (created = updated = now, see the rebuild branch below); an
+  // existing path is updated in place (created preserved).
   const existing = await storage.readFile(key);
-  if (existing === null) return errorEnvelope(404, `Scenario file not found: ${path}`, requestId);
 
   // Parse existing META to preserve created + update updated/summary
   const now = new Date().toISOString();
   let finalContent: string;
 
-  const metaMatch = existing.match(/^-----META-START-----\n([\s\S]*?)\n-----META-END-----\n?/);
+  const metaMatch = existing?.match(/^-----META-START-----\n([\s\S]*?)\n-----META-END-----\n?/);
   if (metaMatch) {
     // Parse existing META fields
     const metaBlock = metaMatch[1];
