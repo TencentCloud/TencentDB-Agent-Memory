@@ -10,7 +10,7 @@
  * 本路由的做法（业务级联收口在 control 层，不改内核）：
  *   1. auth/verify 反查 caller
  *   2. agent/get 拿到 agent，强校验 owner_user_id === caller（本期不允许 admin 代删）
- *   3. skill/list 按 owner_agent_id + active 分页拉全
+ *   3. skill/list 按 owner_agent_id + active 分页拉全（SkillCore 未启用返回 404 "Skill module not enabled" 时按空列表放行）
  *   4. 逐条 skill/delete —— 任一失败立即中断，返回 500 + 已删列表 + 失败 skill_id
  *      + 内核错误 message；此时 agent/archive 不会被调用，caller 需要修复后重试
  *   5. 全部 skill 成功归档后调 meta/agent/archive
@@ -39,6 +39,8 @@ import {
 
 /** skill/list 一页 100 条 —— 与 knowledge fetchAllMetaListItems 分页步长对齐。 */
 const SKILL_LIST_PAGE = 100;
+/** 与 MemoryCore/src/gateway/skill-handlers.ts 未启用 SkillCore 时的 404 文案对齐。 */
+const SKILL_MODULE_DISABLED_MESSAGE = 'Skill module not enabled';
 
 interface AgentRaw {
   agent_id: string;
@@ -76,7 +78,13 @@ async function listAgentSkills(
       },
       ctx,
     );
-    if (env.code !== 0) return { ok: false, envelope: env };
+    if (env.code !== 0) {
+      // SkillCore 未启用时首页返回固定 404，按无技能放行以允许归档；后续页保持 fail-closed
+      if (offset === 0 && env.code === 404 && env.message === SKILL_MODULE_DISABLED_MESSAGE) {
+        return { ok: true, items: [] };
+      }
+      return { ok: false, envelope: env };
+    }
     const batch = extractListItems<SkillRow>(env);
     all.push(...batch);
     const total = (env.data as { total?: number } | null)?.total ?? all.length;
