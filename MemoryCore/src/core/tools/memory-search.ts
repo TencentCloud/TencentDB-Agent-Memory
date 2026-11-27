@@ -33,6 +33,8 @@ export interface MemorySearchResultItem {
   version: number;
   created_at: string;
   updated_at: string;
+  use_count?: number;
+  last_used_ms?: number;
 }
 
 export interface MemorySearchResult {
@@ -44,6 +46,22 @@ export interface MemorySearchResult {
 }
 
 const TAG = "[memory-tdai][tdai_memory_search]";
+
+/** Record memories the agent selected for its reply, not every search hit. */
+export async function recordMemoryUsage(
+  vectorStore: IMemoryStore | undefined,
+  recordIds: string[],
+  filter: IsolationFilter | undefined,
+): Promise<number> {
+  const ids = [...new Set(recordIds.map((id) => id.trim()).filter(Boolean))];
+  if (
+    ids.length === 0 ||
+    typeof vectorStore?.touchL1Usage !== "function" ||
+    !filter ||
+    !Object.values(filter).some((value) => value !== undefined)
+  ) return 0;
+  return await vectorStore.touchL1Usage(ids, filter);
+}
 
 function toSearchItem(r: L1SearchResult): MemorySearchResultItem {
   return {
@@ -60,6 +78,8 @@ function toSearchItem(r: L1SearchResult): MemorySearchResultItem {
     version: r.version ?? 0,
     created_at: r.timestamp_start,
     updated_at: r.timestamp_end,
+    use_count: r.use_count,
+    last_used_ms: r.last_used_ms,
   };
 }
 
@@ -192,7 +212,7 @@ export function formatSearchResponse(result: MemorySearchResult): string {
     const scoreStr = typeof item.score === "number" ? ` (score: ${item.score.toFixed(3)})` : "";
     const sceneStr = item.scene_name ? ` [scene: ${item.scene_name}]` : "";
     const priorityStr = item.priority >= 0 ? ` (priority: ${item.priority})` : " (global instruction)";
-    lines.push(`- **[${item.type}]**${priorityStr}${sceneStr}${scoreStr}`);
+    lines.push(`- **[${item.type}]** [id: ${item.id}]${priorityStr}${sceneStr}${scoreStr}`);
     lines.push(`  ${item.content}`);
     lines.push("");
   }
