@@ -14,7 +14,7 @@
  *
  * Tools injected:
  *   Always (read-only): skill_search, skill_view, skill_files_read,
- *                       skill_extract
+ *                       skill_extract, skill_files_download
  *   Only when allowLlmWrite=true: skill_create, skill_update, skill_patch,
  *                                skill_delete, skill_files_write, skill_files_remove
  *
@@ -113,7 +113,13 @@ export function renderSkillToolsBlock(
     `  <tool name="skill_files_read">`,
     `    path: ${bridge}/files/read`,
     `    body: {"skill_id": "skl-xxx", "path": "scripts/run.sh", "encoding": "utf-8|base64"}`,
-    `    use:  读取单个资源文件内容。**必须先调 skill_view 拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。`,
+    `    use:  读取单个资源文件内容，返回 JSON 信封（含 base64/utf-8 编码的字节）。**必须先调 skill_view 拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。\n    要把文件存到本地、不进上下文，用下面的 skill_files_download —— 本接口无论加不加 curl 的 -o 都返回 JSON 信封。`,
+    `  </tool>`,
+    "",
+    `  <tool name="skill_files_download">`,
+    `    path: ${bridge}/files/download`,
+    `    body: {"skill_id": "skl-xxx", "path": "scripts/run.sh"}`,
+    `    use:  下载单个资源文件的原始字节（不是 JSON 信封），适合直接存盘：在 curl 末尾加 -o <本地路径>。同样要先调 skill_view 拿 manifest 定位。下载的脚本需 chmod +x 后再执行。`,
     `  </tool>`,
     "",
     `  <tool name="skill_extract">`,
