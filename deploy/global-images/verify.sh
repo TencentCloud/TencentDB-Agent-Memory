@@ -150,8 +150,14 @@ check_llm_from_container() {
   local url code
   case "$proto" in
     anthropic)
-      base="${base%/}"; [[ "$base" == */messages ]] || base="${base}/v1/messages"
-      url="$base"
+      base="${base%/}"
+      if [[ "$base" == */messages ]]; then
+        url="$base"
+      elif [[ "$base" == */v1 ]]; then
+        url="${base}/messages"
+      else
+        url="${base}/v1/messages"
+      fi
       code=$($DOCKER exec "$container" curl -sS -o /dev/null --max-time 15 \
          -w "%{http_code}" -X POST -H "Content-Type: application/json" \
          -H "x-api-key: $key" -H "anthropic-version: 2023-06-01" \
@@ -259,13 +265,13 @@ else
           "$PROXY_UPSTREAM_MODEL" == "$MEMORY_LLM_MODEL" ]]; then
       ok "proxy 组 与 memory 组完全相同，跳过重复检查"
     else
-      # proxy 组默认按 openai 协议（与 config.yaml 一致）
       if ! check_llm_group "proxy 组" "$PROXY_UPSTREAM_URL" "$PROXY_UPSTREAM_API_KEY" \
-           "$PROXY_UPSTREAM_MODEL" openai; then
+           "$PROXY_UPSTREAM_MODEL" "${PROXY_UPSTREAM_PROTOCOL:-openai}"; then
         ERRORS=$((ERRORS+1))
       fi
       check_llm_from_container tdai-proxy "proxy 组 (from container)" \
-        "$PROXY_UPSTREAM_URL" "$PROXY_UPSTREAM_API_KEY" "$PROXY_UPSTREAM_MODEL" openai
+        "$PROXY_UPSTREAM_URL" "$PROXY_UPSTREAM_API_KEY" "$PROXY_UPSTREAM_MODEL" \
+        "${PROXY_UPSTREAM_PROTOCOL:-openai}"
     fi
   fi
 fi
