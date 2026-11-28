@@ -285,7 +285,7 @@ generate_user_key() {
 verify_user_key() {
   local key="$1"
   local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+  code=$("$CURL" -sS -o /dev/null -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     "${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"}" \
@@ -306,7 +306,7 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
+init_resp=$("$CURL" -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   "${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"}" \
   -H "x-tdai-service-id: default" \

@@ -40,24 +40,35 @@ ensure_knowledge_service_key
 # 显式设为空字符串则 Panel 前端回落到 gateway_endpoint（老行为）。
 # Panel 后端 → Kernel 的转发地址始终走 REMOTE_INSTANCE_URL，不受此变量影响。
 detect_host_ip() {
-  local ip=""
-  # Linux
-  if command -v hostname >/dev/null 2>&1; then
-    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
-  fi
-  # macOS
-  if command -v ipconfig >/dev/null 2>&1; then
-    for iface in en0 en1 en2; do
-      ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
-      [[ -n "$ip" ]] && { echo "$ip"; return; }
-    done
-  fi
-  # 兜底：ip route（Linux 无 hostname -I 时）
-  if command -v ip >/dev/null 2>&1; then
-    ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
-  fi
+  local ip="" os
+  os="$(uname -s)"
+
+  case "$os" in
+    Linux*)
+      if command -v hostname >/dev/null 2>&1; then
+        ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
+        [[ -n "$ip" ]] && { echo "$ip"; return; }
+      fi
+      # 兜底：ip route（Linux 无 hostname -I 时）
+      if command -v ip >/dev/null 2>&1; then
+        ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
+        [[ -n "$ip" ]] && { echo "$ip"; return; }
+      fi
+      ;;
+    Darwin*)
+      if command -v ipconfig >/dev/null 2>&1; then
+        for iface in en0 en1 en2; do
+          ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+          [[ -n "$ip" ]] && { echo "$ip"; return; }
+        done
+      fi
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      # Windows Git Bash 的 ipconfig 输出随系统语言变化，不从文本中解析 IP。
+      echo "localhost"
+      return
+      ;;
+  esac
   echo "localhost"
 }
 
@@ -67,6 +78,10 @@ if [[ -z "${MEMORY_HUB_PROXY_PUBLIC_URL+x}" ]]; then
   MEMORY_HUB_PROXY_PUBLIC_URL="http://${_host_ip}:${PROXY_PORT:-8096}"
   info "自动探测宿主机地址: MEMORY_HUB_PROXY_PUBLIC_URL=$MEMORY_HUB_PROXY_PUBLIC_URL"
   info "  (如需覆盖，在 .env 里显式设 MEMORY_HUB_PROXY_PUBLIC_URL=http://<your-ip>:${PROXY_PORT:-8096})"
+fi
+
+if [[ -n "$MEMORY_HUB_PROXY_PUBLIC_URL" ]] && ! is_valid_http_url "$MEMORY_HUB_PROXY_PUBLIC_URL"; then
+  die "MEMORY_HUB_PROXY_PUBLIC_URL 格式无效：$MEMORY_HUB_PROXY_PUBLIC_URL（示例：http://localhost:${PROXY_PORT:-8096}）"
 fi
 
 CONTAINER=tdai-memory-hub

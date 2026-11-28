@@ -20,8 +20,41 @@
 ## 环境要求
 
 - macOS / Linux
+- Windows 10/11 + Git Bash（需使用 Docker Desktop 的 Linux 容器）
 - Docker（Docker Desktop / colima / OrbStack 任一）
 - `bash` 4+（macOS 自带 3.2 也能跑）
+
+### Windows Git Bash
+
+Windows 原生 PowerShell 暂不是这些部署脚本的支持目标，请在
+[Git for Windows](https://git-scm.com/download/win) 提供的 Git Bash 中执行。
+启动 Docker Desktop 并确认使用 Linux 容器后：
+
+```bash
+cd /d/<仓库路径>/deploy/global-images
+./verify.sh --skip-llm
+./start-memory-core.sh
+./start-memory-hub.sh
+PROXY_FULL_STACK=1 ./start-proxy.sh
+```
+
+Windows 下无法可靠地自动探测可跨机器访问的局域网地址，因此
+`MEMORY_HUB_PROXY_PUBLIC_URL` 默认回退到 `http://localhost:8096`。这适用于
+Panel 与 Agent 都在同一台电脑上的场景；若需要从其他机器访问，请在 `.env`
+中显式指定宿主机局域网地址：
+
+```dotenv
+MEMORY_HUB_PROXY_PUBLIC_URL=http://192.168.1.100:8096
+```
+
+启动后可用以下地址检查服务状态：
+
+```text
+Panel UI         http://localhost:8125/
+Memory Core      http://localhost:8420/health
+Knowledge        http://localhost:8424/health
+Proxy            http://localhost:8096/health
+```
 
 ## 快速开始
 
@@ -75,6 +108,9 @@ cd TencentDB-Agent-Memory/deploy/global-images
 ```bash
 ./verify.sh              # 默认全检（含 LLM 通路预检）
 ./verify.sh --skip-llm   # 跳过 LLM 检查（离线环境）
+
+# 不依赖 Docker daemon 的脚本回归测试
+bash tests/startup-scripts.test.sh
 ```
 
 ## LLM 通路预检

@@ -162,6 +162,12 @@ if [[ ! -x "$CURL" ]]; then
   fi
 fi
 
+# is_valid_http_url <url>
+#   校验 Panel 展示用 base URL。允许 http/https、主机和可选路径，拒绝空主机。
+is_valid_http_url() {
+  [[ "$1" =~ ^https?://[^/[:space:]]+(/[^[:space:]]*)?$ ]]
+}
+
 # check_llm_openai <label> <base_url> <api_key> <model>
 #   OpenAI 兼容：GET {base}/models 只验证 auth+URL，不消耗 token。返回 0 通过 / 1 失败。
 check_llm_openai() {
@@ -276,6 +282,25 @@ prompt_with_default() {
   fi
 }
 
+# prompt_secret_with_default <label> <default>
+#   用于 API Key 等敏感值：不显示已有值，输入过程也不回显。
+prompt_secret_with_default() {
+  local label="$1" default="${2:-}"
+  if [[ -n "$default" ]]; then
+    printf '%s [已配置，回车保留]: ' "$label" >&2
+  else
+    printf '%s: ' "$label" >&2
+  fi
+  local input
+  IFS= read -rs input || { printf '\n' >&2; printf '%s' "$default"; return 0; }
+  printf '\n' >&2
+  if [[ -z "$input" ]]; then
+    printf '%s' "$default"
+  else
+    printf '%s' "$input"
+  fi
+}
+
 # prompt_protocol <default>
 #   让用户确认 LLM 协议（openai/anthropic），非法输入回退 openai。
 prompt_protocol() {
@@ -354,7 +379,7 @@ interactive_llm_setup() {
   # ── memory 组 ──
   while true; do
     base=$(prompt_with_default "memory 组 LLM BASE_URL" "${MEMORY_LLM_BASE_URL:-}")
-    key=$(prompt_with_default "memory 组 LLM API_KEY" "${MEMORY_LLM_API_KEY:-}")
+    key=$(prompt_secret_with_default "memory 组 LLM API_KEY" "${MEMORY_LLM_API_KEY:-}")
     model=$(prompt_with_default "memory 组 LLM MODEL" "${MEMORY_LLM_MODEL:-}")
     proto=$(prompt_protocol "${MEMORY_LLM_PROTOCOL:-openai}")
 
@@ -392,7 +417,7 @@ interactive_llm_setup() {
   else
     while true; do
       base=$(prompt_with_default "proxy 组 UPSTREAM_URL" "${PROXY_UPSTREAM_URL:-}")
-      key=$(prompt_with_default "proxy 组 UPSTREAM_API_KEY" "${PROXY_UPSTREAM_API_KEY:-}")
+      key=$(prompt_secret_with_default "proxy 组 UPSTREAM_API_KEY" "${PROXY_UPSTREAM_API_KEY:-}")
       model=$(prompt_with_default "proxy 组 UPSTREAM_MODEL" "${PROXY_UPSTREAM_MODEL:-}")
 
       if check_llm_group "proxy 组" "$base" "$key" "$model" openai; then
@@ -423,15 +448,28 @@ interactive_llm_setup() {
 # ═══════════════════════════════════════════════════════════════
 
 # port_in_use <port>
-#   检测宿主机某端口是否处于 LISTEN 状态。返回 0=被占 / 1=空闲。
+#   检测宿主机某端口是否处于 LISTEN 状态。
+#   返回 0=被占 / 1=空闲 / 2=没有可用的检测工具。
 port_in_use() {
   local port="$1"
   if command -v lsof >/dev/null 2>&1; then
     lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
   elif command -v ss >/dev/null 2>&1; then
     ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
+  elif command -v netstat >/dev/null 2>&1; then
+    # Windows Git Bash and some minimal Linux images only provide netstat.
+    netstat -an 2>/dev/null | tr -d '\r' | awk -v port="$port" '
+      /LISTEN/ {
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ (":" port "$") || $i ~ ("[.]" port "$")) {
+            found = 1
+          }
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    '
   else
-    return 1  # 无检测工具时当作空闲，不阻塞启动
+    return 2
   fi
 }
 
@@ -453,7 +491,7 @@ tdai_self_ports() {
 #   一次性检查 4 个目标端口是否被占用；被「外部进程」占用则报错退出。
 #   会排除 tdai 自己容器占用的端口（那些会在启动时被重建）。
 check_ports() {
-  local self_ports port_var port conflict=0
+  local self_ports port_var port port_rc conflict=0
   self_ports=" $(tdai_self_ports) "
   info "═══ 端口预检 ══════════════════════════════════════════"
   for port_var in MEMORY_CORE_PORT PANEL_PORT KNOWLEDGE_PORT PROXY_PORT; do
@@ -463,12 +501,20 @@ check_ports() {
       info "端口 $port ($port_var) 由 tdai 旧容器占用（启动时会重建），跳过"
       continue
     fi
-    if port_in_use "$port"; then
-      echo "${C_RED}[error]${C_RST} 端口 $port ($port_var) 已被占用，请释放该端口或在 .env 改端口。" >&2
-      conflict=1
-    else
-      ok "端口 $port ($port_var) 空闲"
-    fi
+    port_rc=0
+    port_in_use "$port" || port_rc=$?
+    case "$port_rc" in
+      0)
+        echo "${C_RED}[error]${C_RST} 端口 $port ($port_var) 已被占用，请释放该端口或在 .env 改端口。" >&2
+        conflict=1
+        ;;
+      1)
+        ok "端口 $port ($port_var) 空闲"
+        ;;
+      *)
+        warn "无法检测端口 $port ($port_var)：未找到 lsof、ss 或 netstat"
+        ;;
+    esac
   done
   (( conflict == 0 )) || die "存在端口冲突，请先释放端口后重试。"
 }
