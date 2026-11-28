@@ -37,7 +37,6 @@ done
 
 ERRORS=0
 WARNS=0
-CURL=/usr/bin/curl
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>
@@ -226,12 +225,21 @@ else
   for port_var in MEMORY_CORE_PORT PANEL_PORT KNOWLEDGE_PORT PROXY_PORT; do
     port="${!port_var:-}"
     if [[ -z "$port" ]]; then continue; fi
-    if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-      WARNS=$((WARNS+1))
-      warn "端口 $port ($port_var) 已被占用，启动前请释放或在 .env 改端口"
-    else
-      ok "端口 $port ($port_var) 空闲"
-    fi
+    port_rc=0
+    port_in_use "$port" || port_rc=$?
+    case "$port_rc" in
+      0)
+        WARNS=$((WARNS+1))
+        warn "端口 $port ($port_var) 已被占用，启动前请释放或在 .env 改端口"
+        ;;
+      1)
+        ok "端口 $port ($port_var) 空闲"
+        ;;
+      *)
+        WARNS=$((WARNS+1))
+        warn "无法检测端口 $port ($port_var)：未找到 lsof、ss 或 netstat"
+        ;;
+    esac
   done
 
   # 6. LLM 通路（默认检查，--skip-llm 跳过）
