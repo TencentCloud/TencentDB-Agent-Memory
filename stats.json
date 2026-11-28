@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-11-28T02:10:58.414Z",
+  "generatedAt": "2026-11-28T14:07:39.229Z",
   "repository": "TencentCloud/TencentDB-Agent-Memory",
   "latestRelease": "v2.0.4",
   "latestReleasePublishedAt": "2026-11-19T12:16:09Z",
   "latestTag": "v2.0.4",
   "releasesCount": 14,
   "releasesTotal": 23,
-  "stars": 31232,
+  "stars": 31242,
   "starsLabel": "31.2k",
-  "forks": 3066,
+  "forks": 3065,
   "forksLabel": "3.1k"
 }
